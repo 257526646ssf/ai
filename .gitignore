@@ -1,0 +1,8 @@
+﻿node_modules
+.corepack
+.pnpm-store
+.env
+.env.*
+dist
+coverage
+.playwright

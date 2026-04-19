@@ -1,0 +1,16 @@
+﻿{
+  "name": "@ai-test-agent/demo-site",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "build": "echo demo-site build",
+    "lint": "echo demo-site lint",
+    "test": "echo demo-site test",
+    "typecheck": "echo demo-site typecheck"
+  },
+  "dependencies": {
+    "express": "^4.21.1"
+  }
+}

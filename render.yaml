@@ -1,0 +1,79 @@
+﻿services:
+  - type: web
+    name: ai-test-agent-api
+    env: docker
+    dockerfilePath: apps/api/Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-test-agent-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: ai-test-agent-redis
+          property: connectionString
+      - key: PORT
+        value: 3000
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: AI_SERVICE_URL
+        sync: false
+      - key: RUNNER_URL
+        sync: false
+
+  - type: web
+    name: ai-test-agent-web
+    env: docker
+    dockerfilePath: apps/web/Dockerfile
+    dockerContext: .
+    healthCheckPath: /
+    envVars:
+      - key: VITE_API_BASE_URL
+        sync: false
+
+  - type: web
+    name: ai-test-agent-ai
+    env: docker
+    dockerfilePath: services/ai/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: AI_SERVICE_PORT
+        value: 8000
+
+  - type: web
+    name: ai-test-agent-runner
+    env: docker
+    dockerfilePath: services/runner/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: RUNNER_PORT
+        value: 8100
+
+  - type: web
+    name: ai-test-agent-demo-site
+    env: docker
+    dockerfilePath: services/demo-site/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DEMO_SITE_PORT
+        value: 8200
+
+  - type: redis
+    name: ai-test-agent-redis
+    ipAllowList: []
+
+  - type: pserv
+    name: ai-test-agent-db
+    env: postgres
+    plan: free
+    ipAllowList: []

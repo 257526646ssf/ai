@@ -1,0 +1,138 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  baseUrl     String
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assets      RequirementAsset[]
+  testCases   TestCase[]
+  executions  ExecutionRecord[]
+  reports     Report[]
+}
+
+model RequirementAsset {
+  id            String   @id @default(uuid())
+  projectId     String
+  type          String
+  filename      String
+  originalPath  String
+  parsedContent Json?
+  ocrText       String?
+  version       Int      @default(1)
+  createdAt     DateTime @default(now())
+
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model TestCase {
+  id                String   @id @default(uuid())
+  projectId         String
+  title             String
+  module            String?
+  priority          String   @default("P1")
+  type              String   @default("functional")
+  preconditions     Json     @default("[]")
+  steps             Json
+  tags              Json     @default("[]")
+  source            String   @default("ai")
+  aiConfidence      Float?
+  reviewStatus      String   @default("pending")
+  reviewScore       Float?
+  reviewReport      Json?
+  status            String   @default("draft")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  project           Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  executions        ExecutionRecord[]
+}
+
+model ExecutionRecord {
+  id                 String   @id @default(uuid())
+  projectId          String
+  testCaseId         String
+  status             String
+  browser            String   @default("chromium")
+  viewport           String   @default("1920x1080")
+  headless           Boolean  @default(true)
+  startTime          DateTime?
+  endTime            DateTime?
+  durationMs         Int?
+  finalScreenshotUrl String?
+  videoUrl           String?
+  errorLog           String?
+  aiAnalysis         String?
+  consoleLogs        Json     @default("[]")
+  networkLogs        Json     @default("[]")
+  createdAt          DateTime @default(now())
+
+  project            Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  testCase           TestCase @relation(fields: [testCaseId], references: [id], onDelete: Cascade)
+  stepResults        StepResult[]
+  events             ExecutionEvent[]
+}
+
+model StepResult {
+  id            String   @id @default(uuid())
+  executionId   String
+  stepOrder     Int
+  action        String
+  target        String?
+  value         String?
+  status        String
+  screenshotUrl String?
+  actualResult  String?
+  errorMessage  String?
+  durationMs    Int?
+  retryCount    Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  execution     ExecutionRecord @relation(fields: [executionId], references: [id], onDelete: Cascade)
+}
+
+model Job {
+  id          String   @id @default(uuid())
+  type        String
+  status      String   @default("queued")
+  payload     Json
+  result      Json?
+  progress    Int      @default(0)
+  error       String?
+  retryCount  Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ExecutionEvent {
+  id          String   @id @default(uuid())
+  executionId String
+  type        String
+  payload     Json
+  createdAt   DateTime @default(now())
+
+  execution   ExecutionRecord @relation(fields: [executionId], references: [id], onDelete: Cascade)
+}
+
+model Report {
+  id          String   @id @default(uuid())
+  projectId   String
+  executionId String?
+  type        String
+  content     Json
+  format      String
+  createdAt   DateTime @default(now())
+
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}

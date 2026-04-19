@@ -1,0 +1,93 @@
+version: "3.9"
+services:
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_test_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ai_test_agent
+      REDIS_URL: redis://redis:6379
+      PORT: 3000
+      JWT_SECRET: dev-secret
+      ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef
+    ports:
+      - "3000:3000"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    depends_on:
+      - api
+    environment:
+      VITE_API_BASE_URL: http://api:3000
+    ports:
+      - "5173:5173"
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: services/ai/Dockerfile
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      AI_SERVICE_PORT: 8000
+    ports:
+      - "8000:8000"
+
+  runner:
+    build:
+      context: .
+      dockerfile: services/runner/Dockerfile
+    environment:
+      RUNNER_PORT: 8100
+      API_BASE_URL: http://api:3000
+    ports:
+      - "8100:8100"
+
+  demo-site:
+    build:
+      context: .
+      dockerfile: services/demo-site/Dockerfile
+    environment:
+      DEMO_SITE_PORT: 8200
+    ports:
+      - "8200:8200"
+
+volumes:
+  postgres_data:
+  minio_data:
