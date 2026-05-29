@@ -102,6 +102,12 @@ from aitest_platform.services.system_state import (
     restore_db_recycle_item,
     save_preference,
 )
+from aitest_platform.services.test_case_quality import (
+    assess_lightweight_items,
+    assess_test_case_quality,
+    duplicate_groups_from_reviews,
+    summarize_reviews,
+)
 
 router = APIRouter()
 
@@ -1623,14 +1629,276 @@ def update_test_case(caseId: str, payload: WritePayload):
         return model_dict(case)
 
 
+def _test_case_quality_review(
+    session: Any,
+    case: TestCase,
+    *,
+    peer_cases: list[TestCase] | None = None,
+    update_status: bool = False,
+    log_action: str | None = None,
+) -> dict[str, Any]:
+    if case.is_deleted:
+        raise HTTPException(status_code=404, detail=f"TestCase({case.id}) not found")
+    project_cases = peer_cases
+    if project_cases is None:
+        project_cases = list(
+            session.scalars(
+                select(TestCase)
+                .where(TestCase.project_id == case.project_id, TestCase.is_deleted.is_(False))
+                .order_by(TestCase.id)
+            )
+        )
+    requirement = session.get(RequirementItem, case.requirement_item_id)
+    case_payload = model_dict(case)
+    peer_payloads = [model_dict(peer) for peer in project_cases if peer.id != case.id and not peer.is_deleted]
+    requirement_payload = model_dict(requirement) if requirement is not None and not requirement.is_deleted else None
+    requirement_cases = [
+        model_dict(peer)
+        for peer in project_cases
+        if peer.requirement_item_id == case.requirement_item_id and not peer.is_deleted
+    ]
+    review = assess_test_case_quality(
+        case_payload,
+        requirement=requirement_payload,
+        peer_cases=peer_payloads,
+        requirement_cases=requirement_cases,
+    )
+    if update_status:
+        case.status = review["review_status"]
+    if log_action:
+        session.add(
+            OperationLog(
+                module="test_case",
+                action=log_action,
+                target_type="test_case",
+                target_id=case.id,
+                detail=safe_summary_payload(
+                    sanitize_payload(
+                    {
+                        "case_id": case.id,
+                        "score": review["quality_score"],
+                        "review_status": review["review_status"],
+                        "issue_codes": [issue.get("code") for issue in review["issues"]],
+                        "provider_call_performed": False,
+                        "llm_provider_called": False,
+                    }
+                    )
+                ),
+            )
+        )
+    session.flush()
+    review["case"] = model_dict(case)
+    return safe_summary_payload(sanitize_payload(review))
+
+
+def _load_review_cases(session: Any, data: dict[str, Any]) -> list[TestCase]:
+    case_ids = parse_int_list(data.get("case_ids") or data.get("caseIds"), "case_ids")
+    project_id = data.get("project_id") if data.get("project_id") is not None else data.get("projectId")
+    if case_ids:
+        cases = list(
+            session.scalars(
+                select(TestCase)
+                .where(TestCase.id.in_(case_ids), TestCase.is_deleted.is_(False))
+                .order_by(TestCase.id)
+            )
+        )
+        missing = sorted(set(case_ids) - {case.id for case in cases})
+        if missing:
+            raise HTTPException(status_code=404, detail=f"TestCase not found: {missing}")
+        return cases
+    if project_id is not None:
+        project = require_db_item(session, Project, project_id, "projectId")
+        return list(
+            session.scalars(
+                select(TestCase)
+                .where(TestCase.project_id == project.id, TestCase.is_deleted.is_(False))
+                .order_by(TestCase.id)
+            )
+        )
+    return []
+
+
+def _review_db_test_cases(session: Any, cases: list[TestCase], *, update_status: bool, log_action: str | None) -> dict[str, Any]:
+    project_ids = {case.project_id for case in cases}
+    peers: list[TestCase] = []
+    if project_ids:
+        peers = list(
+            session.scalars(
+                select(TestCase)
+                .where(TestCase.project_id.in_(project_ids), TestCase.is_deleted.is_(False))
+                .order_by(TestCase.id)
+            )
+        )
+    items = [
+        _test_case_quality_review(session, case, peer_cases=peers, update_status=update_status, log_action=log_action)
+        for case in cases
+    ]
+    return {
+        "items": items,
+        "summary": summarize_reviews(items),
+        "provider_call_performed": False,
+        "llm_provider_called": False,
+    }
+
+
+def _lightweight_review_payload(data: dict[str, Any]) -> dict[str, Any]:
+    items = data.get("items") or data.get("cases") or data.get("test_cases")
+    if isinstance(items, dict):
+        items = [items]
+    if not isinstance(items, list):
+        case_like_keys = {"title", "case_type", "steps", "expected_result", "priority", "tags", "source_anchor_ids"}
+        items = [data] if any(key in data for key in case_like_keys) else []
+    sanitized_items = [safe_summary_payload(sanitize_payload(item)) for item in items if isinstance(item, dict)]
+    reviews = assess_lightweight_items(sanitized_items)
+    return {
+        "items": safe_summary_payload(sanitize_payload(reviews)),
+        "summary": summarize_reviews(reviews),
+        "provider_call_performed": False,
+        "llm_provider_called": False,
+    }
+
+
+@router.post("/test-cases/{caseId}/quality-review")
+def quality_review_test_case(caseId: str, payload: WritePayload | None = None):
+    payload_dict(payload)
+    with session_scope() as session:
+        case = session.get(TestCase, to_int(caseId, "caseId"))
+        if case is None or case.is_deleted:
+            raise HTTPException(status_code=404, detail=f"TestCase({caseId}) not found")
+        return _test_case_quality_review(session, case, update_status=True, log_action="quality_review")
+
+
+@router.post("/test-cases/review-batch")
+def review_test_cases_batch(payload: WritePayload):
+    data = safe_summary_payload(sanitize_payload(payload_dict(payload)))
+    with session_scope() as session:
+        cases = _load_review_cases(session, data)
+        if not cases:
+            raise HTTPException(status_code=400, detail="case_ids or project_id is required")
+        return safe_summary_payload(sanitize_payload(_review_db_test_cases(session, cases, update_status=True, log_action="quality_review_batch")))
+
+
+@router.get("/projects/{projectId}/test-case-quality-summary")
+def project_test_case_quality_summary(projectId: str):
+    with session_scope() as session:
+        project = require_db_item(session, Project, projectId, "projectId")
+        cases = list(
+            session.scalars(
+                select(TestCase)
+                .where(TestCase.project_id == project.id, TestCase.is_deleted.is_(False))
+                .order_by(TestCase.id)
+            )
+        )
+        review_payload = _review_db_test_cases(session, cases, update_status=False, log_action=None)
+        items = review_payload["items"]
+        priority_mismatches = []
+        for item in items:
+            mismatch = next((issue for issue in item.get("issues", []) if issue.get("code") == "priority_mismatch"), None)
+            if mismatch:
+                case_payload = item.get("case") or {}
+                requirement = session.get(RequirementItem, case_payload.get("requirement_item_id"))
+                priority_mismatches.append(
+                    {
+                        "case_id": case_payload.get("id"),
+                        "title": case_payload.get("title"),
+                        "case_priority": case_payload.get("priority"),
+                        "requirement_item_id": case_payload.get("requirement_item_id"),
+                        "requirement_priority": requirement.priority if requirement is not None else None,
+                    }
+                )
+        unexecutable_count = sum(
+            1
+            for item in items
+            if any(issue.get("code") in {"missing_steps", "unexecutable_steps"} for issue in item.get("issues", []))
+        )
+        return safe_summary_payload(
+            sanitize_payload(
+            {
+                "project_id": project.id,
+                "summary": review_payload["summary"],
+                "issue_counts": review_payload["summary"]["issue_counts"],
+                "duplicate_groups": duplicate_groups_from_reviews(items),
+                "priority_mismatches": priority_mismatches,
+                "unexecutable_count": unexecutable_count,
+                "provider_call_performed": False,
+                "llm_provider_called": False,
+            }
+            )
+        )
+
+
+@router.post("/test-cases/{caseId}/review-opinions")
+def save_test_case_review_opinion(caseId: str, payload: WritePayload):
+    data = safe_summary_payload(sanitize_payload(payload_dict(payload)))
+    with session_scope() as session:
+        case = session.get(TestCase, to_int(caseId, "caseId"))
+        if case is None or case.is_deleted:
+            raise HTTPException(status_code=404, detail=f"TestCase({caseId}) not found")
+        decision = str(data.get("decision") or "").strip().lower()
+        approved_decisions = {"approved", "approve"}
+        change_required_decisions = {"changes_required", "change_required", "changing", "needs_review"}
+        if decision in approved_decisions:
+            case.status = "reviewed"
+        elif decision in change_required_decisions:
+            case.status = "needs_review"
+        opinion = safe_summary_payload(
+            sanitize_payload(
+            {
+                "case_id": case.id,
+                "decision": decision or None,
+                "comment": data.get("comment") or data.get("opinion") or data.get("notes"),
+                "reviewer": data.get("reviewer") or data.get("reviewer_name"),
+                "source": data.get("source") or "manual",
+            }
+            )
+        )
+        log = OperationLog(module="test_case", action="review_opinion", target_type="test_case", target_id=case.id, detail=opinion)
+        session.add(log)
+        session.flush()
+        return safe_summary_payload(sanitize_payload({"opinion": opinion, "log": _operation_log_brief(log), "case": model_dict(case)}))
+
+
 @router.post("/test-cases/rule-validate")
 def rule_validate_test_cases(payload: WritePayload):
-    return {"valid": True, "score": 85, "findings": [], "input": payload_dict(payload)}
+    data = safe_summary_payload(sanitize_payload(payload_dict(payload)))
+    with session_scope() as session:
+        cases = _load_review_cases(session, data)
+        result = _review_db_test_cases(session, cases, update_status=False, log_action=None) if cases else _lightweight_review_payload(data)
+        summary = result["summary"]
+        return safe_summary_payload(
+            sanitize_payload(
+            {
+                **result,
+                "valid": summary["needs_review"] == 0,
+                "score": summary["avg_score"],
+                "findings": [issue for item in result["items"] for issue in item.get("issues", [])],
+            }
+            )
+        )
 
 
 @router.post("/test-cases/ai-review")
 def ai_review_test_cases(payload: WritePayload):
-    return {"reviewed": True, "score": 82, "suggestions": ["建议补充异常路径和权限边界。"], "input": payload_dict(payload)}
+    data = safe_summary_payload(sanitize_payload(payload_dict(payload)))
+    with session_scope() as session:
+        cases = _load_review_cases(session, data)
+        result = _review_db_test_cases(session, cases, update_status=False, log_action=None) if cases else _lightweight_review_payload(data)
+        summary = result["summary"]
+        suggestions = []
+        for item in result["items"]:
+            suggestions.extend(item.get("suggested_actions", []))
+        return safe_summary_payload(
+            sanitize_payload(
+            {
+                **result,
+                "reviewed": True,
+                "score": summary["avg_score"],
+                "suggestions": list(dict.fromkeys(suggestions)),
+                "provider_call_performed": False,
+                "llm_provider_called": False,
+            }
+            )
+        )
 
 
 @router.post("/test-cases/{caseId}/confirm")

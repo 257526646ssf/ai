@@ -37,6 +37,138 @@ const mapBackendCase = (item) => ({
   raw: item
 });
 
+const toRecord = (value) => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  return {};
+};
+
+const toArray = (value, keys = []) => {
+  if (Array.isArray(value)) return value;
+  if (value === null || value === undefined || value === '') return [];
+  if (typeof value === 'string') return [value];
+  if (typeof value !== 'object') return [value];
+
+  const record = toRecord(value);
+  const candidateKeys = [...keys, 'items', 'list', 'records', 'results', 'data'];
+  for (const key of candidateKeys) {
+    if (Array.isArray(record[key])) return record[key];
+  }
+  return [];
+};
+
+const toNumber = (value, fallback = 0) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+};
+
+const stringifyValue = (value) => {
+  if (value === null || value === undefined || value === '') return '暂无';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    return value.text || value.message || value.title || value.name || value.description || JSON.stringify(value);
+  }
+  return String(value);
+};
+
+const normalizeIssue = (issue) => {
+  const record = toRecord(issue);
+  const rawType = String(record.type || record.severity || record.level || 'info').toLowerCase();
+  const type = rawType.includes('danger') || rawType.includes('error') || rawType.includes('critical')
+    ? 'danger'
+    : rawType.includes('warn') || rawType.includes('medium')
+      ? 'warning'
+      : 'info';
+  return {
+    type,
+    text: stringifyValue(record.text || record.message || record.description || record.title || issue)
+  };
+};
+
+const normalizeCheck = (check) => {
+  const record = toRecord(check);
+  return {
+    name: stringifyValue(record.name || record.rule || record.key || record.code || check),
+    status: stringifyValue(record.status || record.result || record.pass || 'unknown'),
+    message: stringifyValue(record.message || record.detail || record.reason || '')
+  };
+};
+
+const normalizeIssueCounts = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value.map((item, index) => {
+      const record = toRecord(item);
+      return {
+        key: stringifyValue(record.key || record.type || record.name || `issue_${index + 1}`),
+        count: toNumber(record.count || record.value || record.total, 0)
+      };
+    });
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value).map(([key, count]) => ({ key, count: toNumber(count, 0) }));
+  }
+  return [{ key: 'issues', count: toNumber(value, 0) }];
+};
+
+const getCaseBackendId = (caseItem) => caseItem?.backendId || caseItem?.raw?.id || caseItem?.id;
+
+const normalizeQualityReview = (payload, fallbackCase) => {
+  const root = toRecord(payload);
+  const source = root.review && typeof root.review === 'object' ? root.review : root;
+  const rawScore = source.score ?? source.quality_score ?? source.total_score;
+  const score = rawScore === undefined || rawScore === null ? null : Math.max(0, Math.min(100, toNumber(rawScore, 0)));
+  const issues = [
+    ...toArray(source.issues || source.issue_list || source.problems || source.errors).map(normalizeIssue),
+    ...toArray(source.warnings).map(item => normalizeIssue({ type: 'warning', text: stringifyValue(item) }))
+  ];
+  const suggestedActions = toArray(source.suggested_actions || source.suggestions || source.actions || source.recommendations)
+    .map(stringifyValue);
+  const duplicateCandidates = toArray(source.duplicate_candidates || source.duplicates || source.duplicateCases)
+    .map((item) => {
+      const record = toRecord(item);
+      return {
+        id: stringifyValue(record.case_number || record.case_id || record.id || item),
+        title: stringifyValue(record.title || record.name || record.summary || '')
+      };
+    });
+  const checks = toArray(source.checks || source.rules || source.check_results || source.validations).map(normalizeCheck);
+  const fallbackScore = score ?? (issues.length ? 70 : 95);
+  const reviewStatus = stringifyValue(source.review_status || source.status || (fallbackScore >= 85 ? 'approved' : 'changes_required'));
+
+  return {
+    caseId: stringifyValue(source.case_number || source.case_id || source.caseId || fallbackCase?.id),
+    backendId: source.case_id || source.caseId || fallbackCase?.backendId,
+    score: fallbackScore,
+    review_status: reviewStatus,
+    issues,
+    suggested_actions: suggestedActions,
+    duplicate_candidates: duplicateCandidates,
+    checks,
+    raw: payload
+  };
+};
+
+const normalizeQualitySummary = (payload, fallbackCases, reviews = {}) => {
+  const source = toRecord(payload?.summary || payload);
+  const reviewValues = Object.values(reviews || {});
+  const duplicateGroups = toArray(source.duplicate_groups || source.duplicateGroups || source.duplicates);
+  const localAverage = reviewValues.length
+    ? Math.round(reviewValues.reduce((total, item) => total + toNumber(item.score, 0), 0) / reviewValues.length)
+    : 0;
+  const fallbackNeedsReview = fallbackCases.filter(item => item.status !== '已通过').length;
+
+  return {
+    averageScore: toNumber(source.average_score ?? source.avg_score ?? source.score_avg ?? source.averageScore, localAverage),
+    reviewRequiredCount: toNumber(source.review_required_count ?? source.need_review_count ?? source.needs_review_count ?? source.pending_review_count, fallbackNeedsReview),
+    duplicateGroupCount: toNumber(source.duplicate_group_count ?? source.duplicate_groups_count ?? source.duplicate_count, duplicateGroups.length),
+    unexecutableCount: toNumber(source.unexecutable_count ?? source.not_executable_count ?? source.non_executable_count, 0),
+    priorityMismatchCount: toNumber(source.priority_mismatch_count ?? source.priority_inconsistent_count ?? source.priority_issue_count, 0),
+    issueCounts: normalizeIssueCounts(source.issue_counts || source.issueCounts || {}),
+    raw: payload
+  };
+};
+
 export default function TestCases() {
   const { selectedProject, loading: projectLoading, error: projectError } = useProjectContext();
   const [strategy, setStrategy] = useState('standard'); // standard, boundary, risk, scenario, custom
@@ -49,6 +181,12 @@ export default function TestCases() {
   const [testcaseStatus, setTestcaseStatus] = useState({ loading: true, message: '' });
   const [isGeneratingCases, setIsGeneratingCases] = useState(false);
   const [isExportingCases, setIsExportingCases] = useState(false);
+  const [qualitySummary, setQualitySummary] = useState(null);
+  const [qualitySummaryStatus, setQualitySummaryStatus] = useState({ loading: false, message: '' });
+  const [caseReviews, setCaseReviews] = useState({});
+  const [selectedCaseIds, setSelectedCaseIds] = useState([]);
+  const [reviewLoadingCaseId, setReviewLoadingCaseId] = useState(null);
+  const [isBatchReviewing, setIsBatchReviewing] = useState(false);
 
   // 页用例列表
   const initialCases = [
@@ -236,10 +374,265 @@ export default function TestCases() {
     }
   };
 
+  const showToast = (message, type = 'info') => {
+    window.dispatchEvent(new CustomEvent('show-toast', { detail: { message, type } }));
+  };
+
+  const mapReviewStatusToCaseStatus = (reviewStatus) => {
+    const normalized = String(reviewStatus || '').toLowerCase();
+    if (['approved', 'passed', 'confirmed'].includes(normalized)) return '已通过';
+    if (['changes_required', 'failed', 'rejected'].includes(normalized)) return '需优化';
+    return '待评审';
+  };
+
+  const buildLocalQualityReview = (caseItem) => {
+    const title = caseItem?.title || '';
+    const issues = [];
+    const checks = [
+      {
+        name: '标题可执行性',
+        status: title.length >= 8 ? 'pass' : 'warning',
+        message: title.length >= 8 ? '标题具备基本操作语义' : '标题过短，建议补充操作对象和期望结果'
+      },
+      {
+        name: '优先级一致性',
+        status: caseItem?.priority ? 'pass' : 'warning',
+        message: caseItem?.priority ? `当前优先级为 ${caseItem.priority}` : '缺少优先级'
+      },
+      {
+        name: '需求关联',
+        status: caseItem?.ref ? 'pass' : 'warning',
+        message: caseItem?.ref ? `已关联 ${caseItem.ref}` : '缺少需求项引用'
+      }
+    ];
+
+    if (!title.includes('时间') && !title.includes('分钟') && title.includes('锁定')) {
+      issues.push({ type: 'warning', text: '本地规则提示：锁定类用例建议明确时间窗口、锁定时长和解锁条件。' });
+    }
+    if (caseItem?.status !== '已通过') {
+      issues.push({ type: 'info', text: '本地规则提示：该用例仍处于待评审状态，建议补充可观测断言。' });
+    }
+
+    const duplicateCandidates = cases
+      .filter(item => item.id !== caseItem?.id && item.title && item.title === caseItem?.title)
+      .map(item => ({ id: item.id, title: item.title }));
+
+    return {
+      caseId: caseItem?.id,
+      backendId: getCaseBackendId(caseItem),
+      score: Math.max(55, 95 - issues.length * 12 - duplicateCandidates.length * 8),
+      review_status: issues.length || duplicateCandidates.length ? 'changes_required' : 'approved',
+      issues,
+      suggested_actions: issues.length
+        ? ['补充前置条件、可观测断言和失败恢复路径。', '确认优先级与需求风险等级一致。']
+        : ['当前本地规则未发现明显问题，可等待后端深度评审。'],
+      duplicate_candidates: duplicateCandidates,
+      checks,
+      localFallback: true
+    };
+  };
+
+  const loadProjectQualitySummary = async () => {
+    if (!projectContext?.id) {
+      setQualitySummary(normalizeQualitySummary(null, cases, caseReviews));
+      setQualitySummaryStatus({ loading: false, message: '本地规则摘要，未连接后端质量汇总' });
+      return;
+    }
+
+    setQualitySummaryStatus({ loading: true, message: '正在刷新质量摘要...' });
+    try {
+      const payload = await apiGet(`/projects/${projectContext.id}/test-case-quality-summary`);
+      setQualitySummary(normalizeQualitySummary(payload, cases, caseReviews));
+      setQualitySummaryStatus({ loading: false, message: '质量摘要已刷新' });
+    } catch (error) {
+      setQualitySummary(normalizeQualitySummary(null, cases, caseReviews));
+      setQualitySummaryStatus({ loading: false, message: '后端质量摘要不可用，已展示本地规则摘要' });
+      showToast(error?.message || '质量摘要接口不可用，已展示本地规则摘要。', 'error');
+    }
+  };
+
+  useEffect(() => {
+    loadProjectQualitySummary();
+  }, [projectContext?.id, cases.length]);
+
+  const requestSingleReview = async (caseItem) => {
+    const endpointId = getCaseBackendId(caseItem);
+    const body = {
+      project_id: projectContext?.id,
+      case_id: caseItem?.backendId,
+      case_number: caseItem?.id,
+      test_case: caseItem?.raw || caseItem
+    };
+    const attempts = [
+      () => apiPost(`/test-cases/${endpointId}/quality-review`, body, { timeoutMs: 15000 }),
+      () => apiPost('/test-cases/rule-validate', body, { timeoutMs: 15000 }),
+      () => apiPost('/test-cases/ai-review', body, { timeoutMs: 20000 })
+    ];
+
+    let lastError = null;
+    for (const attempt of attempts) {
+      try {
+        return await attempt();
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError;
+  };
+
+  const handleSingleQualityReview = async (caseId = selectedCaseId) => {
+    const caseItem = cases.find(item => item.id === caseId);
+    if (!caseItem) {
+      showToast('请先选择一条用例。', 'error');
+      return;
+    }
+
+    setReviewLoadingCaseId(caseItem.id);
+    try {
+      const payload = await requestSingleReview(caseItem);
+      const review = normalizeQualityReview(payload, caseItem);
+      setCaseReviews(prev => ({ ...prev, [caseItem.id]: review }));
+      setCases(prev => prev.map(item => item.id === caseItem.id ? { ...item, status: mapReviewStatusToCaseStatus(review.review_status) } : item));
+      showToast('质量评审已完成。', 'success');
+      loadProjectQualitySummary();
+    } catch (error) {
+      const fallbackReview = buildLocalQualityReview(caseItem);
+      setCaseReviews(prev => ({ ...prev, [caseItem.id]: fallbackReview }));
+      setQualitySummary(normalizeQualitySummary(null, cases, { ...caseReviews, [caseItem.id]: fallbackReview }));
+      showToast(error?.message || '后端质量评审不可用，已展示本地规则提示，未写入后端。', 'error');
+    } finally {
+      setReviewLoadingCaseId(null);
+    }
+  };
+
+  const handleBatchQualityReview = async () => {
+    const targetIds = selectedCaseIds.length ? selectedCaseIds : cases.map(item => item.id);
+    const targets = cases.filter(item => targetIds.includes(item.id));
+    if (!targets.length) {
+      showToast('当前没有可评审的用例。', 'error');
+      return;
+    }
+
+    setIsBatchReviewing(true);
+    try {
+      const payload = await apiPost('/test-cases/review-batch', {
+        project_id: projectContext?.id,
+        case_ids: targets.map(getCaseBackendId),
+        case_numbers: targets.map(item => item.id),
+        test_cases: targets.map(item => item.raw || item)
+      }, { timeoutMs: 30000 });
+      const resultItems = toArray(payload?.results || payload?.reviews || payload, ['results', 'reviews', 'items', 'cases']);
+      const updatedReviews = {};
+
+      resultItems.forEach((item, index) => {
+        const record = toRecord(item);
+        const matchedCase = targets.find(target => {
+          const backendId = String(getCaseBackendId(target));
+          return String(record.case_number || '') === String(target.id)
+            || String(record.case_id || record.caseId || record.id || '') === backendId;
+        }) || targets[index];
+        if (matchedCase) {
+          updatedReviews[matchedCase.id] = normalizeQualityReview(item, matchedCase);
+        }
+      });
+
+      if (Object.keys(updatedReviews).length) {
+        setCaseReviews(prev => ({ ...prev, ...updatedReviews }));
+        setCases(prev => prev.map(item => updatedReviews[item.id] ? { ...item, status: mapReviewStatusToCaseStatus(updatedReviews[item.id].review_status) } : item));
+      }
+      if (payload?.summary) {
+        setQualitySummary(normalizeQualitySummary(payload.summary, cases, { ...caseReviews, ...updatedReviews }));
+      } else {
+        loadProjectQualitySummary();
+      }
+      showToast(`批量评审已提交并处理 ${Object.keys(updatedReviews).length || targets.length} 条用例。`, 'success');
+    } catch (error) {
+      const fallbackReviews = targets.reduce((acc, item) => ({ ...acc, [item.id]: buildLocalQualityReview(item) }), {});
+      setCaseReviews(prev => ({ ...prev, ...fallbackReviews }));
+      setQualitySummary(normalizeQualitySummary(null, cases, { ...caseReviews, ...fallbackReviews }));
+      showToast(error?.message || '批量评审接口不可用，已展示本地规则提示，未写入后端。', 'error');
+    } finally {
+      setIsBatchReviewing(false);
+    }
+  };
+
+  const handleSaveReviewOpinion = async (decision) => {
+    const caseItem = cases.find(item => item.id === selectedCaseId);
+    if (!caseItem) {
+      showToast('请先选择一条用例。', 'error');
+      return;
+    }
+
+    const opinion = window.prompt(decision === 'approved' ? '请输入通过意见：' : '请输入需修改意见：');
+    if (opinion === null) return;
+
+    try {
+      await apiPost(`/test-cases/${getCaseBackendId(caseItem)}/review-opinions`, {
+        project_id: projectContext?.id,
+        case_id: caseItem.backendId,
+        case_number: caseItem.id,
+        decision,
+        opinion,
+        comment: opinion
+      });
+      setCases(prev => prev.map(item => item.id === caseItem.id ? { ...item, status: mapReviewStatusToCaseStatus(decision) } : item));
+      setCaseReviews(prev => ({
+        ...prev,
+        [caseItem.id]: {
+          ...(prev[caseItem.id] || buildLocalQualityReview(caseItem)),
+          review_status: decision,
+          localFallback: false
+        }
+      }));
+      showToast('评审意见已保存。', 'success');
+      loadProjectQualitySummary();
+    } catch (error) {
+      showToast(error?.message || '保存评审意见失败，未写入后端。', 'error');
+    }
+  };
+
+  const toggleCaseSelection = (caseId) => {
+    setSelectedCaseIds(prev => prev.includes(caseId) ? prev.filter(id => id !== caseId) : [...prev, caseId]);
+  };
+
+  const toggleAllCaseSelection = () => {
+    setSelectedCaseIds(prev => prev.length === cases.length ? [] : cases.map(item => item.id));
+  };
+
   // 动态获取不同用例的 AI 评审结果
   const getAiReviewDetails = (caseId) => {
     const currentCase = cases.find(c => c.id === caseId);
     if (!currentCase) return null;
+
+    const backendReview = caseReviews[caseId];
+    if (backendReview) {
+      const score = toNumber(backendReview.score, 0);
+      const reviewStatus = String(backendReview.review_status || '').toLowerCase();
+      const rating = reviewStatus === 'approved' || score >= 85 ? '质量达标' : '需修改';
+      const colorClass = reviewStatus === 'approved' || score >= 85 ? 'text-[var(--accent-color)]' : 'text-amber-500';
+      const circleColor = reviewStatus === 'approved' || score >= 85 ? 'var(--accent-color)' : '#f59e0b';
+      const issues = toArray(backendReview.issues).map(normalizeIssue);
+      const suggestedActions = toArray(backendReview.suggested_actions).map(stringifyValue);
+      return {
+        score,
+        rating,
+        colorClass,
+        circleColor,
+        review_status: backendReview.review_status,
+        issues,
+        suggested_actions: suggestedActions,
+        duplicate_candidates: toArray(backendReview.duplicate_candidates),
+        checks: toArray(backendReview.checks).map(normalizeCheck),
+        suggestions: suggestedActions.length ? suggestedActions.join('；') : '后端质量评审已返回，暂无额外整改建议。',
+        localFallback: backendReview.localFallback,
+        details: {
+          title: currentCase.title,
+          precondition: stringifyValue(currentCase.raw?.precondition || '请以当前用例前置条件为准'),
+          steps: toArray(currentCase.raw?.steps || currentCase.raw?.test_steps || ['请以当前用例步骤为准']).map(stringifyValue),
+          expect: stringifyValue(currentCase.raw?.expected_result || currentCase.raw?.expect || '请以当前用例预期结果为准')
+        }
+      };
+    }
 
     if (currentCase.status === '已通过') {
       return {
@@ -465,12 +858,22 @@ export default function TestCases() {
         </span>
       );
     }
+    if (status === '需优化') {
+      return (
+        <span className="px-2.5 py-0.5 rounded-full text-[9px] font-bold bg-[rgba(239,68,68,0.1)] text-red-500 border border-[rgba(239,68,68,0.18)]">
+          需优化
+        </span>
+      );
+    }
     return (
       <span className="px-2.5 py-0.5 rounded-full text-[9px] font-bold bg-[rgba(245,158,11,0.12)] text-amber-600 dark:text-amber-400 border border-[rgba(245,158,11,0.2)] animate-pulse">
         待评审
       </span>
     );
   };
+
+  const displayQualitySummary = qualitySummary || normalizeQualitySummary(null, cases, caseReviews);
+  const displayIssueCounts = toArray(displayQualitySummary.issueCounts);
 
   return (
     <div className="space-y-4 text-left transition-all duration-300 w-full">
@@ -479,8 +882,8 @@ export default function TestCases() {
       ) : (
         <>
           {/* 顶栏 */}
-          <div className="flex justify-between items-center theme-card rounded-xl p-4 shadow-soft">
-            <div className="flex gap-4">
+          <div className="flex flex-wrap justify-between items-center gap-3 theme-card rounded-xl p-4 shadow-soft">
+            <div className="flex flex-wrap gap-4 min-w-0">
               <div>
                 <span className="text-[10px] text-[var(--text-secondary)] font-bold block mb-1">项目</span>
                 <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)] text-[11px] font-bold text-[var(--text-primary)] cursor-pointer hover:bg-[var(--border-color)] transition-colors">
@@ -504,7 +907,7 @@ export default function TestCases() {
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <span className="text-[10px] text-[var(--text-secondary)] font-semibold hidden md:inline">
                 {testcaseStatus.loading ? testcaseStatus.message : `用例库总数: ${cases.length} | ${testcaseStatus.message || '本地演示数据'}`}
               </span>
@@ -522,6 +925,65 @@ export default function TestCases() {
                 <Sparkles className="size-3 text-white inline mr-1" />
                 {isGeneratingCases ? '生成中...' : 'AI 批量生成'}
               </button>
+            </div>
+          </div>
+
+          {/* R23 用例质量摘要 */}
+          <div className="theme-card rounded-xl p-4 shadow-soft space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-color)] pb-3">
+              <div className="min-w-0">
+                <h3 className="text-xs font-bold text-[var(--text-primary)] flex items-center gap-1.5">
+                  <CheckCircle className="size-4 text-[var(--accent-color)]" />
+                  <span>用例质量评审与规则摘要</span>
+                </h3>
+                <p className="text-[9.5px] text-[var(--text-secondary)] mt-1">
+                  {qualitySummaryStatus.loading ? qualitySummaryStatus.message : qualitySummaryStatus.message || '展示项目级质量规则统计'}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={loadProjectQualitySummary}
+                  disabled={qualitySummaryStatus.loading}
+                  className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)] text-[10px] font-bold text-[var(--text-primary)] cursor-pointer transition-all whitespace-nowrap disabled:opacity-60"
+                >
+                  {qualitySummaryStatus.loading ? '刷新中' : '刷新摘要'}
+                </button>
+                <button
+                  onClick={handleBatchQualityReview}
+                  disabled={isBatchReviewing}
+                  className="px-3 py-1.5 rounded-lg bg-[var(--accent-color)] text-[var(--accent-text)] text-[10px] font-bold cursor-pointer hover:opacity-90 transition-all whitespace-nowrap disabled:opacity-60"
+                >
+                  {isBatchReviewing ? '评审中' : `批量评审${selectedCaseIds.length ? `(${selectedCaseIds.length})` : '(当前列表)'}`}
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5">
+              {[
+                { label: '平均分', value: displayQualitySummary.averageScore || '--', tone: 'text-[var(--accent-color)]' },
+                { label: '需评审数', value: displayQualitySummary.reviewRequiredCount, tone: 'text-amber-500' },
+                { label: '重复组', value: displayQualitySummary.duplicateGroupCount, tone: 'text-blue-500' },
+                { label: '不可执行', value: displayQualitySummary.unexecutableCount, tone: 'text-red-500' },
+                { label: '优先级不一致', value: displayQualitySummary.priorityMismatchCount, tone: 'text-purple-500' }
+              ].map((item) => (
+                <div key={item.label} className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/40 p-3 min-w-0">
+                  <div className={`text-base font-bold leading-none ${item.tone}`}>{item.value}</div>
+                  <div className="text-[9px] text-[var(--text-secondary)] font-bold mt-1.5 truncate">{item.label}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              <span className="text-[9.5px] text-[var(--text-secondary)] font-bold py-1">issue_counts</span>
+              {displayIssueCounts.length ? displayIssueCounts.map((item) => (
+                <span key={item.key} className="px-2 py-1 rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[9px] text-[var(--text-primary)] font-semibold">
+                  {item.key}: {item.count}
+                </span>
+              )) : (
+                <span className="px-2 py-1 rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] text-[9px] text-[var(--text-secondary)]">
+                  暂无后端 issue_counts
+                </span>
+              )}
             </div>
           </div>
 
@@ -657,20 +1119,31 @@ export default function TestCases() {
                 </div>
 
                 <div className="overflow-x-auto w-full">
-                  <table className="w-full text-[11px] text-left border-collapse min-w-[500px]">
+                  <table className="w-full text-[11px] text-left border-collapse min-w-[720px]">
                     <thead>
                       <tr className="text-[var(--text-secondary)] font-bold border-b border-[var(--border-color)]">
-                        <th className="py-2 px-2 w-[24px]"><input type="checkbox" className="rounded border-[var(--border-color)]" /></th>
+                        <th className="py-2 px-2 w-[24px]">
+                          <input
+                            type="checkbox"
+                            checked={cases.length > 0 && selectedCaseIds.length === cases.length}
+                            onChange={toggleAllCaseSelection}
+                            className="rounded border-[var(--border-color)] accent-[var(--accent-color)]"
+                          />
+                        </th>
                         <th className="py-2 px-2">用例编号</th>
                         <th className="py-2 px-2">用例标题</th>
                         <th className="py-2 px-2 text-center">优先级</th>
                         <th className="py-2 px-2">类型</th>
                         <th className="py-2 px-2">需求项</th>
+                        <th className="py-2 px-2 text-center">质量</th>
                         <th className="py-2 px-2 text-center">状态</th>
+                        <th className="py-2 px-2 text-center">操作</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[var(--border-color)] text-[var(--text-primary)] font-medium">
-                      {cases.map((c) => (
+                      {cases.map((c) => {
+                        const rowReview = caseReviews[c.id];
+                        return (
                         <tr 
                           key={c.id} 
                           onClick={() => setSelectedCaseId(c.id)}
@@ -683,8 +1156,8 @@ export default function TestCases() {
                           <td className="py-3 px-2" onClick={(e) => e.stopPropagation()}>
                             <input 
                               type="checkbox" 
-                              checked={selectedCaseId === c.id} 
-                              onChange={() => setSelectedCaseId(c.id)}
+                              checked={selectedCaseIds.includes(c.id)}
+                              onChange={() => toggleCaseSelection(c.id)}
                               className="rounded border-[var(--border-color)] accent-[var(--accent-color)]" 
                             />
                           </td>
@@ -704,10 +1177,29 @@ export default function TestCases() {
                           </td>
                           <td className="py-3 px-2 text-[var(--accent-color)] font-bold">{c.ref}</td>
                           <td className="py-3 px-2 text-center">
+                            {rowReview ? (
+                              <span className={`font-bold ${toNumber(rowReview.score, 0) >= 85 ? 'text-[var(--accent-color)]' : 'text-amber-500'}`}>
+                                {toNumber(rowReview.score, 0)}
+                              </span>
+                            ) : (
+                              <span className="text-[var(--text-secondary)]">--</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-2 text-center">
                             {getStatusBadge(c.status)}
                           </td>
+                          <td className="py-3 px-2 text-center" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              onClick={() => handleSingleQualityReview(c.id)}
+                              disabled={reviewLoadingCaseId === c.id}
+                              className="px-2 py-1 rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)] text-[9px] font-bold text-[var(--text-primary)] whitespace-nowrap disabled:opacity-60"
+                            >
+                              {reviewLoadingCaseId === c.id ? '评审中' : '单条评审'}
+                            </button>
+                          </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -732,10 +1224,19 @@ export default function TestCases() {
               <TiltCard className="p-4 shadow-soft animate-[slideUpFade_0.4s_ease-out]">
                 <h3 
                   style={{ transform: 'translateZ(15px)' }}
-                  className="text-xs font-bold text-[var(--text-primary)] border-b border-[var(--border-color)] pb-2 mb-3 text-left flex justify-between items-center"
+                  className="text-xs font-bold text-[var(--text-primary)] border-b border-[var(--border-color)] pb-2 mb-3 text-left flex flex-wrap justify-between items-center gap-2"
                 >
                   <span>AI 用例质量评审管家</span>
-                  <span className="text-[10px] text-[var(--text-secondary)] font-normal font-mono">ID: {selectedCaseId}</span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] text-[var(--text-secondary)] font-normal font-mono">ID: {selectedCaseId}</span>
+                    <button
+                      onClick={() => handleSingleQualityReview(selectedCaseId)}
+                      disabled={reviewLoadingCaseId === selectedCaseId}
+                      className="px-2 py-1 rounded-md border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)] text-[9px] font-bold text-[var(--text-primary)] whitespace-nowrap disabled:opacity-60"
+                    >
+                      {reviewLoadingCaseId === selectedCaseId ? '评审中' : '评审当前'}
+                    </button>
+                  </div>
                 </h3>
 
                 {activeReview ? (
@@ -771,6 +1272,16 @@ export default function TestCases() {
                           <span className="text-[9.5px] text-[var(--text-secondary)]">（覆盖与完备度综合评分）</span>
                         </div>
                         <p className="text-[9.5px] text-[var(--text-secondary)] leading-relaxed">{activeReview.suggestions}</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          <span className="px-2 py-0.5 rounded-full border border-[var(--border-color)] bg-[var(--bg-card)] text-[8.5px] text-[var(--text-secondary)] font-bold">
+                            review_status: {activeReview.review_status || 'local_preview'}
+                          </span>
+                          {activeReview.localFallback && (
+                            <span className="px-2 py-0.5 rounded-full border border-[rgba(245,158,11,0.25)] bg-[rgba(245,158,11,0.08)] text-[8.5px] text-amber-500 font-bold">
+                              本地规则提示，未写入后端
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
 
@@ -803,6 +1314,66 @@ export default function TestCases() {
                           <span>完美！AI 评审未发现任何语义歧义与前置条件遗漏，符合一等测试用例规范。</span>
                         </div>
                       )}
+                    </div>
+
+                    {(activeReview.suggested_actions?.length > 0 || activeReview.duplicate_candidates?.length > 0 || activeReview.checks?.length > 0) && (
+                      <div className="grid grid-cols-1 gap-2 text-left border-t border-[var(--border-color)] pt-3">
+                        {activeReview.suggested_actions?.length > 0 && (
+                          <div>
+                            <div className="text-[10px] font-bold text-[var(--text-primary)] mb-1.5">suggested_actions</div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {activeReview.suggested_actions.map((action, index) => (
+                                <span key={`${action}-${index}`} className="px-2 py-1 rounded-md bg-[var(--accent-glow)]/40 border border-[var(--accent-glow)] text-[9px] text-[var(--text-primary)] font-semibold">
+                                  {action}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {activeReview.duplicate_candidates?.length > 0 && (
+                          <div>
+                            <div className="text-[10px] font-bold text-[var(--text-primary)] mb-1.5">duplicate_candidates</div>
+                            <div className="space-y-1">
+                              {activeReview.duplicate_candidates.map((item, index) => (
+                                <div key={`${item.id || index}-${index}`} className="px-2 py-1.5 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/40 text-[9px] text-[var(--text-secondary)]">
+                                  <span className="font-mono font-bold text-[var(--text-primary)]">{item.id || `候选 ${index + 1}`}</span>
+                                  <span className="ml-1">{item.title || '可能重复用例'}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {activeReview.checks?.length > 0 && (
+                          <div>
+                            <div className="text-[10px] font-bold text-[var(--text-primary)] mb-1.5">checks</div>
+                            <div className="space-y-1 max-h-[120px] overflow-y-auto pr-1">
+                              {activeReview.checks.map((check, index) => (
+                                <div key={`${check.name}-${index}`} className="flex items-start justify-between gap-2 px-2 py-1.5 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/40 text-[9px]">
+                                  <span className="font-bold text-[var(--text-primary)]">{check.name}</span>
+                                  <span className="text-[var(--text-secondary)] text-right">{check.status}{check.message && check.message !== '暂无' ? ` · ${check.message}` : ''}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap gap-2 pt-2 border-t border-[var(--border-color)]">
+                      <button
+                        onClick={() => handleSaveReviewOpinion('approved')}
+                        className="flex-1 min-w-[110px] py-1.5 bg-[rgba(16,185,129,0.1)] border border-[rgba(16,185,129,0.2)] text-emerald-600 dark:text-emerald-400 rounded-lg text-[10px] font-bold cursor-pointer text-center hover:bg-[rgba(16,185,129,0.16)] transition-all whitespace-nowrap"
+                      >
+                        保存通过意见
+                      </button>
+                      <button
+                        onClick={() => handleSaveReviewOpinion('changes_required')}
+                        className="flex-1 min-w-[110px] py-1.5 bg-[rgba(245,158,11,0.08)] border border-[rgba(245,158,11,0.2)] text-amber-600 dark:text-amber-400 rounded-lg text-[10px] font-bold cursor-pointer text-center hover:bg-[rgba(245,158,11,0.14)] transition-all whitespace-nowrap"
+                      >
+                        保存修改意见
+                      </button>
                     </div>
 
                     {/* 操作按钮组 */}

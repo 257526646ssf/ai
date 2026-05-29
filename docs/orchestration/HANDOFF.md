@@ -383,3 +383,12 @@
 - 验证结果：`python -m compileall backend\aitest_platform` 通过；R22 定向测试 7 passed；P0/R4/R14 回归 17 passed；后端全量 pytest 通过；`npm run build` 通过且仅 Vite chunk size warning；Headless Chrome CDP R22 烟测通过，`window.__r22Errors` 为空。
 - R22 残余风险：解析仍为规则化 TXT/Markdown，不覆盖 docx/pdf/xlsx 深解析；真实 LLM 默认关闭，需求大脑是 DB deterministic 摘要；split/merge lineage 用状态和响应表达，未新增正式血缘表；浏览器烟测使用本地临时 smoke 数据。
 - 下一步进入 R23：用例评审与质量规则。
+
+## R23 完成交接
+- R23 名称：用例评审与质量规则。
+- 后端实现：新增 deterministic 用例质量规则服务 `backend/aitest_platform/services/test_case_quality.py`；规则覆盖缺步骤、缺预期、预期不可断言/过短、标题过短、缺 source anchors、优先级不一致、重复/相似、不可执行、同需求 happy path 覆盖弱；新增/增强接口 `POST /test-cases/{caseId}/quality-review`、`POST /test-cases/review-batch`、`GET /projects/{projectId}/test-case-quality-summary`、`POST /test-cases/{caseId}/review-opinions`；旧入口 `rule-validate` 和 `ai-review` 复用新规则服务；不调用真实 LLM，响应 provider flags false，并做脱敏。
+- 前端实现：TestCases 页面新增项目级质量摘要区；接入单条质量评审、批量评审、评审意见保存；表格增加质量分和单条评审操作；所有评审返回 array/object/string/null 归一化，避免 R22 类似 `.slice` 崩溃。
+- R23 验收证据见 `docs/orchestration/ROUND23_REPORT.md`；定向测试 `backend/tests/test_round23_testcase_quality.py` 覆盖完整项目链路、好/坏/重复/优先级不一致用例、质量评审、批量评审、项目摘要、人工意见、旧入口、secret redaction。
+- 验证结果：`python -m compileall backend\aitest_platform` 通过；R23 定向测试 5 passed；R14/R22 回归 9 passed；后端全量 pytest 通过；`npm run build` 通过且仅 Vite chunk size warning；Headless Chrome CDP R23 烟测通过，`window.__r23Errors` 为空。
+- R23 残余风险：规则评分是 deterministic 启发式，阈值后续可按产品验收口径微调；人工评审意见保存到操作日志/状态字段，没有新增正式 Review 表；浏览器烟测使用本地临时 smoke 数据；真实 LLM 默认关闭。
+- 下一步进入 R24：执行与缺陷闭环。
