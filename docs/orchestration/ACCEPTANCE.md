@@ -1,0 +1,304 @@
+# 第一轮验收标准
+
+## P0 验收
+- [x] 后端可导入并启动 FastAPI app。
+- [x] `GET /api/v2/projects` 返回统一响应。
+- [x] 可创建 Project、RequirementLib、RequirementDocument。
+- [x] RequirementDocument 可进入 parse/extract/confirm 主链占位流程。
+- [x] RequirementItem 可生成 TestPoint。
+- [x] RequirementItem 可生成 TestCase。
+- [x] TestCase 可创建 Execution 或批量 Execution。
+- [x] Report 可基于项目生成占位快照。
+- [x] 系统备份接口可导出 JSON 快照。
+- [x] 核心数据写入 SQLite 后可读回。
+
+## P1 验收
+- [x] GenerationJob 有查询和事件流占位。
+- [x] 接口测试、自动化、性能模块有基础占位入口。
+- [x] SQLite 创建的 Project 可进入 P1 占位模块，不再因为 DB/store 混用误 404。
+- [x] OpenAPI 文档能展示核心路由。
+
+## 非目标
+- [ ] 真实 LLM 调用。
+- [ ] 真实 Celery/Redis 异步执行。
+- [ ] 真实 JMeter CLI 执行。
+- [ ] 前端视觉重构。
+
+## 已执行验证
+- `python -m compileall backend\aitest_platform`
+- `cd backend; python -m pytest`
+- OpenAPI `/api/v2` path 数量检查：105。
+- 主线程手工 smoke：
+  - project -> lib -> document -> parse -> extract -> confirm -> points -> cases -> execution -> report -> backup
+  - project -> api-test-lib -> auto-project -> perf-plan
+  - requirement brain analyze、traceability refresh、split、DB soft delete
+
+## 第二轮验收
+- [x] 接口测试库、接口、接口用例、环境、场景、计划任务、执行结果写入 SQLite。
+- [x] 自动化项目、框架文件、自动化用例文件、自动化执行结果写入 SQLite。
+- [x] 性能方案、脚本占位、执行结果、性能报告写入 SQLite。
+- [x] ReportTemplate、LlmConfig、PromptTemplate 使用 SQLite CRUD。
+- [x] LLM 配置响应不回显真实 `api_key`。
+- [x] `GET /api/v2/system/operation-logs` 可读取 SQLite 操作日志。
+- [x] `GET /api/v2/search` 可搜索 SQLite 主链和第二轮资产。
+- [x] Round 2 contract tests 通过。
+
+## Round 2 Contract Test Evidence
+- Added `backend/tests/test_round2_persistence.py`.
+- Covers API testing, automation, performance, configuration, secret redaction, operation logs, and search contracts.
+- Command to verify: `cd backend; python -m pytest`.
+- 2026-05-28 interim result: `8 passed, 3 failed, 2 warnings`; this exposed DB/store mixed-read gaps.
+- 2026-05-28 final result: `11 passed, 2 warnings`.
+- Main-thread smoke additionally covered import-documents, schedule toggle, candidate screen, git pull/push skip responses, perf quick tests, and search result types.
+
+## 第三轮验收
+- [x] LLM client 支持 OpenAI-compatible `/v1/models` 和 `/v1/chat/completions`。
+- [x] `POST /api/v2/llm-configs/{configId}/test` 在 disabled mode 不触网，在 enabled mode 可调用 client。
+- [x] `POST /api/v2/chat` 在 disabled mode 安全降级，在 enabled mode 可返回模型回复。
+- [x] LLM usage 统计会记录 test/chat 调用。
+- [x] API key 不出现在响应、日志、测试输出或备份数据中。
+- [x] Round 3 contract/security tests 通过。
+
+## Round 3 Contract Test Evidence
+- Added `backend/tests/test_round3_llm_integration.py`.
+- Covers disabled no-network mode, enabled mock-client mode, chat fallback, mock model reply, usage growth, and secret redaction.
+- Uses only fake test secret `sk-round3-test-secret`; no real API key is written to tests or docs.
+- Command to verify: `cd backend; python -m pytest`.
+- 2026-05-28 final result: `16 passed, 2 warnings`.
+- Main-thread smoke additionally verified disabled `llm-config test` + `chat` with fake secret and local `/v1` base URL.
+
+## 第四轮验收
+- [x] `extract-items` enabled mode 可消费 LLM JSON 并写入 RequirementItem。
+- [x] `generate-test-points` enabled mode 可消费 LLM JSON 并写入 TestPoint。
+- [x] `generate-test-cases` enabled mode 可消费 LLM JSON 并写入 TestCase。
+- [x] disabled/missing config/provider error/bad JSON 时安全降级，不中断主链。
+- [x] LLM usage 记录 requirement_extract、test_point_generation、test_case_generation。
+- [x] API key 不出现在响应、日志、GenerationJob payload 或测试输出中。
+- [x] Round 4 contract/security tests 通过。
+
+## Round 4 Contract Test Evidence
+- Added `backend/tests/test_round4_main_chain_llm.py`.
+- Covers disabled no-network placeholder persistence for `extract-items`, `generate-test-points`, and `generate-test-cases`.
+- Covers enabled mock LLM JSON contracts for RequirementItem, TestPoint, and TestCase persistence, provider bad JSON/error fallback, usage module growth, and secret redaction.
+- Uses only fake test secret `sk-round4-test-secret`; no real API key is written to tests or docs.
+- Command to verify: `cd backend; python -m pytest`.
+- 2026-05-28 interim result: `20 passed, 5 failed, 2 warnings`; this exposed missing main-chain LLM consumption and request secret echo.
+- 2026-05-28 final result: `25 passed, 2 warnings`.
+- Main-thread smoke additionally verified disabled fallback chain and OpenAPI path count 106.
+
+## 第五轮验收
+- [x] `apis/debug` 可通过 httpx 发起真实请求并返回响应快照。
+- [x] API case execute 可基于 environment/base URL 真实执行并写入 ApiExecution。
+- [x] batch executions 复用真实执行器并返回逐条结果。
+- [x] status_code 断言失败会返回 failed 执行记录，而不是 HTTP 500。
+- [x] timeout/request error 会返回 error 执行记录，并记录脱敏错误。
+- [x] 没有 environment/base URL 时保留 placeholder fallback。
+- [x] 请求、响应、错误、日志和 execution payload 不泄露 Authorization、api_key、token、cookie。
+- [x] Round 5 contract/security tests 通过。
+
+## Round 5 Contract Test Evidence
+- Added `backend/tests/test_round5_api_runner.py`.
+- Covers debug real runner, single case execution, failed assertion, timeout/request error, batch execution, secret redaction, and placeholder fallback.
+- Command to verify: `cd backend; python -m pytest tests/test_round5_api_runner.py -q`.
+- 2026-05-28 final Round 5 result: 8 tests passed.
+- 2026-05-28 full backend result: `33 passed, 2 warnings`.
+- Main-thread smoke additionally verified a real local HTTP request without monkeypatch.
+
+## 第六轮验收
+- [x] 自动化项目可执行生成的本地 case files，并落库 AutoExecution。
+- [x] 自动化执行失败/超时返回 failed/error，不导致 HTTP 500。
+- [x] 性能计划可通过 JMeter runner 执行或在缺工具时返回结构化 error。
+- [x] API scenario 可按节点顺序执行关联 API case。
+- [x] API scenario 支持基础变量注入与 JSON 字段提取。
+- [x] 执行日志、artifacts、错误信息不泄露 token/cookie/secret/password。
+- [x] 缺少可执行资产时保留 placeholder fallback。
+- [x] Round 6 contract/security tests 通过。
+
+## Round 6 Contract Test Evidence
+- Added `backend/tests/test_round6_execution_runners.py`.
+- Covers auto runner success/fallback/failure/timeout, perf runner JMeter success/missing tool/error, API scenario ordered execution with extraction/injection, stop-on-failure, and secret redaction.
+- Command to verify: `cd backend; python -m pytest tests/test_round6_execution_runners.py -q`.
+- 2026-05-29 final Round 6 result: 9 tests passed.
+- 2026-05-29 full backend result: `42 passed, 2 warnings`.
+- OpenAPI `/api/v2` path count: 105.
+
+## 第七轮验收
+- [x] OpenAPI JSON 可导入为 ApiEndpoint，并可按需生成 ApiTestCase。
+- [x] Postman Collection JSON 可递归导入嵌套 item。
+- [x] curl 命令可解析 method、path、query、headers、body。
+- [x] 导入链路不泄露 Authorization、api_key、token、cookie、secret、password。
+- [x] API schedule 可手动 run，执行结果落库并更新 `last_run_at`、`last_result`。
+- [x] `run-due` 只执行 enabled 且 due 的 schedule，并支持 `lib_id` 缩小扫描范围。
+- [x] Round 7 contract/security tests 通过。
+
+## Round 7 Contract Test Evidence
+- Added `backend/tests/test_round7_import_schedule.py`.
+- Covers OpenAPI JSON import with case generation, Postman nested collection import, curl import, schedule manual run, run-due filtering, and secret redaction.
+- Command to verify: `cd backend; python -m pytest tests/test_round7_import_schedule.py -q`.
+- 2026-05-29 final Round 7 result: 5 tests passed.
+- 2026-05-29 full backend result: `47 passed, 2 warnings`.
+- OpenAPI `/api/v2` path count: 107.
+
+## 第八轮验收
+- [x] 自动化 runner 可将 runner log 持久化为 artifact。
+- [x] 自动化 runner 可采集截图、trace、Junit/XML、HTML、log 等 evidence 元数据。
+- [x] 性能 runner 可持久化 JMX、JTL、stdout、stderr。
+- [x] 性能 runner 可在 mock JMeter 下生成并返回 HTML report evidence。
+- [x] artifacts、error_details、logs 不泄露 fake secret。
+- [x] Round 8 contract/security tests 通过。
+
+## Round 8 Contract Test Evidence
+- Added `backend/tests/test_round8_artifacts.py`.
+- Covers auto runner artifact persistence, JMeter artifact persistence, optional HTML report, error-path redaction, and path containment under `artifact_root`.
+- Command to verify: `cd backend; python -m pytest tests/test_round8_artifacts.py -q`.
+- 2026-05-29 final Round 8 result: 4 tests passed.
+- 2026-05-29 full backend result: `51 passed, 2 warnings`.
+- OpenAPI `/api/v2` path count: 107.
+
+## 第九轮验收
+- [x] `/system/restore` 支持 dry-run/preview，不写库。
+- [x] `/system/restore` 支持安全 merge restore。
+- [x] overwrite 模式没有 `confirm_text="RESTORE"` 时会拒绝执行。
+- [x] restore 响应和读回列表不泄露 fake secret。
+- [x] `/system/schema-status` 返回结构化 schema 自检结果，不暴露完整本机路径。
+- [x] Round 9 contract/security tests 通过。
+
+## Round 9 Contract Test Evidence
+- Added `backend/tests/test_round9_restore_schema.py`.
+- Covers schema-status, restore dry-run, restore merge, overwrite guard, and secret redaction.
+- Command to verify: `cd backend; python -m pytest tests/test_round9_restore_schema.py -q`.
+- 2026-05-29 final Round 9 result: 5 tests passed.
+- 2026-05-29 full backend result: `56 passed, 2 warnings`.
+- OpenAPI `/api/v2` path count: 108.
+
+## 第十轮验收
+- [x] `/reports/comprehensive` 使用统一 Reporting Aggregator 聚合报告事实数据。
+- [x] 报告记录包含稳定 `scope_snapshot`、`data_snapshot`、`source_refs_json`。
+- [x] 综合报告可追溯到需求项、用例、执行、缺陷、接口、自动化和性能结果。
+- [x] `/perf-plans/{planId}/generate-report` 基于 PerfPlan 和最新 PerfResult 生成快照。
+- [x] `/reports/{reportId}/download` 支持 Markdown、HTML、JSON 三种输出格式。
+- [x] `/reports/lightweight-conclusions` 复用同一聚合上下文，并支持 `save=true` 保存报告记录。
+- [x] 报告响应和快照不泄露 fake secret。
+- [x] Round 10 contract/security tests 通过。
+
+## Round 10 Contract Test Evidence
+- Added `backend/tests/test_round10_reporting.py`.
+- Covers comprehensive report aggregation, report download formats, lightweight conclusion save path, performance report metrics, and secret redaction.
+- Command to verify: `cd backend; python -m pytest tests/test_round10_reporting.py -q`.
+- 2026-05-29 final Round 10 result: 7 tests passed.
+- 2026-05-29 full backend result: `63 passed, 2 warnings`.
+- OpenAPI `/api/v2` path count: 108.
+
+## 第十一轮验收
+- [x] 测试用例支持 Markdown / CSV / JSON 导出。
+- [x] 测试用例导出支持项目、需求项、选中 ID、类型过滤。
+- [x] 缺陷列表支持 Markdown / CSV / JSON 导出。
+- [x] 缺陷导出支持项目和状态过滤。
+- [x] 自动化项目下载返回可解码 ZIP 包，并保留旧 `download_url` 兼容字段。
+- [x] 性能计划支持 JMX 脚本下载。
+- [x] 性能结果支持 JSON 下载和原始数据路径可用性说明。
+- [x] 导出响应和导出内容不泄露 fake secret。
+- [x] Round 11 contract/security tests 通过。
+
+## Round 11 Contract Test Evidence
+- Added `backend/tests/test_round11_exports.py`.
+- Covers test case export, defect export, automation ZIP download, performance script/result download, and secret redaction.
+- Command to verify: `cd backend; python -m pytest tests/test_round11_exports.py -q`.
+- 2026-05-29 final Round 11 result: 7 tests passed.
+- 2026-05-29 full backend result: `71 passed, 2 warnings`.
+- OpenAPI `/api/v2` path count: 112.
+
+## 第十二轮验收
+- [x] `/system/recycle-bin` 可列出数据库软删除对象。
+- [x] `/system/recycle-bin/{id}/restore` 可恢复 `type:id` 形式的数据库回收站对象。
+- [x] 回收站保留旧内存 store 兼容。
+- [x] 用户偏好可持久化到 SQLite。
+- [x] 最近活动可持久化到 SQLite，并支持项目过滤。
+- [x] 系统状态响应不泄露 fake secret。
+- [x] Round 12 contract/security tests 通过。
+
+## Round 12 Contract Test Evidence
+- Added `backend/tests/test_round12_system_state.py`.
+- Covers DB recycle bin list/restore, user preferences, recent activities, and secret redaction.
+- Command to verify: `cd backend; python -m pytest tests/test_round12_system_state.py -q`.
+- 2026-05-29 final Round 12 result: 3 tests passed.
+- 2026-05-29 full backend result: `74 passed, 2 warnings`.
+- OpenAPI `/api/v2` path count: 115.
+
+## 第十三轮验收
+- [x] 前端可通过统一 API client 访问 `/api/v2` 并解包统一响应。
+- [x] 后端本地 CORS 支持 `127.0.0.1:3000` / `localhost:3000`。
+- [x] 统一响应不会复用旧 `Content-Length`，真实 Uvicorn 浏览器请求不再报错。
+- [x] Dashboard 可读取默认项目与项目大盘数据，后端不可用时保留演示降级。
+- [x] Reports 可读取后端报告、生成综合报告、下载报告、生成/归档轻量结论。
+- [x] Settings 可读取 schema 状态、保存运行参数、创建系统备份快照。
+- [x] 浏览器验证三页主流程无 console error。
+
+## Round 13 Contract Test Evidence
+- Added `backend/tests/test_round13_frontend_integration.py`.
+- Covers local frontend CORS, unified response `Content-Length`, Dashboard/Settings frontend-facing contracts.
+- Command to verify: `cd backend; python -m pytest tests/test_round13_frontend_integration.py -q`.
+- 2026-05-29 final Round 13 result: 3 tests passed.
+- 2026-05-29 frontend result: `npm run build` passed, with only Vite chunk size warning.
+- 2026-05-29 full backend result: all tests passed with 2 FastAPI dependency warnings.
+- Browser evidence: Dashboard backend sync, Reports generate/download, Settings save/backup all passed without console errors.
+
+## 第十四轮验收
+- [x] `GET /api/v2/requirement-libs/{libId}/documents` 可为前端返回需求库文档列表。
+- [x] `GET /api/v2/requirement-libs/{libId}/requirement-items` 可为前端返回需求库需求项列表。
+- [x] `GET /api/v2/projects/{projectId}/test-cases` 支持项目、需求库、需求项过滤。
+- [x] Requirements 可读取后端需求库，并触发新建需求库、导入需求文档、解析/提取需求项、生成测试点。
+- [x] TestCases 可读取后端测试用例，并触发批量生成和 CSV / Markdown 导出。
+- [x] 浏览器验证需求库和测试用例库主流程无 console error。
+
+## Round 14 Contract Test Evidence
+- Added `backend/tests/test_round14_requirement_testcase_integration.py`.
+- Covers requirement lib frontend-facing document/item lists, project-level test case list filtering, and export payload integration.
+- Command to verify: `python -m pytest backend/tests/test_round14_requirement_testcase_integration.py -q`.
+- 2026-05-29 final Round 14 result: 2 tests passed.
+- 2026-05-29 frontend result: `npm run build` passed, with only Vite chunk size warning.
+- 2026-05-29 full backend result: all tests passed with 2 FastAPI dependency warnings.
+- OpenAPI `/api/v2` path count: 118.
+- Browser evidence: Requirements create/import and TestCases generate/export passed without console errors.
+
+## 第十五轮验收
+- [x] `GET /api/v2/projects/{projectId}/test-rounds` 可返回项目级测试轮次列表，支持分页和状态过滤。
+- [x] 批量执行可创建测试轮次并写入执行记录。
+- [x] 失败执行记录可生成缺陷并被缺陷列表读回。
+- [x] 执行统计和执行历史可按项目读取。
+- [x] Execution 页面可读取后端测试用例、轮次、执行统计、执行历史和缺陷列表。
+- [x] Execution 页面可触发批量执行、重跑失败和缺陷 CSV 导出。
+- [x] 浏览器验证 Execution 主流程无 console error。
+
+## Round 15 Contract Test Evidence
+- Added `backend/tests/test_round15_execution_integration.py`.
+- Covers project test-round list, batch execution, test round counters, execution history, statistics, defect generation, and defect readback.
+- Command to verify: `cd backend; python -m pytest tests/test_round15_execution_integration.py -q`.
+- 2026-05-29 final Round 15 result: 1 test passed.
+- 2026-05-29 frontend result: `npm run build` passed, with only Vite chunk size warning.
+- 2026-05-29 full backend result: all tests passed with 2 FastAPI dependency warnings.
+- OpenAPI `/api/v2` path count: 119.
+- Browser evidence: Execution batch execution, rerun failed, defect history, and CSV export passed without console errors.
+
+## 第十六轮验收
+- [x] ApiTesting 页面可读取后端接口库并触发 Swagger/OpenAPI 导入。
+- [x] ApiTesting 工作台可调用 `/apis/debug` 并展示后端响应快照。
+- [x] ApiTesting 可调用 `/api-test-cases/batch-executions` 批量执行接口用例。
+- [x] LlmConfig 页面可读取、保存、新增、设默认和停用后端 LLM 配置。
+- [x] LlmConfig 连接测试调用 `/llm-configs/{id}/test`，且不保存或回显明文 API Key。
+- [x] Automation 页面可读取/创建后端自动化项目，并触发框架生成、用例生成、执行结果。
+- [x] Performance 页面可读取/创建后端性能方案，并触发计划生成、脚本生成、执行和报告生成。
+- [x] 浏览器验证 ApiTesting / LlmConfig / Automation / Performance 主链路无 console error。
+
+## Round 16 Evidence
+- `npm run build`: passed, with only Vite chunk size warning.
+- `cd backend; python -m pytest -q`: passed, 80 tests, with 2 FastAPI dependency warnings.
+- Browser screenshots:
+  - `docs/orchestration/artifacts/round16-api-list.png`
+  - `docs/orchestration/artifacts/round16-api-workbench.png`
+  - `docs/orchestration/artifacts/round16-llm-list.png`
+  - `docs/orchestration/artifacts/round16-llm-diagnostic.png`
+  - `docs/orchestration/artifacts/round16-automation-list.png`
+  - `docs/orchestration/artifacts/round16-automation-result.png`
+  - `docs/orchestration/artifacts/round16-performance-list.png`
+  - `docs/orchestration/artifacts/round16-performance-report.png`

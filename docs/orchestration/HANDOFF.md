@@ -1,0 +1,299 @@
+# Worker 交接契约
+
+## 文档依据
+- `00-AI测试平台需求文档.md`
+- `02-技术实现方案.md`
+
+## 后端目录约定
+- 后端代码放在 `backend/`
+- Python 包名建议：`aitest_platform`
+- API 前缀：`/api/v2`
+- 默认数据库：`backend/data/aitest.sqlite3`
+
+## 统一响应格式
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {},
+  "trace_id": "uuid"
+}
+```
+
+## 第一轮实体边界
+- Project
+- RequirementLib
+- RequirementDocument
+- RequirementItem
+- TestPoint
+- TestCase
+- GenerationJob
+- TestRound
+- Execution
+- Defect
+- ApiTestLib / ApiEndpoint / ApiEnvironment / ApiScenario
+- AutoProject
+- PerfPlan
+- Report / ReportTemplate
+- LlmConfig / PromptTemplate
+- OperationLog
+
+## 第一轮接口边界
+- 必须覆盖文档技术方案中的核心 `/api/v2` 清单的可运行子集。
+- 暂不要求真实 LLM、真实浏览器执行、真实 JMeter 执行。
+- 生成、执行、导出类接口可返回结构化模拟结果，但必须写入或读取统一数据层。
+
+## 文件所有权
+- backend_data_engineer：`backend/aitest_platform/db/**`、`backend/aitest_platform/models.py`、`backend/aitest_platform/repositories.py`、`backend/aitest_platform/seed.py`
+- backend_api_engineer：`backend/aitest_platform/main.py`、`backend/aitest_platform/schemas.py`、`backend/aitest_platform/api/**`
+- devops_qa_engineer：`backend/pyproject.toml`、`backend/README.md`、`backend/.env.example`、`backend/tests/**`
+
+## 协作规则
+- 你不是唯一 worker，不要回滚他人改动。
+- 如需改动他人文件，先在最终报告中说明原因和风险。
+- 每个 worker 必须给出：改动文件、测试命令、完成度评分、风险。
+
+## 第二轮交接
+- 数据层优先补齐 P1 模型与 repository，API 层可以在数据层模型存在后接入。
+- API 层不得继续为第二轮范围内资源写入内存 store。
+- QA 层不得修改实现代码；测试可以先按契约写，若实现未到位应明确失败点。
+- 所有新接口仍用现有 `WritePayload` 宽松输入即可，除非局部需要明确 schema。
+- 占位执行必须是确定性的、结构化的、可查询的，不允许只返回临时字符串。
+- Secrets 规则：`api_key`、token、cookie、git_auth 等字段不得原样返回或写入日志。
+
+## 第三轮交接
+- 用户提供了本地 OpenAI-compatible `/v1` 服务地址和 API key；API key 不得进入任何文件。
+- 实现只读取环境变量或运行时配置：
+  - `AITEST_LLM_BASE_URL`
+  - `AITEST_LLM_API_KEY`
+  - `AITEST_ENABLE_REAL_LLM`
+- 默认 `AITEST_ENABLE_REAL_LLM=false`，避免测试和本地启动误触真实调用。
+- QA 使用 mock/monkeypatch 覆盖 enabled path，不使用用户真实 key。
+
+## 第四轮交接
+- 主链 LLM 生成只接 `extract-items`、`generate-test-points`、`generate-test-cases`。
+- 复用第三轮 LLM client，测试继续使用 monkeypatch/mock，不使用用户真实 key。
+- 生成失败必须回落到现有 repository placeholder 方法。
+- 不要把 prompt 原文中的敏感上下文写入日志；`GenerationJob.input_payload` 只保留类型、id、mode、fallback reason 等摘要。
+
+## 第四轮完成状态
+- 主链三条生成接口已支持 enabled mock LLM JSON，结果会结构化写入 SQLite。
+- disabled、missing config、provider error、bad JSON 会降级到 repository placeholder。
+- `GenerationJob` 会记录 source/fallback/usage 摘要；`LlmUsage` 会记录 requirement_extract、test_point_generation、test_case_generation。
+- OpenAI-compatible real key 仍只允许通过环境变量提供，禁止写入文件、日志、测试或文档。
+
+## 第五轮候选范围
+- 真实 API 调试执行器：导入 OpenAPI/curl 后可真实发起请求、断言响应、落库执行证据。
+- 真实 Playwright 自动化执行器：从自动化项目/用例文件触发浏览器执行、收集截图/trace/日志。
+- 真实 JMeter 或轻量性能执行器：生成脚本后可运行、解析结果、生成性能报告。
+- 正式任务调度与迁移：Celery/Redis 或本地队列、Alembic、密钥管理。
+
+## 第五轮完成状态
+- `/apis/debug` 已支持真实 httpx 请求、响应快照、断言结果和错误降级。
+- `/api-test-cases/{caseId}/execute` 已支持 environment/base URL 真实执行并写入 `ApiExecution`。
+- `/api-test-cases/batch-executions` 已复用同一 runner。
+- 没有 environment/base URL 时保留 Round 2 placeholder fallback。
+- Round 5 已补充 secret redaction 测试和本地 HTTP smoke。
+
+## 第六轮候选范围
+- Playwright 自动化执行器：从 AutoProject/AutoCaseFile 触发本地 Playwright，保存 stdout、失败截图和 artifacts。
+- API 场景执行增强：跨步骤变量提取、数据映射、依赖顺序执行。
+- JMeter 性能执行器：运行 JMX、解析 JTL、落库 PerfResult。
+- 后端工程化：Alembic 迁移、正式密钥管理、本地队列或 Celery/Redis。
+
+## 第六轮交接
+- 自动化、性能、API 场景 worker 都可能改 `router.py`，必须只改自己负责的路由区块，不回滚他人改动。
+- runner 服务放在 `backend/aitest_platform/services/`，避免把复杂执行逻辑塞进 router。
+- 所有 runner 都必须限制 timeout、输出长度，并对 secret 做脱敏。
+- 默认保持旧 placeholder 兼容，只有存在可执行资产或请求明确真实执行时进入真实 runner。
+
+## 第六轮完成状态
+- 自动化 runner 已可执行 persisted Python/pytest case files，并将 summary、logs、artifacts 写入 `AutoExecution`。
+- JMeter runner 已可运行 JMX、解析基础 JTL 摘要并写入 `PerfResult`；缺工具/超时/执行失败走结构化 error。
+- API scenario runner 已可按节点顺序执行 case，支持基础变量注入、`$.body.xxx` 提取和 `stop_on_failure`。
+- `/api/v2/search` 已修复为 SQLite 查询侧过滤，避免默认持久库历史数据污染搜索结果。
+- Round 6 主线程验收：`42 passed, 2 warnings`，OpenAPI `/api/v2` path 数 105。
+
+## 第七轮候选范围
+- OpenAPI/Postman/curl 导入解析：把真实接口文档导入为 `ApiEndpoint`/`ApiTestCase`，保持无新增依赖优先。
+- 本地调度闭环：在不引入 Celery/Redis 的前提下，先实现 SQLite-backed 手动/一次性/轮询式任务执行记录。
+- 执行证据增强：自动化失败截图/trace、JMeter HTML report、API scenario 更完整 artifacts。
+- 密钥管理设计：继续禁止真实 key 写入文档/测试/日志；如需本地加密或凭证库，应单独决策。
+
+## 第七轮交接
+- 导入 worker 只改 import 相关路由：`/api-test-libs/{libId}/import-documents` 和 `/api-test-libs/{libId}/apis/import`；复杂解析放到 `services/api_importer.py`。
+- 调度 worker 只改 schedules 相关路由：`/api-schedules/{scheduleId}/run`、`/api-schedules/run-due` 和必要 helper；执行逻辑放到 `services/schedule_runner.py`。
+- QA worker 尽量只新增 `backend/tests/test_round7_import_schedule.py`，不要修改实现代码。
+- 三个 worker 都要继续遵守 secret redaction；测试只能使用 fake secret。
+
+## 第七轮完成状态
+- `services/api_importer.py` 已支持 OpenAPI/Swagger JSON、Postman Collection JSON、curl 和旧手工 payload。
+- `/api-test-libs/{libId}/import-documents` 与 `/api-test-libs/{libId}/apis/import` 已接入解析器，并可按 `generate_cases/create_cases/create_test_cases` 生成 ApiTestCase。
+- `services/schedule_runner.py` 已支持 schedule 手动 run 与 `run-due` due-scan；case/scenario 执行结果落库并更新 `last_run_at`、`last_result`。
+- 主线程已修复 Round7 集成测试发现的 postman 别名、collection 字段、Postman name、run-due lib 过滤和响应过宽问题。
+- Round 7 主线程验收：`47 passed, 2 warnings`，OpenAPI `/api/v2` path 数 107。
+
+## 第八轮候选范围
+- 执行证据增强：自动化 runner 采集并返回截图、trace、pytest/junit 等 artifacts；JMeter runner 可选生成 HTML report。
+- 工程化增强：无新依赖版本的 schema/migration 状态记录；如要正式 Alembic，需要单独确认新增依赖。
+- 密钥管理增强：本地 secret reference registry 或加密存储设计；继续禁止真实 key 写入文档/测试/日志。
+
+## 第八轮交接
+- 自动化 artifacts worker 只改 `services/auto_runner.py` 和必要的自动化执行兼容字段，不碰性能 runner。
+- 性能 artifacts worker 只改 `services/perf_runner.py` 和必要 README，不碰自动化 runner。
+- QA worker 只新增 `backend/tests/test_round8_artifacts.py`，用 fake secret 验证脱敏。
+- artifacts 默认落在 `backend/data/artifacts/`，测试可用临时路径或 monkeypatch，避免污染真实工作区。
+
+## 第八轮完成状态
+- 自动化 runner 已支持 `artifact_root`，默认落盘到 `backend/data/artifacts/auto/<run_id>/`。
+- 自动化 evidence 包含 `kind/path/relative_path/size_bytes/source`，支持 screenshot、trace、video、junit/xml、html、log。
+- 性能 runner 已支持 `artifact_root`，默认落盘到 `backend/data/artifacts/perf/<run_id>/`。
+- 性能 evidence 包含 jmx、jtl、stdout、stderr、html_report，`raw_data_path` 指向持久化 JTL。
+- Round 8 主线程验收：`51 passed, 2 warnings`，OpenAPI `/api/v2` path 数 107。
+
+## 第九轮候选范围
+- 系统恢复：把 `/system/restore` 从 dry-run 推进为安全 merge restore，支持版本检查、预览、确认字段、防止误覆盖。
+- schema/migration 状态：不引入 Alembic 的前提下提供 schema version/status endpoint；如需正式 Alembic 需单独确认依赖。
+- 密钥引用 registry：继续不存真实 key，补充 hash/ref 管理和响应脱敏一致性。
+
+## 第九轮交接
+- restore worker 只改 `services/restore_service.py`、`schemas.py` 的 restore payload 兼容和 `/system/restore` 路由。
+- schema worker 只改 `services/schema_status.py` 和 `/system/schema-status` 路由。
+- QA worker 只新增 `backend/tests/test_round9_restore_schema.py`。
+- 禁止在测试或文档中写真实 key；只能使用 fake secret 并验证脱敏。
+- 不允许在实现或测试中执行清空真实数据库的操作；overwrite 仅通过临时测试库/受控 TestClient 行为验证确认门槛。
+
+## 第九轮完成状态
+- `/system/restore` 已支持 dry-run/preview、安全 merge restore、overwrite 确认门槛和脱敏 summary。
+- `services/restore_service.py` 可恢复 Round9 范围内的项目、API 测试、自动化、性能和配置类资产。
+- `/system/schema-status` 已提供 SQLAlchemy metadata 与当前 DB introspection 对比结果。
+- Round 9 主线程验收：`56 passed, 2 warnings`，OpenAPI `/api/v2` path 数 108。
+
+## 剩余需决策项
+- 正式 Alembic migration：需要新增依赖/迁移目录与版本策略，建议单独确认后做。
+- Celery/Redis：会改变运行形态和依赖，需要确认本地单机还是服务化部署。
+- 真实密钥加密存储：需要确认本地密钥来源、加密方案和恢复策略。
+- 完整对象存储：MinIO/S3 需要部署配置，当前 artifacts 先落本地目录。
+
+## 第十轮候选范围
+- 报告聚合层：实现文档 4.20 要求的统一 Reporting Aggregator，不再由报告端点临时拼接占位文案。
+- 报告快照层：生成报告时冻结 `scope_snapshot`、`data_snapshot`、`source_refs_json`，避免历史报告随实时数据漂移。
+- 报告输出层：先支持 Markdown / HTML / JSON，不新增 PDF/Word 依赖。
+- 轻量结论：复用正式报告聚合上下文，保证轻量结论与正式报告口径一致。
+
+## 第十轮交接
+- reporting worker 可新增 `services/reporting.py`，并小范围修改报告相关路由：`/reports/comprehensive`、`/perf-plans/{planId}/generate-report`、`/reports/{reportId}/download`、`/reports/lightweight-conclusions`。
+- QA worker 只新增 `backend/tests/test_round10_reporting.py`，不修改实现代码。
+- 不允许写入真实密钥；测试只能使用 fake secret，并验证脱敏。
+- 不引入新生产依赖；PDF/Word、对象存储、Celery/Redis 继续作为决策项保留。
+
+## 第十轮完成状态
+- `services/reporting.py` 已实现统一 Reporting Aggregator。
+- `/reports/comprehensive` 已生成包含 `scope_snapshot`、`data_snapshot`、`source_refs_json` 的综合报告快照。
+- `/perf-plans/{planId}/generate-report` 已基于最新 PerfResult 生成性能报告快照。
+- `/reports/{reportId}/download` 已支持 Markdown / HTML / JSON 输出。
+- `/reports/lightweight-conclusions` 已复用聚合上下文，并支持 `save=true` 保存报告。
+- Round 10 主线程验收：`63 passed, 2 warnings`，OpenAPI `/api/v2` path 数 108。
+
+## 第十一轮候选范围
+- 用例导出：Markdown / CSV / JSON，支持项目、需求项、选中 IDs、类型过滤。
+- 缺陷导出：Markdown / CSV / JSON，支持项目和状态过滤。
+- 自动化项目下载：将 framework files 和 case files 打包为 ZIP，返回 base64 内容和文件清单。
+- 性能下载：下载 JMX 脚本和性能结果摘要/原始数据引用。
+
+## 第十一轮交接
+- export worker 可新增 `services/exporting.py`，并小范围修改导出/下载相关路由。
+- QA worker 只新增 `backend/tests/test_round11_exports.py`，不修改实现代码。
+- 不允许写入真实密钥；测试只能使用 fake secret 并验证导出内容脱敏。
+- 不引入新依赖；`.xlsx`、PDF、Word、对象存储继续作为决策项保留。
+
+## 第十一轮完成状态
+- `services/exporting.py` 已统一实现 Markdown / CSV / JSON 导出、ZIP 打包和脱敏。
+- `/test-cases/export` 已支持项目、需求项、用例 IDs、用例类型过滤。
+- `/defects/export` 已支持项目和状态过滤。
+- `/auto-projects/{autoProjectId}/download` 已返回可解码 ZIP，并保留 `download_url` 兼容字段。
+- `/perf-plans/{planId}/download-script` 已支持 JMX 下载。
+- `/perf-plans/{planId}/results/{resultId}/download` 已支持性能结果 JSON 下载和原始路径可用性说明。
+- Round 11 主线程验收：`71 passed, 2 warnings`，OpenAPI `/api/v2` path 数 112。
+
+## 第十二轮候选范围
+- DB 回收站：列出和恢复数据库软删除对象，替代纯内存占位。
+- 用户偏好：保存继续上次位置等本地偏好。
+- 最近活动：保存最近访问的项目、需求、用例、报告等入口。
+
+## 第十二轮完成状态
+- `services/system_state.py` 已实现 DB 回收站、用户偏好、最近活动和脱敏。
+- `/system/recycle-bin` 已合并数据库软删除对象与旧内存 store 对象。
+- `/system/recycle-bin/{id}/restore` 已支持 `type:id` 数据库对象恢复。
+- `/system/preferences` 与 `/system/preferences/{prefKey}` 已使用 `round2_resource` 持久化用户偏好。
+- `/system/recent-activities` 已使用 `round2_resource` 持久化最近活动。
+- `run-due` compact response 已收窄字段，避免历史测试被无关数字污染。
+- Round 12 主线程验收：`74 passed, 2 warnings`，OpenAPI `/api/v2` path 数 115。
+
+## 第十三轮候选范围
+- 前端第一批集成：Dashboard、Reports、SettingsPage 先替换高价值 mock 链路。
+- 后端浏览器联通：本地 CORS、统一响应 headers、真实 Uvicorn 请求验证。
+- 交互稳定性：有真实后端动作的按钮必须能在浏览器中稳定点击。
+
+## 第十三轮完成状态
+- `src/lib/api.js` 已新增前端 API client，默认 `http://127.0.0.1:8000/api/v2`，可用 `VITE_API_BASE_URL` 覆盖。
+- `backend/aitest_platform/main.py` 已增加本地 CORS，并修复旧 `Content-Length` 复用。
+- `src/pages/Dashboard.jsx` 已接默认项目、dashboard、recent activities，并保留离线降级。
+- `src/pages/Reports.jsx` 已接报告列表、综合报告生成、报告下载、轻量结论生成/归档。
+- `src/pages/SettingsPage.jsx` 已接 schema-status、runtime settings preference、system backup。
+- `src/components/TiltCard.jsx` 已避免交互控件触发 3D hover 更新；Settings 快照动作卡改为普通 `theme-card`，确保点击稳定。
+- Round 13 主线程验收：`npm run build` 通过；Round13 tests 通过；后端全量测试通过；浏览器验证 Dashboard/Reports/Settings 主流程通过。
+
+## 下一轮建议范围
+- Requirements：需求库/文档/需求项列表接后端 CRUD 与生成主链。
+- TestCases：测试用例列表、导出、详情接后端。
+- Execution：执行计划/执行记录/缺陷联动接后端。
+- ApiTesting：接口库、导入、debug、case execute、scenario run 接后端。
+- LlmConfig：配置列表与 test/chat 已有后端能力，可继续替换 mock。
+
+## 第十四轮候选范围
+- Requirements：需求库/文档/需求项列表接后端 CRUD 与生成主链。
+- TestCases：测试用例列表、生成、导出接后端。
+- 后端补齐前端缺失的列表型聚合接口，避免前端绕行多个资源端点。
+
+## 第十四轮完成状态
+- `backend/aitest_platform/api/router.py` 已新增需求库文档列表、需求库需求项列表、项目级测试用例列表接口。
+- `backend/tests/test_round14_requirement_testcase_integration.py` 已覆盖新增接口和导出集成契约。
+- `src/pages/Requirements.jsx` 已接入后端需求库加载、新建需求库、导入需求文档、解析提取需求项、生成测试点。
+- `src/pages/TestCases.jsx` 已接入后端测试用例加载、需求项用例生成、CSV / Markdown 导出。
+- Round 14 主线程验收：`npm run build` 通过；Round14 tests 通过；后端全量测试通过；浏览器验证 Requirements/TestCases 主流程通过；OpenAPI `/api/v2` path 数 118。
+
+## 下一轮建议范围
+- Execution：执行计划、执行记录、缺陷联动接后端，并验证手工/自动执行入口。
+- ApiTesting：接口库、导入、debug、case execute、scenario run 接后端。
+- LlmConfig：配置列表、启停、测试连接、chat smoke 接后端。
+- Automation / Performance：继续替换剩余 mock 操作和报告下载入口。
+
+## 第十五轮完成状态
+- `backend/aitest_platform/api/router.py` 已新增 `GET /api/v2/projects/{projectId}/test-rounds` 项目级轮次列表。
+- `backend/tests/test_round15_execution_integration.py` 已覆盖轮次、批量执行、执行统计、执行历史和失败生成缺陷。
+- `src/pages/Execution.jsx` 已接入后端测试用例、执行统计、执行历史、缺陷、轮次、批量执行、重跑失败和缺陷 CSV 导出。
+- Execution 项目选择已从固定第一个项目改为优先选择近期项目中有测试用例的项目，避免本地历史空项目导致真实链路不可用。
+- Round 15 主线程验收：`npm run build` 通过；Round15 tests 通过；后端全量测试通过；浏览器验证 Execution 主流程通过；OpenAPI `/api/v2` path 数 119。
+
+## 下一轮建议范围
+- ApiTesting：接口库、导入、debug、case execute、scenario run 接后端。
+- LlmConfig：配置列表、启停、测试连接、chat smoke 接后端。
+- Automation：自动化项目、框架生成、用例文件、执行结果与 artifacts 入口继续替换 mock。
+- Performance：性能计划、执行结果、报告下载入口继续替换 mock。
+- Execution 增强：正式项目选择器、真实 runner、缺陷关联/新建闭环、真实趋势图。
+
+## 第十六轮完成状态
+- `src/pages/ApiTesting.jsx` 已接入后端接口库扫描、Swagger/OpenAPI 导入、`/apis/debug` 和 `/api-test-cases/batch-executions`。
+- `src/pages/LlmConfig.jsx` 已接入 `/llm-configs` 列表、保存、设默认、停用、新增和 `/llm-configs/{id}/test`；前端只保存环境变量引用，不保存明文 Key。
+- `src/pages/Automation.jsx` 已接入自动化项目列表、项目创建、框架生成、用例生成、执行和 Git pull skip 入口。
+- `src/pages/Performance.jsx` 已接入性能方案列表、计划生成、脚本生成、执行、报告生成和结果下载入口。
+- `docs/orchestration/ROUND16_REPORT.md` 已记录实现、验证、截图和残余风险。
+- Round 16 主线程验收：`npm run build` 通过；`cd backend; python -m pytest -q` 通过，80 tests；浏览器验证四页主链路无 console error。
+
+## 下一轮建议范围
+- 补正式全局项目选择器，替代各页面自动扫描项目的临时策略。
+- 将 ApiTesting 的环境、场景编排、计划任务页面继续接后端运行链路。
+- 将 Automation 前端执行入口进一步区分占位 runner 与真实 Playwright runner，并展示 artifacts 下载。
+- 将 Performance 前端补齐 JMX 下载、结果 JSON/HTML 导出和真实 JMeter 执行模式开关。
+- 继续减少四页剩余静态演示区块，优先替换会影响用户决策的数据。

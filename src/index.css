@@ -1,0 +1,1521 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-family: 'Outfit', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    @apply transition-colors duration-300 ease-in-out;
+    font-family: 'Outfit', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+}
+
+/* ==========================================================================
+   10 种首页风格全局定义 (Theming & Materiality)
+   ========================================================================== */
+
+/* 1. 基础版 (basic) */
+[data-theme="basic"] {
+  --bg-app: #f8fafc;
+  --bg-card: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --border-color: #e2e8f0;
+  --shadow-style: 0 2px 10px -2px rgba(0, 0, 0, 0.04), 0 1px 4px -1px rgba(0, 0, 0, 0.02);
+  --accent-color: #4f46e5;
+  --accent-text: #ffffff;
+  --accent-grad: linear-gradient(135deg, #4f46e5 0%, #6366f1 100%);
+  --accent-glow: rgba(79, 70, 229, 0.15);
+}
+
+/* 2. 深色版 (dark) */
+[data-theme="dark"] {
+  --bg-app: #0b0f19;
+  --bg-card: #151d30;
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --border-color: #223049;
+  --shadow-style: 0 4px 20px -2px rgba(0, 0, 0, 0.25);
+  --accent-color: #2563eb;
+  --accent-text: #ffffff;
+  --accent-grad: linear-gradient(135deg, #2563eb 0%, #3b82f6 100%);
+  --accent-glow: rgba(37, 99, 235, 0.3);
+}
+
+/* 3. 编辑感亮色版 (editorial) */
+[data-theme="editorial"] {
+  --bg-app: #fcfbf9;
+  --bg-card: #ffffff;
+  --text-primary: #0c0a09;
+  --text-secondary: #44403c;
+  --border-color: #d6d3d1;
+  --shadow-style: none;
+  --accent-color: #0f172a;
+  --accent-text: #ffffff;
+  --accent-grad: linear-gradient(135deg, #0f172a 0%, #334155 100%);
+  --accent-glow: rgba(15, 23, 42, 0.1);
+  font-family: 'Georgia', serif;
+}
+
+/* 4. 玻璃未来版 (cyber-glass) */
+[data-theme="cyber-glass"] {
+  --bg-app: #040407;
+  --bg-card: rgba(15, 15, 25, 0.7);
+  --text-primary: #ffffff;
+  --text-secondary: #cbd5e1;
+  --border-color: rgba(255, 255, 255, 0.12);
+  --shadow-style: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  --accent-color: #06b6d4;
+  --accent-text: #082f49;
+  --accent-grad: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
+  --accent-glow: rgba(6, 182, 212, 0.4);
+  backdrop-filter: blur(12px);
+}
+
+/* 5. 新粗野工业版 (brutalist) */
+[data-theme="brutalist"] {
+  --bg-app: #f3f4f6;
+  --bg-card: #ffffff;
+  --text-primary: #000000;
+  --text-secondary: #1f2937;
+  --border-color: #000000;
+  --shadow-style: 4px 4px 0px #000000;
+  --accent-color: #000000;
+  --accent-text: #ffffff;
+  --accent-grad: none;
+  --accent-glow: none;
+}
+
+/* 6. IBM 企业版 (ibm) */
+[data-theme="ibm"] {
+  --bg-app: #f4f4f4;
+  --bg-card: #ffffff;
+  --text-primary: #000000;
+  --text-secondary: #353535;
+  --border-color: #cccccc;
+  --shadow-style: none;
+  --accent-color: #0f62fe;
+  --accent-text: #ffffff;
+  --accent-grad: none;
+  --accent-glow: rgba(15, 98, 254, 0.15);
+}
+
+/* 7. Airtable 工作流版 (airtable) */
+[data-theme="airtable"] {
+  --bg-app: #f9fafb;
+  --bg-card: #ffffff;
+  --text-primary: #030712;
+  --text-secondary: #374151;
+  --border-color: #d1d5db;
+  --shadow-style: 0 1px 3px rgba(0, 0, 0, 0.05);
+  --accent-color: #2563eb;
+  --accent-text: #ffffff;
+  --accent-grad: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  --accent-glow: rgba(37, 99, 235, 0.12);
+}
+
+/* 8. ClickHouse 黑黄版 (clickhouse) */
+[data-theme="clickhouse"] {
+  --bg-app: #000000;
+  --bg-card: #0d0d0d;
+  --text-primary: #ffffff;
+  --text-secondary: #d4d4d4;
+  --border-color: #3f3f46;
+  --shadow-style: 0 0 10px rgba(234, 179, 8, 0.15);
+  --accent-color: #eab308;
+  --accent-text: #000000;
+  --accent-grad: linear-gradient(135deg, #eab308 0%, #ca8a04 100%);
+  --accent-glow: rgba(234, 179, 8, 0.25);
+}
+
+/* 9. Notion 工作区版 (notion) */
+[data-theme="notion"] {
+  --bg-app: #ffffff;
+  --bg-card: #ffffff;
+  --text-primary: #191711;
+  --text-secondary: #4a4844;
+  --border-color: #d0cfae;
+  --shadow-style: none;
+  --accent-color: #37352f;
+  --accent-text: #ffffff;
+  --accent-grad: none;
+  --accent-glow: rgba(55, 53, 47, 0.08);
+}
+
+/* 10. Linear 精密版 (linear) */
+[data-theme="linear"] {
+  --bg-app: #0f0f11;
+  --bg-card: #151518;
+  --text-primary: #ffffff;
+  --text-secondary: #a1a1aa;
+  --border-color: rgba(255, 255, 255, 0.08);
+  --shadow-style: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --accent-color: #5c5cd6;
+  --accent-text: #ffffff;
+  --accent-grad: linear-gradient(135deg, #5c5cd6 0%, #7e7ee6 100%);
+  --accent-glow: rgba(92, 92, 214, 0.35);
+}
+
+/* ==========================================================================
+   自定义通用辅助样式与大厂质感核心类
+   ========================================================================== */
+
+/* 10套主题通用的卡片底层配置 */
+.theme-card {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  box-shadow: 
+    inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 1px 3px rgba(0, 0, 0, 0.02),
+    0 12px 30px -10px rgba(0, 0, 0, 0.05);
+  border-radius: 12px;
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+/* 全息信号噪声雷达遮罩 */
+.theme-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: 
+    radial-gradient(rgba(255, 255, 255, 0.15) 0.5px, transparent 0.5px),
+    linear-gradient(rgba(255, 255, 255, 0.03) 50%, transparent 50%);
+  background-size: 8px 8px, 100% 4px;
+  pointer-events: none;
+  opacity: 0.04;
+  z-index: 1;
+  transition: opacity 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 电网管道流光飞梭 */
+.theme-card::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 30%;
+  height: 1.5px;
+  background: linear-gradient(90deg, transparent, var(--accent-color), #ffffff, var(--accent-color), transparent);
+  animation: glide-pass 4.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.theme-card:hover::before {
+  animation: holo-noise-shift 0.45s steps(4) infinite;
+  opacity: 0.12;
+}
+
+.theme-card:hover::after {
+  opacity: 0.65;
+}
+
+/* 在浅色模式下弱化雷达噪声并关闭高频闪烁以保证文字对比度清晰度 */
+[data-theme="basic"] .theme-card::before,
+[data-theme="airtable"] .theme-card::before,
+[data-theme="notion"] .theme-card::before,
+[data-theme="ibm"] .theme-card::before,
+[data-theme="editorial"] .theme-card::before {
+  background-image: radial-gradient(rgba(0, 0, 0, 0.08) 0.5px, transparent 0.5px);
+  opacity: 0.015;
+}
+
+[data-theme="basic"] .theme-card:hover::before,
+[data-theme="airtable"] .theme-card:hover::before,
+[data-theme="notion"] .theme-card:hover::before,
+[data-theme="ibm"] .theme-card:hover::before,
+[data-theme="editorial"] .theme-card:hover::before {
+  animation: none;
+  opacity: 0.04;
+}
+
+.theme-card:hover {
+  transform: translateY(-3px) scale(1.002);
+  border-color: var(--accent-color);
+  box-shadow: 
+    inset 0 1px 1px rgba(255, 255, 255, 0.08),
+    0 0 0 1.5px var(--accent-glow), /* 聚光灯聚焦外环发光边缘 */
+    0 16px 36px -8px var(--accent-glow);
+}
+
+[data-theme="dark"] .theme-card:hover,
+[data-theme="linear"] .theme-card:hover {
+  box-shadow: 
+    inset 0 1px 1px rgba(255, 255, 255, 0.07),
+    0 0 0 1.5px var(--accent-glow),
+    0 20px 48px -10px var(--accent-glow);
+}
+
+[data-theme="cyber-glass"] .theme-card:hover {
+  border-color: var(--accent-color);
+  box-shadow: 
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 8px 32px 0 var(--accent-glow);
+}
+
+/* 粗野主义卡片特殊覆盖 */
+[data-theme="brutalist"] .theme-card {
+  border: 2px solid #000000 !important;
+  border-radius: 0px !important;
+  box-shadow: 4px 4px 0px #000000 !important;
+}
+[data-theme="brutalist"] .theme-card:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0px #000000 !important;
+}
+
+/* 自适应大厂品牌色按钮 */
+.accent-btn {
+  background: var(--accent-grad, var(--accent-color));
+  background-color: var(--accent-color);
+  color: var(--accent-text) !important;
+  font-weight: 700;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 
+    inset 0 1px 0 rgba(255, 255, 255, 0.15),
+    0 2px 4px 0 rgba(0, 0, 0, 0.05);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.08);
+}
+
+.accent-btn:hover {
+  transform: translateY(-1px) scale(1.015);
+  box-shadow: 
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    0 4px 15px var(--accent-glow);
+  opacity: 0.95;
+}
+
+.accent-btn:active {
+  transform: translateY(0.5px) scale(0.985);
+}
+
+/* 粗野主义特殊按钮覆盖 */
+[data-theme="brutalist"] .accent-btn {
+  border: 2px solid #000000 !important;
+  border-radius: 0px !important;
+  box-shadow: 2px 2px 0px #000000 !important;
+  background: #000000 !important;
+  color: #ffffff !important;
+  text-shadow: none;
+}
+[data-theme="brutalist"] .accent-btn:hover {
+  transform: translate(-1px, -1px) !important;
+  box-shadow: 3px 3px 0px #000000 !important;
+}
+[data-theme="brutalist"] .accent-btn:active {
+  transform: translate(1px, 1px) !important;
+  box-shadow: 1px 1px 0px #000000 !important;
+}
+
+/* 大厂质感高级输入框 */
+.premium-input {
+  border: 1px solid var(--border-color);
+  background-color: rgba(255, 255, 255, 0.02);
+  border-radius: 8px;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  color: var(--text-primary);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+
+.premium-input:focus {
+  outline: none;
+  border-color: var(--accent-color) !important;
+  box-shadow: 
+    inset 0 1px 2px rgba(0, 0, 0, 0.01),
+    0 0 0 3px var(--accent-glow) !important;
+}
+
+/* macOS 风格高拟真终端 */
+.mac-terminal {
+  background-color: #0b0f19;
+  color: #abb2bf;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 12px 32px -8px rgba(0, 0, 0, 0.35);
+}
+
+/* 点阵背景大厂级纹理 */
+.grid-bg {
+  background-image: radial-gradient(var(--border-color) 1.5px, transparent 1.5px);
+  background-size: 24px 24px;
+}
+
+/* SVG 描边出场动画 */
+.path-drawn {
+  stroke-dasharray: 1000;
+  stroke-dashoffset: 1000;
+  animation: drawPath 2.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes drawPath {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* 优化网页滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb,
+[data-theme="linear"] ::-webkit-scrollbar-thumb,
+[data-theme="cyber-glass"] ::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* 呼吸发光特效 */
+@keyframes neonGlow {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.6; }
+}
+
+.ambient-neon-glow {
+  filter: blur(80px);
+  animation: neonGlow 8s infinite ease-in-out;
+}
+
+/* ==========================================================================
+   弥散极光流动与 3D 视差物理特效
+   ========================================================================== */
+
+/* 极光漂浮流动动画 - 升级 translate3d 开启 GPU 硬件加速 */
+@keyframes floatBlob1 {
+  0% { transform: translate3d(0px, 0px, 0) scale(1) rotate(0deg); }
+  33% { transform: translate3d(60px, -80px, 0) scale(1.2) rotate(120deg); }
+  66% { transform: translate3d(-40px, 40px, 0) scale(0.85) rotate(240deg); }
+  100% { transform: translate3d(0px, 0px, 0) scale(1) rotate(360deg); }
+}
+
+@keyframes floatBlob2 {
+  0% { transform: translate3d(0px, 0px, 0) scale(1) rotate(0deg); }
+  50% { transform: translate3d(-80px, 60px, 0) scale(0.9) rotate(-180deg); }
+  100% { transform: translate3d(0px, 0px, 0) scale(1) rotate(-360deg); }
+}
+
+@keyframes floatBlob3 {
+  0% { transform: translate3d(0px, 0px, 0) scale(1); }
+  50% { transform: translate3d(50px, 50px, 0) scale(1.15); }
+  100% { transform: translate3d(0px, 0px, 0) scale(1); }
+}
+
+.aurora-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(140px);
+  mix-blend-mode: screen;
+  opacity: 0.16;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+
+/* 在浅色主题中调低极光透明度并改用叠加，保持高对比度与清爽感 */
+[data-theme="basic"] .aurora-blob,
+[data-theme="airtable"] .aurora-blob,
+[data-theme="notion"] .aurora-blob,
+[data-theme="ibm"] .aurora-blob,
+[data-theme="editorial"] .aurora-blob {
+  opacity: 0.06;
+  mix-blend-mode: multiply;
+  filter: blur(160px);
+}
+
+[data-theme="brutalist"] .aurora-blob {
+  display: none !important; /* 粗野主义下完全关闭极光 */
+}
+
+/* 3D 卡片高光闪过虹彩效果 */
+.glass-glare {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle 120px at var(--mouse-x, 0) var(--mouse-y, 0), rgba(255, 255, 255, 0.08), transparent 80%);
+  z-index: 10;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.theme-card:hover .glass-glare {
+  opacity: 1;
+}
+
+/* 在深色下高光稍微亮一点 */
+[data-theme="dark"] .glass-glare,
+[data-theme="linear"] .glass-glare,
+[data-theme="cyber-glass"] .glass-glare {
+  background: radial-gradient(circle 140px at var(--mouse-x, 0) var(--mouse-y, 0), rgba(255, 255, 255, 0.12), transparent 80%);
+}
+
+/* ==========================================================================
+   仪表盘与通用动效定义 (WOW Micro-Animations)
+   ========================================================================== */
+
+/* 1. 圆点从左到右气泡弹跳 */
+@keyframes scaleUpBounce {
+  0% { transform: scale(0); opacity: 0; }
+  70% { transform: scale(1.28); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* 2. 热力图块水澜波浪式淡入 */
+@keyframes scaleIn {
+  0% { transform: scale(0.5); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* 3. 列表项交错渐次淡入滑入 */
+@keyframes slideUpFade {
+  0% { transform: translateY(16px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+/* 4. 快速操作小图标 Hover 摇摆 */
+@keyframes iconWiggle {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  25% { transform: rotate(-12deg) scale(1.18); }
+  75% { transform: rotate(12deg) scale(1.18); }
+}
+
+.quick-action-item:hover svg {
+  animation: iconWiggle 0.45s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+}
+
+/* ==========================================================================
+   全局字号优化与排版呼吸感 (Typography Scaling)
+   ========================================================================== */
+
+/* 1. 设置 html 基础字号为 15px，允许 rem 相对尺寸等比微调，不破坏 Tailwind 的原生比例 */
+html {
+  font-size: 15px;
+}
+
+/* 2. 优化全局排版行高，保证足够的字距与行距，避免在任何多行场景下产生文字重叠 */
+body, p, span, th, td, label, button, input, textarea {
+  line-height: 1.5;
+}
+
+/* 3. 优化特定组件的字号细节 */
+.theme-card h2, .theme-card h3, .theme-card h4 {
+  letter-spacing: 0.01em;
+  font-weight: 700;
+}
+
+/* SVG 路径柔和流动效果 */
+.svg-pulse-path {
+  stroke-dasharray: 4, 4;
+  animation: dash-flow 2s linear infinite;
+}
+
+/* ==========================================================================
+   前沿极客大厂级动效组件库 (Premium VFX Utilities)
+   ========================================================================== */
+
+/* 1. Shimmer sweep 斜向亮光扫过动效 */
+@keyframes shimmer-sweep-anim {
+  0% {
+    transform: translateX(-150%) skewX(-25deg);
+  }
+  100% {
+    transform: translateX(150%) skewX(-25deg);
+  }
+}
+.shimmer-sweep {
+  position: relative;
+  overflow: hidden;
+}
+.shimmer-sweep::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 200%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.03) 25%,
+    rgba(255, 255, 255, 0.15) 50%,
+    rgba(255, 255, 255, 0.03) 75%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  transform: translateX(-150%) skewX(-25deg);
+  pointer-events: none;
+  z-index: 5;
+}
+.shimmer-sweep:hover::after {
+  animation: shimmer-sweep-anim 1.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* 2. 旋转激光流动发光边框 (Conic Glow Border) */
+@keyframes rotateGlow {
+  100% {
+    transform: rotate(360deg);
+  }
+}
+.glow-border-card {
+  position: relative;
+  border-radius: 12px;
+  z-index: 1;
+}
+.glow-border-card::before {
+  content: '';
+  position: absolute;
+  inset: -1.5px;
+  border-radius: 13.5px;
+  padding: 1.5px;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0%,
+    var(--accent-color) 25%,
+    #818cf8 50%,
+    var(--accent-color) 75%,
+    transparent 100%
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: rotateGlow 6s linear infinite;
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.85;
+  transition: opacity 0.3s ease;
+}
+.glow-border-card:hover::before {
+  animation: rotateGlow 3s linear infinite;
+  opacity: 1;
+}
+
+/* 3. 晶莹微晶降噪网格毛玻璃 (Cyber-Glass Noise Grid) */
+.glassmorphism-cyber {
+  position: relative;
+  background: rgba(255, 255, 255, 0.02) !important;
+  backdrop-filter: blur(14px) saturate(180%);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.07) !important;
+}
+.glassmorphism-cyber::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.12) 0.8px, transparent 0);
+  background-size: 10px 10px;
+  opacity: 0.12;
+  pointer-events: none;
+  z-index: 0;
+  mix-blend-mode: overlay;
+}
+
+/* 4. 赛博故障抖动字效 (Glitch text) */
+@keyframes glitch-anim {
+  0% { clip-path: inset(40% 0 61% 0); transform: skew(0.3deg); }
+  20% { clip-path: inset(92% 0 1% 0); transform: skew(-0.5deg); }
+  40% { clip-path: inset(15% 0 80% 0); transform: skew(0.5deg); }
+  60% { clip-path: inset(80% 0 5% 0); transform: skew(-0.3deg); }
+  80% { clip-path: inset(5% 0 92% 0); transform: skew(0.8deg); }
+  100% { clip-path: inset(40% 0 61% 0); transform: skew(0deg); }
+}
+.glitch-hover:hover {
+  position: relative;
+}
+.glitch-hover:hover::before {
+  content: attr(data-text);
+  position: absolute;
+  left: -1px;
+  text-shadow: 1px 0 #ff00c1;
+  background: transparent;
+  overflow: hidden;
+  clip: rect(0, 900px, 0, 0);
+  animation: glitch-anim 1s infinite linear alternate-reverse;
+}
+.glitch-hover:hover::after {
+  content: attr(data-text);
+  position: absolute;
+  left: 1px;
+  text-shadow: -1px 0 #00fff9;
+  background: transparent;
+  overflow: hidden;
+  clip: rect(0, 900px, 0, 0);
+  animation: glitch-anim 1.5s infinite linear alternate-reverse;
+}
+
+/* ==========================================================================
+   全新前沿极客大厂级高阶 VFX 特效 (Next-Gen Sci-Fi VFX Utilities)
+   ========================================================================== */
+
+/* 5. Chroma Glass 彩虹折射玻璃 */
+.chroma-glass {
+  position: relative;
+  background: rgba(255, 255, 255, 0.65) !important;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.4) !important;
+  box-shadow: 
+    0 4px 30px rgba(0, 0, 0, 0.03),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.chroma-glass:hover {
+  transform: translateY(-4px) scale(1.002);
+  border-color: rgba(99, 102, 241, 0.3) !important;
+  box-shadow: 
+    0 16px 36px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 0 10px rgba(99, 102, 241, 0.05);
+}
+
+/* 深色系风格下自动切换为深色全息磨砂玻璃 */
+[data-theme="dark"] .chroma-glass,
+[data-theme="cyber-glass"] .chroma-glass,
+[data-theme="linear"] .chroma-glass,
+[data-theme="clickhouse"] .chroma-glass {
+  background: rgba(15, 23, 42, 0.45) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 
+    0 4px 30px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="dark"] .chroma-glass:hover,
+[data-theme="cyber-glass"] .chroma-glass:hover,
+[data-theme="linear"] .chroma-glass:hover,
+[data-theme="clickhouse"] .chroma-glass:hover {
+  border-color: rgba(255, 255, 255, 0.2) !important;
+  box-shadow: 
+    0 20px 40px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 0 15px rgba(99, 102, 241, 0.2),
+    0 0 30px rgba(6, 182, 212, 0.15);
+}
+
+/* 6. Liquid Glow 液态流光霓虹按钮 */
+@keyframes neon-flow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+.glow-button-neon {
+  position: relative;
+  background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899, #06b6d4, #6366f1) !important;
+  background-size: 300% 300% !important;
+  animation: neon-flow 4s ease infinite !important;
+  color: #ffffff !important;
+  border: none !important;
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.5);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 1;
+}
+.glow-button-neon::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899, #06b6d4, #6366f1);
+  background-size: 300% 300%;
+  animation: neon-flow 4s ease infinite;
+  z-index: -1;
+  border-radius: inherit;
+  filter: blur(8px);
+  opacity: 0.6;
+  transition: opacity 0.3s ease;
+}
+.glow-button-neon:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 0 20px rgba(168, 85, 247, 0.8);
+}
+.glow-button-neon:hover::before {
+  opacity: 1;
+  filter: blur(12px);
+}
+.glow-button-neon:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+/* 7. 矩阵雷达扫描网格 */
+@keyframes radar-scan {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(200%); }
+}
+.cyber-matrix-grid {
+  position: relative;
+  background-image: 
+    linear-gradient(rgba(99, 102, 241, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(99, 102, 241, 0.03) 1px, transparent 1px) !important;
+  background-size: 15px 15px !important;
+  overflow: hidden;
+}
+.cyber-matrix-grid::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 50%;
+  background: linear-gradient(to bottom, transparent, rgba(6, 182, 212, 0.07), transparent);
+  pointer-events: none;
+  animation: radar-scan 6s linear infinite;
+  z-index: 2;
+}
+
+/* 8. 霓虹呼吸字效 */
+@keyframes neon-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+}
+.neon-pulse-number {
+  color: var(--text-primary);
+  display: inline-block;
+  animation: neon-pulse 3s infinite ease-in-out;
+  transition: all 0.3s ease;
+}
+.neon-pulse-number:hover {
+  animation-play-state: paused;
+  transform: scale(1.08);
+}
+/* 深色主题下赋予霓虹呼吸文字阴影 */
+[data-theme="dark"] .neon-pulse-number,
+[data-theme="cyber-glass"] .neon-pulse-number,
+[data-theme="linear"] .neon-pulse-number,
+[data-theme="clickhouse"] .neon-pulse-number {
+  text-shadow: 0 0 4px var(--accent-glow), 0 0 10px var(--accent-glow);
+}
+[data-theme="dark"] .neon-pulse-number:hover,
+[data-theme="cyber-glass"] .neon-pulse-number:hover,
+[data-theme="linear"] .neon-pulse-number:hover,
+[data-theme="clickhouse"] .neon-pulse-number:hover {
+  text-shadow: 0 0 12px var(--accent-color), 0 0 25px var(--accent-color);
+}
+
+/* 9. 故障风赛博面板 */
+@keyframes glitch-border {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.2), inset 0 0 4px rgba(239, 68, 68, 0.1);
+    border-color: rgba(239, 68, 68, 0.3) !important;
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.4), inset 0 0 8px rgba(239, 68, 68, 0.2);
+    border-color: rgba(239, 68, 68, 0.6) !important;
+  }
+}
+.cyber-glitch-panel {
+  position: relative;
+  animation: glitch-border 2.5s infinite ease-in-out;
+  background: rgba(239, 68, 68, 0.05) !important;
+}
+.cyber-glitch-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(rgba(239, 68, 68, 0.03) 50%, rgba(0, 0, 0, 0.1) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 255, 0.03));
+  background-size: 100% 4px, 6px 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* 重写 TiltCard 眩光样式为多色渐变全息聚光灯 */
+.glass-glare {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle 180px at var(--mouse-x, 50%) var(--mouse-y, 50%), 
+    rgba(99, 102, 241, 0.15) 0%, 
+    rgba(6, 182, 212, 0.12) 35%, 
+    rgba(236, 72, 153, 0.08) 60%, 
+    transparent 100%) !important;
+  z-index: 10;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 10. 科幻流星飞掠/激光粒子特效 */
+@keyframes meteor-sweep {
+  0% { left: -150%; top: -10%; opacity: 0; }
+  10% { opacity: 0.8; }
+  90% { opacity: 0.8; }
+  100% { left: 250%; top: 110%; opacity: 0; }
+}
+.cyber-meteor-dust {
+  position: relative;
+  overflow: hidden;
+}
+.cyber-meteor-dust::before {
+  content: '';
+  position: absolute;
+  width: 140px;
+  height: 1.5px;
+  background: linear-gradient(90deg, transparent, rgba(6, 182, 212, 0.7), #ffffff, rgba(99, 102, 241, 0.7), transparent);
+  transform: rotate(-15deg);
+  top: 0;
+  left: -150%;
+  animation: meteor-sweep 9s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* 11. 连接流光飞掠管道线 (Topbar & Cards divider) */
+@keyframes laser-wire-flow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+.flowing-laser-wire {
+  position: relative;
+}
+.flowing-laser-wire::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 1.5px;
+  background: linear-gradient(90deg, 
+    var(--border-color) 0%, 
+    var(--border-color) 35%, 
+    var(--accent-color) 45%, 
+    #818cf8 50%, 
+    var(--accent-color) 55%, 
+    var(--border-color) 65%, 
+    var(--border-color) 100%);
+  background-size: 200% 100%;
+  animation: laser-wire-flow 4s linear infinite;
+  pointer-events: none;
+}
+
+/* 12. 输入框量子电流聚焦流光 */
+.quantum-input-glow {
+  position: relative;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+.quantum-input-glow:focus,
+.quantum-input-glow:focus-within {
+  box-shadow: 
+    0 0 12px rgba(6, 182, 212, 0.25),
+    inset 0 0 4px rgba(99, 102, 241, 0.15) !important;
+  border-color: transparent !important;
+  background: linear-gradient(var(--bg-card), var(--bg-card)) padding-box,
+              linear-gradient(135deg, #06b6d4, #6366f1, #ec4899) border-box !important;
+  border: 1px solid transparent !important;
+}
+
+/* 13. 大字号科技粒子数码律动 */
+@keyframes number-flicker {
+  0%, 100% { opacity: 1; }
+  45% { opacity: 0.98; }
+  50% { opacity: 0.95; }
+  55% { opacity: 0.99; }
+  85% { opacity: 1; }
+}
+.digital-matrix-number {
+  color: var(--accent-color) !important;
+  font-weight: 800;
+  animation: number-flicker 5s infinite;
+  display: inline-block;
+  transition: all 0.3s ease;
+}
+/* 深色系风格下为大数字加入微弱霓虹外发光 */
+[data-theme="dark"] .digital-matrix-number,
+[data-theme="cyber-glass"] .digital-matrix-number,
+[data-theme="linear"] .digital-matrix-number,
+[data-theme="clickhouse"] .digital-matrix-number {
+  text-shadow: 0 0 6px var(--accent-glow), 0 0 12px var(--accent-glow);
+}
+
+/* ==========================================================================
+   终极炸裂级极客科幻 VFX 特效 (Jarvis Sci-Fi Command Deck Effects)
+   ========================================================================== */
+
+/* 14. 环形雷达扫描光束 (Radar Sweeper Beam) */
+@keyframes radar-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.radar-sweeper-beam {
+  transform-origin: 18px 18px;
+  animation: radar-spin 3s linear infinite;
+  pointer-events: none;
+}
+
+/* 15. RGB 通道分离故障字效 */
+@keyframes rgb-glitch {
+  0% {
+    text-shadow: 2px -1px 0 #ff00c1, -1px 2px 0 #00fff9;
+    transform: translate(0);
+  }
+  10% {
+    text-shadow: -2px 1px 0 #ff00c1, 2px -2px 0 #00fff9;
+    transform: translate(-1px, 1px);
+  }
+  20% {
+    text-shadow: 2px 2px 0 #ff00c1, -2px -1px 0 #00fff9;
+    transform: translate(1px, -1px);
+  }
+  30% {
+    text-shadow: -1px -2px 0 #ff00c1, 1px 2px 0 #00fff9;
+    transform: translate(-1px, -1px);
+  }
+  40% {
+    text-shadow: 2px -1px 0 #ff00c1, -1px 1px 0 #00fff9;
+    transform: translate(1px, 1px);
+  }
+  50% {
+    text-shadow: 0 0 0 #ff00c1, 0 0 0 #00fff9;
+    transform: translate(0);
+  }
+  100% {
+    text-shadow: 0 0 0 #ff00c1, 0 0 0 #00fff9;
+    transform: translate(0);
+  }
+}
+.cyber-glitch-text:hover {
+  animation: rgb-glitch 0.6s steps(2) infinite;
+  color: #ffffff !important;
+}
+
+/* 16. 流体极光熔岩背景 */
+@keyframes lava-flow {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+.lava-glow-aurora {
+  background: linear-gradient(-45deg, #070a13, #150d2c, #061c27, #0b0718) !important;
+  background-size: 400% 400% !important;
+  animation: lava-flow 18s ease infinite !important;
+}
+
+/* 17. 激光追踪鼠标边框 (Conic Laser Border) */
+@keyframes laser-rotate {
+  100% { transform: rotate(360deg); }
+}
+.laser-chase-border {
+  position: relative;
+  border-radius: 12px;
+  z-index: 1;
+}
+.laser-chase-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 13px;
+  padding: 1px;
+  background: conic-gradient(
+    from 0deg,
+    #06b6d4 0%,
+    #a855f7 15%,
+    transparent 30%,
+    transparent 70%,
+    #06b6d4 85%,
+    #a855f7 100%
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: laser-rotate 2.5s linear infinite;
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.6;
+  transition: opacity 0.3s ease, inset 0.3s ease;
+}
+.laser-chase-border:hover::before {
+  opacity: 1;
+  inset: -1.5px;
+  border-radius: 13.5px;
+  animation: laser-rotate 1.2s linear infinite;
+}
+
+/* 18. 进制数码雨控制台背景 */
+@keyframes matrix-rain {
+  0% { background-position: 0% 0px; }
+  100% { background-position: 0% 300px; }
+}
+.cyber-matrix-console {
+  position: relative;
+  background-image: 
+    linear-gradient(rgba(6, 182, 212, 0.05) 50%, transparent 50%),
+    linear-gradient(90deg, rgba(6, 182, 212, 0.03) 1px, transparent 1px) !important;
+  background-size: 100% 4px, 12px 100% !important;
+  overflow: hidden;
+}
+.cyber-matrix-console::after {
+  content: "01 10 FF 8A C3 B7 02 DE D9 8B 1F 3C 4E A0 55 C2 9D E3 44 F1 A8 09 8D";
+  position: absolute;
+  inset: 0;
+  font-family: monospace;
+  font-size: 8px;
+  color: rgba(6, 182, 212, 0.05);
+  line-height: 12px;
+  padding: 10px;
+  word-break: break-all;
+  white-space: normal;
+  pointer-events: none;
+  background: linear-gradient(to bottom, rgba(6, 182, 212, 0.05), transparent);
+  background-size: 100% 300px;
+  animation: matrix-rain 12s linear infinite;
+  z-index: 1;
+}
+
+/* ==========================================================================
+   AI 测试平台专属业务特效 (AI Test Platform Domain VFX)
+   ========================================================================== */
+
+/* 19. AI 用例自愈激光扫描网格 */
+@keyframes scan-grid {
+  0% { top: 0%; opacity: 0.2; }
+  50% { opacity: 0.75; }
+  100% { top: 100%; opacity: 0.2; }
+}
+.ai-laser-healing-grid {
+  position: relative;
+  overflow: hidden;
+}
+.ai-laser-healing-grid::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, #10b981, #34d399, #10b981, transparent);
+  box-shadow: 0 0 12px #10b981, 0 0 20px #34d399;
+  animation: scan-grid 4s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* 20. 流水线虚线运行脉冲 */
+@keyframes line-pulse {
+  0% { stroke-dashoffset: 40; }
+  100% { stroke-dashoffset: 0; }
+}
+.pipeline-pulse-wire {
+  stroke-dasharray: 6, 4;
+  animation: line-pulse 1.2s linear infinite;
+  stroke: var(--accent-color) !important;
+}
+
+/* 21. 健康度声纳水波纹 */
+@keyframes sonar-spread {
+  0% { transform: scale(0.9); opacity: 0.85; }
+  100% { transform: scale(1.55); opacity: 0; }
+}
+.sonar-ripple-container {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.sonar-ripple-circle {
+  position: absolute;
+  inset: -12px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent-color);
+  pointer-events: none;
+  z-index: 0;
+  animation: sonar-spread 2.4s cubic-bezier(0.1, 0.8, 0.3, 1) infinite;
+  opacity: 0;
+}
+.sonar-ripple-circle-delay {
+  animation-delay: 1.2s;
+}
+
+/* 22. 缺陷危险红外警报 */
+@keyframes red-beacon {
+  0%, 100% { opacity: 0.15; box-shadow: inset 0 0 12px rgba(239, 68, 68, 0.12); }
+  50% { opacity: 0.45; box-shadow: inset 0 0 28px rgba(239, 68, 68, 0.45); }
+}
+.danger-laser-beacon {
+  position: relative;
+}
+.danger-laser-beacon::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 50% 0%, rgba(239, 68, 68, 0.2), transparent 75%);
+  pointer-events: none;
+  z-index: 0;
+  animation: red-beacon 3.2s ease-in-out infinite;
+}
+
+/* 23. 全息彩虹油膜折射顶边 */
+@keyframes slick-slide {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+.holographic-slick-ribbon {
+  position: relative;
+}
+.holographic-slick-ribbon::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, #ff00c1, #00fff9, #ff00c1, #00fff9);
+  background-size: 200% 100%;
+  animation: slick-slide 3.2s linear infinite;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: 50;
+  border-radius: 12px 12px 0 0;
+}
+.holographic-slick-ribbon:hover::after {
+  opacity: 0.85;
+}
+
+/* ==========================================================================
+   全新前沿极客大厂级超高阶 VFX 特效 (Jarvis Sci-Fi Ultra-High VFX)
+   ========================================================================== */
+
+/* 24. 量子数据高频抖动锁定 (Quantum Digit Lock) */
+@keyframes digit-lock-flicker {
+  0% { transform: translateY(0) skewX(0); filter: hue-rotate(0deg); }
+  25% { transform: translateY(-0.5px) skewX(1deg); filter: hue-rotate(90deg); text-shadow: 1px 0.5px #ff00c1, -1px -0.5px #00fff9; }
+  50% { transform: translateY(0.5px) skewX(-1deg); filter: hue-rotate(180deg); text-shadow: -1px 0.5px #ff00c1, 1px -0.5px #00fff9; }
+  75% { transform: translateY(-0.5px) skewX(0.5deg); filter: hue-rotate(270deg); text-shadow: 0.5px -1px #ff00c1, -0.5px 1px #00fff9; }
+  100% { transform: translateY(0) skewX(0); filter: hue-rotate(360deg); }
+}
+.quantum-digit-lock:hover {
+  animation: digit-lock-flicker 0.25s steps(3) infinite;
+  color: var(--accent-color) !important;
+}
+
+/* 25. 全息信号噪声雷达遮罩 (Holographic Signal Noise Overlay) */
+@keyframes holo-noise-shift {
+  0%, 100% { background-position: 0 0; opacity: 0.08; }
+  20% { background-position: 10px 20px; opacity: 0.12; }
+  40% { background-position: -20px -10px; opacity: 0.06; }
+  60% { background-position: 15px -5px; opacity: 0.14; }
+  80% { background-position: -5px 15px; opacity: 0.09; }
+}
+.holographic-signal-noise {
+  position: relative;
+}
+.holographic-signal-noise::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: 
+    radial-gradient(rgba(255, 255, 255, 0.15) 0.5px, transparent 0.5px),
+    linear-gradient(rgba(255, 255, 255, 0.03) 50%, transparent 50%);
+  background-size: 8px 8px, 100% 4px;
+  pointer-events: none;
+  opacity: 0.06;
+  z-index: 1;
+  transition: opacity 0.3s ease;
+}
+.holographic-signal-noise:hover::before {
+  animation: holo-noise-shift 0.4s steps(4) infinite;
+  opacity: 0.15;
+}
+/* 在浅色模式下弱化该噪音以保证文字清晰度 */
+[data-theme="basic"] .holographic-signal-noise::before,
+[data-theme="airtable"] .holographic-signal-noise::before,
+[data-theme="notion"] .holographic-signal-noise::before,
+[data-theme="ibm"] .holographic-signal-noise::before,
+[data-theme="editorial"] .holographic-signal-noise::before {
+  background-image: radial-gradient(rgba(0, 0, 0, 0.08) 0.5px, transparent 0.5px);
+  opacity: 0.03;
+}
+[data-theme="basic"] .holographic-signal-noise:hover::before,
+[data-theme="airtable"] .holographic-signal-noise:hover::before,
+[data-theme="notion"] .holographic-signal-noise:hover::before,
+[data-theme="ibm"] .holographic-signal-noise:hover::before,
+[data-theme="editorial"] .holographic-signal-noise:hover::before {
+  animation: none; /* 亮色下关闭高频闪烁，防止字迹因闪烁发虚 */
+  opacity: 0.06;
+}
+
+/* 26. 电网管道流光飞梭 (Power Grid Data Glider) */
+@keyframes glide-pass {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.power-grid-glider {
+  position: relative;
+  overflow: hidden;
+}
+.power-grid-glider::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 33%;
+  height: 1.5px;
+  background: linear-gradient(90deg, transparent, var(--accent-color), #ffffff, var(--accent-color), transparent);
+  animation: glide-pass 3s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+  z-index: 5;
+  opacity: 0.8;
+}
+
+/* ==========================================================================
+   全站文字显眼度与对比度重塑拯救器 (Contrast Enhancement Suite)
+   ========================================================================== */
+
+/* 1. 微调全局字号以提升信息可读性，启用高精细排版渲染 */
+html {
+  font-size: 15.3px !important;
+}
+
+body {
+  text-rendering: optimizeLegibility !important;
+  -webkit-font-smoothing: antialiased !important;
+  -moz-osx-font-smoothing: grayscale !important;
+}
+
+/* 2. 强行提权标题与粗体字重为超粗 (800) */
+h1, h2, h3, h4, h5, h6, .font-bold {
+  font-weight: 800 !important;
+}
+
+/* 3. 强行提权数据指标数字字重为巨无霸极黑 (900) */
+.digital-matrix-number, 
+.neon-pulse-number, 
+.text-xl, 
+.text-2xl, 
+.text-2\.5xl, 
+.text-3xl {
+  font-weight: 950 !important;
+}
+
+/* 4. 全局强力限制微小字号：自动映射提权，防止在高分屏/低对比度下中英文字体看不清 */
+.text-\[7\.5px\] { font-size: 10px !important; }
+.text-\[8px\] { font-size: 11px !important; }
+.text-\[8\.5px\] { font-size: 11px !important; }
+.text-\[9px\] { font-size: 11.5px !important; }
+.text-\[9\.5px\] { font-size: 11.5px !important; }
+.text-\[10px\] { font-size: 12.5px !important; }
+.text-\[10\.5px\] { font-size: 12.5px !important; }
+.text-\[11px\] { font-size: 13px !important; }
+.text-xs { font-size: 13px !important; }
+
+/* 5. 全局强力限制文本透明度，在文字标签上强制去虚化，提纯对比度 */
+p.opacity-45, span.opacity-45, div.opacity-45, text.opacity-45, td.opacity-45, th.opacity-45, label.opacity-45,
+p.opacity-50, span.opacity-50, div.opacity-50, text.opacity-50, td.opacity-50, th.opacity-50, label.opacity-50,
+p.opacity-55, span.opacity-55, div.opacity-55, text.opacity-55, td.opacity-55, th.opacity-55, label.opacity-55,
+p.opacity-60, span.opacity-60, div.opacity-60, text.opacity-60, td.opacity-60, th.opacity-60, label.opacity-60,
+p.opacity-70, span.opacity-70, div.opacity-70, text.opacity-70, td.opacity-70, th.opacity-70, label.opacity-70,
+p.opacity-75, span.opacity-75, div.opacity-75, text.opacity-75, td.opacity-75, th.opacity-75, label.opacity-75 {
+  opacity: 0.96 !important;
+}
+
+/* 6. 亮色与暗色主题文字细节定向微调与去模糊 */
+[data-theme="basic"] .text-slate-400,
+[data-theme="airtable"] .text-slate-400,
+[data-theme="notion"] .text-slate-400,
+[data-theme="ibm"] .text-slate-400,
+[data-theme="editorial"] .text-slate-400,
+[data-theme="basic"] .text-slate-500,
+[data-theme="airtable"] .text-slate-500,
+[data-theme="notion"] .text-slate-500,
+[data-theme="ibm"] .text-slate-500,
+[data-theme="editorial"] .text-slate-500,
+[data-theme="basic"] .text-slate-400\/70,
+[data-theme="basic"] .text-slate-400\/60,
+[data-theme="basic"] .text-\[var\(--text-secondary\)\],
+[data-theme="basic"] .opacity-50,
+[data-theme="basic"] .opacity-60,
+[data-theme="basic"] .opacity-70,
+[data-theme="basic"] .opacity-75,
+[data-theme="airtable"] .opacity-50,
+[data-theme="airtable"] .opacity-60,
+[data-theme="airtable"] .opacity-70,
+[data-theme="airtable"] .opacity-75,
+[data-theme="notion"] .opacity-50,
+[data-theme="notion"] .opacity-60,
+[data-theme="notion"] .opacity-75 {
+  color: var(--text-secondary) !important;
+  opacity: 1 !important; /* 强制以 100% 不透明度呈现 */
+}
+
+[data-theme="dark"] .text-slate-400,
+[data-theme="linear"] .text-slate-400,
+[data-theme="cyber-glass"] .text-slate-400,
+[data-theme="clickhouse"] .text-slate-400,
+[data-theme="dark"] .text-slate-500,
+[data-theme="linear"] .text-slate-500,
+[data-theme="cyber-glass"] .text-slate-500,
+[data-theme="clickhouse"] .text-slate-500,
+[data-theme="dark"] .opacity-50,
+[data-theme="dark"] .opacity-60,
+[data-theme="dark"] .opacity-70,
+[data-theme="dark"] .opacity-75,
+[data-theme="linear"] .opacity-50,
+[data-theme="linear"] .opacity-60,
+[data-theme="linear"] .opacity-75,
+[data-theme="cyber-glass"] .opacity-60,
+[data-theme="cyber-glass"] .opacity-75 {
+  color: var(--text-secondary) !important;
+  opacity: 0.98 !important; /* 暗色下同样保持极高清晰度 */
+}
+
+/* 7. 图表与精细数值的「微晶毛玻璃防发虚隔离垫片」 */
+.chart-text-isolator {
+  background-color: var(--bg-card);
+  box-shadow: 0 0 12px 6px var(--bg-card);
+  border-radius: 4px;
+  padding: 1px 4px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+/* 8. 尊贵级极客高亮渐彩字 (金黄-青蓝 能量双色渐变) */
+.glorious-highlight-text {
+  background: linear-gradient(135deg, #eab308 0%, #06b6d4 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-weight: 950 !important;
+  display: inline-block;
+  filter: drop-shadow(0 0 1px rgba(6, 182, 212, 0.2));
+}
+
+/* 亮色模式下为了确保极佳对比度，自动切换为高饱和度深紫-青渐变 */
+[data-theme="basic"] .glorious-highlight-text,
+[data-theme="airtable"] .glorious-highlight-text,
+[data-theme="notion"] .glorious-highlight-text,
+[data-theme="ibm"] .glorious-highlight-text,
+[data-theme="editorial"] .glorious-highlight-text {
+  background: linear-gradient(135deg, #4f46e5 0%, #0891b2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* 9. 核心常用区霓虹发光字 */
+.crucial-glow-text {
+  color: var(--accent-color) !important;
+  font-weight: 950 !important;
+  text-shadow: 0 0 8px var(--accent-glow);
+}
+/* 亮色模式下改用超深黑实文字，确保极高可读对比度 */
+[data-theme="basic"] .crucial-glow-text,
+[data-theme="airtable"] .crucial-glow-text,
+[data-theme="notion"] .crucial-glow-text,
+[data-theme="ibm"] .crucial-glow-text,
+[data-theme="editorial"] .crucial-glow-text {
+  color: #0f172a !important;
+  text-shadow: none !important;
+}
+
+/* 10. 左侧侧边栏导航专属激活态脉冲 (激活的文字极其显眼) */
+.sidebar-active-glow {
+  position: relative;
+  overflow: hidden;
+  border-left: 3.5px solid var(--accent-color) !important;
+  background: linear-gradient(90deg, var(--accent-glow) 0%, transparent 100%) !important;
+  font-weight: 950 !important;
+  color: var(--text-primary) !important;
+}
+.sidebar-active-glow::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 2.5px;
+  height: 100%;
+  background: linear-gradient(to bottom, var(--accent-color), #ffffff, var(--accent-color));
+  animation: vertical-laser-flow 2.2s linear infinite;
+}
+@keyframes vertical-laser-flow {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
+}
+
+/* ==========================================================================
+   模块使用热力图专属立体动态特效 (Heatmap Advanced VFX Suite)
+   ========================================================================== */
+
+/* 1. 多频温差能量波动动画 */
+@keyframes heat-wave-high {
+  0%, 100% { filter: brightness(1) drop-shadow(0 0 1px var(--accent-glow)); }
+  50% { filter: brightness(1.35) drop-shadow(0 0 8px var(--accent-color)); }
+}
+@keyframes heat-wave-med {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.22) drop-shadow(0 0 4px var(--accent-glow)); }
+}
+@keyframes heat-wave-low {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.12); }
+}
+
+.heat-pulse-high {
+  animation: heat-wave-high 2s infinite ease-in-out;
+}
+.heat-pulse-med {
+  animation: heat-wave-med 3s infinite ease-in-out;
+}
+.heat-pulse-low {
+  animation: heat-wave-low 4.5s infinite ease-in-out;
+}
+
+/* 2. 热能探测激光雷达扫描线 (纵向扫射) */
+@keyframes scan-y-anim {
+  0% { transform: translateY(-20px); opacity: 0; }
+  10% { opacity: 0.8; }
+  90% { opacity: 0.8; }
+  100% { transform: translateY(170px); opacity: 0; }
+}
+.animate-scan-y {
+  animation: scan-y-anim 5.5s cubic-bezier(0.25, 1, 0.5, 1) infinite;
+}
+
+/* 3. 热力渐变滑轨自左向右能量流光 */
+@keyframes legend-flow-anim {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+.thermal-legend-flow {
+  background: linear-gradient(90deg, 
+    var(--border-color) 0%, 
+    var(--accent-glow) 25%, 
+    var(--accent-color) 50%, 
+    #ffffff 60%,
+    var(--accent-color) 70%, 
+    var(--accent-glow) 85%, 
+    var(--border-color) 100%) !important;
+  background-size: 200% 100% !important;
+  animation: legend-flow-anim 3s linear infinite !important;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.1), 0 0 8px var(--accent-glow);
+}
+
+
+
+

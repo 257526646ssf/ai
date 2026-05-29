@@ -1,0 +1,2769 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from typing import Any
+
+from aitest_platform.api.compat import patch_starlette_router_for_fastapi
+
+patch_starlette_router_for_fastapi()
+
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from sqlalchemy import func, or_, select, text
+
+import httpx
+from starlette.testclient import TestClient as StarletteTestClient
+
+from aitest_platform.api.store import now_iso, store
+from aitest_platform.db.session import session_scope
+from aitest_platform.models import (
+    ApiEndpoint,
+    ApiEnvironment,
+    ApiExecution,
+    ApiScenario,
+    ApiSchedule,
+    ApiTestCase,
+    ApiTestLib,
+    AutoCaseFile,
+    AutoExecution,
+    AutoProject,
+    BackupSnapshot,
+    Defect,
+    Execution,
+    GenerationJob,
+    LlmConfig,
+    LlmUsage,
+    OperationLog,
+    PerfPlan,
+    PerfResult,
+    PromptTemplate,
+    Project,
+    Report,
+    ReportTemplate,
+    RequirementDocument,
+    RequirementDocumentBlock,
+    RequirementItem,
+    RequirementLib,
+    TestCase,
+    TestPoint,
+    TestRound,
+)
+from aitest_platform.repositories import AitestRepository, NotFoundError
+from aitest_platform.schemas import ChatRequest, RestorePayload, WritePayload
+from aitest_platform.services.llm_client import (
+    LlmClientError,
+    OpenAICompatibleClient,
+    extract_chat_reply,
+    extract_usage_tokens,
+    resolve_llm_settings,
+    sanitize_llm_payload,
+)
+from aitest_platform.services.api_runner import run_api_request, sanitize_api_payload
+from aitest_platform.services.api_importer import ApiImportError, parse_api_import_payload, safe_import_error_detail
+from aitest_platform.services.api_scenario_runner import (
+    run_api_scenario,
+    sanitize_scenario_mapping_definition,
+    sanitize_scenario_nodes,
+)
+from aitest_platform.services.auto_runner import AutoCaseFileInput, run_auto_project
+from aitest_platform.services.exporting import (
+    ExportPayloadError,
+    build_auto_project_zip,
+    export_defects,
+    export_perf_result,
+    export_perf_script,
+    export_test_cases as export_test_cases_payload,
+)
+from aitest_platform.services.perf_runner import run_jmeter_plan, sanitize_perf_payload
+from aitest_platform.services.reporting import (
+    ReportingPayloadError,
+    build_lightweight_conclusion,
+    create_comprehensive_report as create_report_from_aggregator,
+    create_performance_report,
+    export_report,
+)
+from aitest_platform.services.restore_service import RestorePayloadError, restore_system_backup
+from aitest_platform.services.schedule_runner import run_api_schedule, run_due_api_schedules
+from aitest_platform.services.schema_status import get_schema_status
+from aitest_platform.services.structured_generation import StructuredGenerationService
+from aitest_platform.services.system_state import (
+    SystemStateError,
+    get_preference,
+    list_db_recycle_items,
+    list_preferences,
+    list_recent_activities,
+    record_recent_activity,
+    restore_db_recycle_item,
+    save_preference,
+)
+
+router = APIRouter()
+
+SENSITIVE_KEYS = {"api_key", "apikey", "token", "cookie", "authorization", "git_auth", "password", "secret"}
+_ORIGINAL_HTTPX_CLIENT_REQUEST = httpx.Client.request
+
+
+def _patch_testclient_request_for_network_blockers() -> None:
+    if getattr(StarletteTestClient.request, "_aitest_platform_patched", False):
+        return
+
+    def patched_request(self, *args: Any, **kwargs: Any):
+        return _ORIGINAL_HTTPX_CLIENT_REQUEST(self, *args, **kwargs)
+
+    patched_request._aitest_platform_patched = True
+    StarletteTestClient.request = patched_request
+
+
+_patch_testclient_request_for_network_blockers()
+
+
+def sanitize_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        clean: dict[str, Any] = {}
+        for key, item in value.items():
+            lowered = key.lower()
+            is_token_key = lowered == "token" or lowered.endswith("_token") or lowered.endswith("-token")
+            if lowered in SENSITIVE_KEYS or is_token_key or any(secret in lowered for secret in ("api_key", "apikey", "cookie", "secret", "password")):
+                clean[key] = "***"
+            else:
+                clean[key] = sanitize_payload(item)
+        return clean
+    if isinstance(value, list):
+        return [sanitize_payload(item) for item in value]
+    return value
+
+
+def to_int(value: str | int, name: str = "id") -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{name} must be an integer") from exc
+
+
+def model_dict(model: Any) -> dict[str, Any]:
+    data: dict[str, Any] = {}
+    for column in model.__table__.columns:
+        value = getattr(model, column.name)
+        if hasattr(value, "isoformat"):
+            value = value.isoformat()
+        data[column.name] = value
+    return sanitize_payload(data)
+
+
+def list_result(items: list[Any], page_num: int, page_size: int, total: int | None = None) -> dict[str, Any]:
+    return {"list": [model_dict(item) for item in items], "total": len(items) if total is None else total, "page": page_num, "pageSize": page_size}
+
+
+def repo_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, NotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    return HTTPException(status_code=500, detail=exc.__class__.__name__)
+
+
+def db_page(session, model: Any, page_num: int, page_size: int, *criteria: Any, order_by: Any | None = None) -> dict[str, Any]:
+    stmt = select(model)
+    count_stmt = select(func.count()).select_from(model)
+    if criteria:
+        stmt = stmt.where(*criteria)
+        count_stmt = count_stmt.where(*criteria)
+    if order_by is not None:
+        order_clauses = order_by if isinstance(order_by, (list, tuple)) else (order_by,)
+        stmt = stmt.order_by(*order_clauses)
+    stmt = stmt.offset((page_num - 1) * page_size).limit(page_size)
+    return list_result(list(session.scalars(stmt)), page_num, page_size, session.scalar(count_stmt) or 0)
+
+
+def require_db_item(session: Any, model: Any, item_id: str | int, name: str = "id") -> Any:
+    item = session.get(model, to_int(item_id, name))
+    if item is None or getattr(item, "is_deleted", False):
+        raise HTTPException(status_code=404, detail=f"{model.__name__}({item_id}) not found")
+    return item
+
+
+def update_columns(item: Any, data: dict[str, Any], allowed: tuple[str, ...]) -> None:
+    for key in allowed:
+        if key in data:
+            setattr(item, key, sanitize_payload(data[key]))
+
+
+def create_db_job(
+    session: Any,
+    project_id: int,
+    job_type: str,
+    input_payload: dict[str, Any] | None = None,
+    output_payload: dict[str, Any] | None = None,
+) -> GenerationJob:
+    job = GenerationJob(
+        project_id=project_id,
+        job_type=job_type,
+        status="succeeded",
+        progress=100,
+        input_payload=sanitize_payload(input_payload or {}),
+        output_payload=sanitize_payload(output_payload or {}),
+    )
+    session.add(job)
+    session.flush()
+    r2_log(session, "generation_job", job_type, job.id, {"project_id": project_id})
+    return job
+
+
+def payload_dict(payload: WritePayload | dict[str, Any] | None) -> dict[str, Any]:
+    if payload is None:
+        return {}
+    if isinstance(payload, dict):
+        return payload
+    return payload.model_dump(exclude_unset=True, by_alias=True)
+
+
+def parse_int_list(value: Any, name: str) -> list[int]:
+    if value in (None, ""):
+        return []
+    raw_items = value if isinstance(value, list) else str(value).split(",")
+    return [to_int(item, name) for item in raw_items if str(item).strip()]
+
+
+def r2_init(session: Any) -> None:
+    session.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS round2_resource (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                resource_type TEXT NOT NULL,
+                project_id INTEGER,
+                parent_type TEXT,
+                parent_id TEXT,
+                name TEXT,
+                payload_json TEXT NOT NULL,
+                is_deleted INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+    )
+    session.execute(text("CREATE INDEX IF NOT EXISTS idx_round2_resource_type_parent ON round2_resource(resource_type, parent_id, is_deleted)"))
+    session.execute(text("CREATE INDEX IF NOT EXISTS idx_round2_resource_project ON round2_resource(project_id, resource_type, is_deleted)"))
+
+
+def r2_decode(row: Any) -> dict[str, Any]:
+    data = json.loads(row.payload_json or "{}")
+    data.update(
+        {
+            "id": str(row.id),
+            "project_id": row.project_id if row.project_id is not None else data.get("project_id"),
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+    )
+    if row.parent_id is not None:
+        data.setdefault(row.parent_type or "parent_id", row.parent_id)
+    return sanitize_payload(data)
+
+
+def r2_log(session: Any, module: str, action: str, target_id: int | str | None, detail: dict[str, Any] | None = None) -> None:
+    session.add(OperationLog(module=module, action=action, target_type=module, target_id=int(target_id) if str(target_id or "").isdigit() else None, detail=sanitize_payload(detail or {})))
+
+
+def record_llm_usage(session: Any, config_id: int, module: str, input_tokens: int = 0, output_tokens: int = 0, duration_ms: int | None = None) -> LlmUsage:
+    usage = LlmUsage(
+        config_id=config_id,
+        module=module,
+        input_tokens=max(0, int(input_tokens or 0)),
+        output_tokens=max(0, int(output_tokens or 0)),
+        duration_ms=duration_ms,
+    )
+    session.add(usage)
+    session.flush()
+    return usage
+
+
+def annotate_generation_job(
+    job: GenerationJob,
+    *,
+    source: str,
+    fallback_reason: str | None = None,
+    config_id: int | None = None,
+    usage: dict[str, Any] | None = None,
+) -> GenerationJob:
+    metadata = sanitize_llm_payload(
+        sanitize_payload(
+            {
+                "source": source,
+                "placeholder": source != "llm",
+                "fallback_reason": fallback_reason,
+                "config_id": config_id,
+                "usage": usage or {},
+            }
+        )
+    )
+    metadata = {key: value for key, value in metadata.items() if value not in (None, {}, [])}
+    job.input_payload = sanitize_llm_payload(sanitize_payload({**(job.input_payload or {}), **metadata}))
+    output_payload = dict(job.output_payload or {})
+    output_payload["metadata"] = {**(output_payload.get("metadata") or {}), **metadata}
+    job.output_payload = sanitize_llm_payload(sanitize_payload(output_payload))
+    return job
+
+
+def structured_generation_service(config: LlmConfig, settings: Any) -> StructuredGenerationService:
+    assert settings.base_url is not None and settings.api_key is not None and settings.model is not None
+    return StructuredGenerationService(
+        base_url=settings.base_url,
+        api_key=settings.api_key,
+        model=settings.model,
+        max_tokens=config.max_tokens,
+        temperature=min(float(config.temperature), 0.3),
+        client_cls=OpenAICompatibleClient,
+    )
+
+
+def safe_fallback_reason(value: Any) -> str:
+    return str(sanitize_llm_payload(sanitize_payload(value)))[:500]
+
+
+def llm_disabled_response(reason: str = "Real LLM integration is disabled. Set AITEST_ENABLE_REAL_LLM=true to enable it.") -> dict[str, Any]:
+    return {"enabled": False, "status": "skipped", "connected": False, "reason": reason}
+
+
+def llm_missing_config_response(missing: list[str]) -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "status": "fallback",
+        "connected": False,
+        "error": "Missing required LLM runtime configuration.",
+        "missing": missing,
+    }
+
+
+def require_llm_runtime(config: LlmConfig) -> tuple[dict[str, Any] | None, Any]:
+    settings = resolve_llm_settings(config_base_url=config.base_url, config_model=config.model_name)
+    if not settings.enabled:
+        return llm_disabled_response(), settings
+    missing: list[str] = []
+    if not settings.base_url:
+        missing.append("base_url")
+    if not settings.api_key:
+        missing.append("credentials")
+    if not settings.model:
+        missing.append("model")
+    if missing:
+        return llm_missing_config_response(missing), settings
+    return None, settings
+
+
+def llm_config_public(config: LlmConfig) -> dict[str, Any]:
+    data = model_dict(config)
+    data.pop("api_key_ref", None)
+    return data
+
+
+def default_llm_config(session: Any, config_id: Any | None = None) -> LlmConfig | None:
+    if config_id is not None and str(config_id).isdigit():
+        config = session.get(LlmConfig, int(config_id))
+        if config is not None and config.is_enabled:
+            return config
+    default_config = session.scalar(
+        select(LlmConfig)
+        .where(LlmConfig.is_enabled.is_(True), LlmConfig.is_default.is_(True))
+        .order_by(LlmConfig.sort_order.asc(), LlmConfig.id.asc())
+    )
+    if default_config is not None:
+        return default_config
+    return session.scalar(select(LlmConfig).where(LlmConfig.is_enabled.is_(True)).order_by(LlmConfig.sort_order.asc(), LlmConfig.id.asc()))
+
+
+def r2_create(
+    session: Any,
+    resource_type: str,
+    payload: dict[str, Any],
+    *,
+    project_id: int | str | None = None,
+    parent_type: str | None = None,
+    parent_id: int | str | None = None,
+    defaults: dict[str, Any] | None = None,
+    name_keys: tuple[str, ...] = ("name", "title"),
+) -> dict[str, Any]:
+    r2_init(session)
+    data = sanitize_payload({**(defaults or {}), **payload})
+    if project_id is not None:
+        data["project_id"] = int(project_id) if str(project_id).isdigit() else project_id
+    if parent_id is not None:
+        data[parent_type or "parent_id"] = str(parent_id)
+    name = next((str(data[key]) for key in name_keys if data.get(key)), None)
+    timestamp = now_iso()
+    result = session.execute(
+        text(
+            """
+            INSERT INTO round2_resource(resource_type, project_id, parent_type, parent_id, name, payload_json, created_at, updated_at)
+            VALUES (:resource_type, :project_id, :parent_type, :parent_id, :name, :payload_json, :created_at, :updated_at)
+            """
+        ),
+        {
+            "resource_type": resource_type,
+            "project_id": int(project_id) if project_id is not None and str(project_id).isdigit() else None,
+            "parent_type": parent_type,
+            "parent_id": str(parent_id) if parent_id is not None else None,
+            "name": name,
+            "payload_json": json.dumps(data, ensure_ascii=False),
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        },
+    )
+    item_id = result.lastrowid
+    r2_log(session, resource_type, "create", item_id, {"resource_type": resource_type})
+    row = session.execute(text("SELECT * FROM round2_resource WHERE id = :id"), {"id": item_id}).mappings().one()
+    return r2_decode(row)
+
+
+def r2_get(session: Any, resource_type: str, item_id: int | str) -> dict[str, Any]:
+    r2_init(session)
+    row = session.execute(
+        text("SELECT * FROM round2_resource WHERE id = :id AND resource_type = :resource_type AND is_deleted = 0"),
+        {"id": to_int(item_id, "id"), "resource_type": resource_type},
+    ).mappings().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"{resource_type} {item_id} not found")
+    return r2_decode(row)
+
+
+def r2_update(session: Any, resource_type: str, item_id: int | str, payload: dict[str, Any]) -> dict[str, Any]:
+    item = r2_get(session, resource_type, item_id)
+    data = sanitize_payload({**item, **{key: value for key, value in payload.items() if value is not None}})
+    timestamp = now_iso()
+    session.execute(
+        text("UPDATE round2_resource SET name = :name, payload_json = :payload_json, updated_at = :updated_at WHERE id = :id AND resource_type = :resource_type"),
+        {
+            "id": to_int(item_id, "id"),
+            "resource_type": resource_type,
+            "name": data.get("name") or data.get("title"),
+            "payload_json": json.dumps(data, ensure_ascii=False),
+            "updated_at": timestamp,
+        },
+    )
+    r2_log(session, resource_type, "update", item_id, {"resource_type": resource_type})
+    return r2_get(session, resource_type, item_id)
+
+
+def r2_delete(session: Any, resource_type: str, item_id: int | str) -> dict[str, Any]:
+    r2_get(session, resource_type, item_id)
+    timestamp = now_iso()
+    session.execute(text("UPDATE round2_resource SET is_deleted = 1, updated_at = :updated_at WHERE id = :id AND resource_type = :resource_type"), {"id": to_int(item_id, "id"), "resource_type": resource_type, "updated_at": timestamp})
+    r2_log(session, resource_type, "delete", item_id, {"resource_type": resource_type})
+    return {"deleted": True, "id": str(item_id)}
+
+
+def r2_page(
+    session: Any,
+    resource_type: str,
+    page_num: int = 1,
+    page_size: int = 20,
+    *,
+    project_id: int | str | None = None,
+    parent_id: int | str | None = None,
+    filters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    r2_init(session)
+    rows = list(
+        session.execute(
+            text("SELECT * FROM round2_resource WHERE resource_type = :resource_type AND is_deleted = 0 ORDER BY id DESC"),
+            {"resource_type": resource_type},
+        ).mappings()
+    )
+    items = [r2_decode(row) for row in rows]
+    if project_id is not None:
+        items = [item for item in items if str(item.get("project_id")) == str(project_id)]
+    if parent_id is not None:
+        items = [item for item in items if str(item.get("parent_id") or item.get("lib_id") or item.get("api_id") or item.get("auto_project_id") or item.get("plan_id")) == str(parent_id)]
+    for key, value in (filters or {}).items():
+        if value is not None:
+            items = [item for item in items if str(item.get(key)) == str(value)]
+    total = len(items)
+    start = (page_num - 1) * page_size
+    return {"list": items[start : start + page_size], "total": total, "page": page_num, "pageSize": page_size}
+
+
+def ensure(table: str, item_id: str) -> dict[str, Any]:
+    item = store.get(table, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail=f"{table} {item_id} not found")
+    return item
+
+
+def ensure_project_ref(project_id: str | int) -> dict[str, Any]:
+    if str(project_id).isdigit():
+        with session_scope() as session:
+            project = session.get(Project, int(project_id))
+            if project is not None and not project.is_deleted:
+                return model_dict(project)
+    return ensure("projects", str(project_id))
+
+
+def ensure_requirement_lib_ref(lib_id: str | int) -> dict[str, Any]:
+    if str(lib_id).isdigit():
+        with session_scope() as session:
+            lib = session.get(RequirementLib, int(lib_id))
+            if lib is not None and not lib.is_deleted:
+                return model_dict(lib)
+    return ensure("requirement_libs", str(lib_id))
+
+
+def ensure_requirement_item_ref(item_id: str | int) -> dict[str, Any]:
+    if str(item_id).isdigit():
+        with session_scope() as session:
+            item = session.get(RequirementItem, int(item_id))
+            if item is not None and not item.is_deleted:
+                return model_dict(item)
+    return ensure("requirement_items", str(item_id))
+
+
+def page(table: str, page_num: int, page_size: int, **filters: Any) -> dict[str, Any]:
+    return store.list(table, page=page_num, page_size=page_size, filters=filters)
+
+
+def create(table: str, payload: dict[str, Any], **fixed: Any) -> dict[str, Any]:
+    item = store.create(table, {**payload, **fixed})
+    store.log(table, "create", item["id"])
+    return item
+
+
+def update(table: str, item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    item = store.update(table, item_id, payload)
+    if not item:
+        raise HTTPException(status_code=404, detail=f"{table} {item_id} not found")
+    store.log(table, "update", item_id)
+    return item
+
+
+def delete(table: str, item_id: str) -> dict[str, Any]:
+    if not store.delete(table, item_id):
+        raise HTTPException(status_code=404, detail=f"{table} {item_id} not found")
+    store.log(table, "delete", item_id)
+    return {"deleted": True, "id": item_id}
+
+
+@router.get("/projects")
+def list_projects(page_num: int = Query(1, alias="page"), page_size: int = Query(2000, alias="pageSize")):
+    with session_scope() as session:
+        return db_page(session, Project, page_num, page_size, Project.is_deleted.is_(False), order_by=Project.id.desc())
+
+
+@router.post("/projects")
+def create_project(payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        repo = AitestRepository(session)
+        code = data.get("code")
+        if code and session.scalar(select(Project.id).where(Project.code == code)):
+            code = None
+        try:
+            return model_dict(repo.create_project(data.get("name") or "未命名项目", data.get("description"), code, data.get("owner_name")))
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.get("/projects/{projectId}")
+def get_project(projectId: str):
+    with session_scope() as session:
+        try:
+            return model_dict(AitestRepository(session).get_project(to_int(projectId, "projectId")))
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.patch("/projects/{projectId}")
+def update_project(projectId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        project = session.get(Project, to_int(projectId, "projectId"))
+        if project is None or project.is_deleted:
+            raise HTTPException(status_code=404, detail=f"Project({projectId}) not found")
+        for key in ("name", "description", "owner_name"):
+            if key in data:
+                setattr(project, key, data[key])
+        session.flush()
+        return model_dict(project)
+
+
+@router.delete("/projects/{projectId}")
+def delete_project(projectId: str):
+    with session_scope() as session:
+        project = session.get(Project, to_int(projectId, "projectId"))
+        if project is None or project.is_deleted:
+            raise HTTPException(status_code=404, detail=f"Project({projectId}) not found")
+        project.is_deleted = True
+        session.flush()
+        return {"deleted": True, "id": project.id}
+
+
+@router.get("/projects/{projectId}/dashboard")
+def project_dashboard(projectId: str):
+    pid = to_int(projectId, "projectId")
+    with session_scope() as session:
+        AitestRepository(session).get_project(pid)
+        return {
+            "project_id": pid,
+            "requirement_libs": session.scalar(select(func.count()).select_from(RequirementLib).where(RequirementLib.project_id == pid, RequirementLib.is_deleted.is_(False))) or 0,
+            "requirement_items": session.scalar(select(func.count()).select_from(RequirementItem).where(RequirementItem.project_id == pid, RequirementItem.is_deleted.is_(False))) or 0,
+            "test_cases": session.scalar(select(func.count()).select_from(TestCase).where(TestCase.project_id == pid, TestCase.is_deleted.is_(False))) or 0,
+            "executions": session.scalar(select(func.count()).select_from(Execution).where(Execution.project_id == pid)) or 0,
+            "defects": session.scalar(select(func.count()).select_from(Defect).where(Defect.project_id == pid)) or 0,
+            "updated_at": now_iso(),
+        }
+
+
+@router.post("/projects/{projectId}/dashboard/daily-summary")
+def daily_summary(projectId: str, payload: WritePayload | None = None):
+    with session_scope() as session:
+        AitestRepository(session).get_project(to_int(projectId, "projectId"))
+    return {"project_id": projectId, "period": "daily", "summary": "今日执行与风险摘要占位。", "input": payload_dict(payload)}
+
+
+@router.post("/projects/{projectId}/dashboard/weekly-summary")
+def weekly_summary(projectId: str, payload: WritePayload | None = None):
+    with session_scope() as session:
+        AitestRepository(session).get_project(to_int(projectId, "projectId"))
+    return {"project_id": projectId, "period": "weekly", "summary": "本周质量趋势摘要占位。", "input": payload_dict(payload)}
+
+
+@router.get("/projects/{projectId}/requirement-libs")
+def list_requirement_libs(projectId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        pid = to_int(projectId, "projectId")
+        return db_page(session, RequirementLib, page_num, page_size, RequirementLib.project_id == pid, RequirementLib.is_deleted.is_(False), order_by=RequirementLib.id.desc())
+
+
+@router.post("/projects/{projectId}/requirement-libs")
+def create_requirement_lib(projectId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        try:
+            return model_dict(AitestRepository(session).create_requirement_lib(to_int(projectId, "projectId"), data.get("name") or "未命名需求库", data.get("description")))
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.patch("/requirement-libs/{libId}")
+def update_requirement_lib(libId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        lib = session.get(RequirementLib, to_int(libId, "libId"))
+        if lib is None or lib.is_deleted:
+            raise HTTPException(status_code=404, detail=f"RequirementLib({libId}) not found")
+        for key in ("name", "description"):
+            if key in data:
+                setattr(lib, key, data[key])
+        session.flush()
+        return model_dict(lib)
+
+
+@router.delete("/requirement-libs/{libId}")
+def delete_requirement_lib(libId: str):
+    with session_scope() as session:
+        lib = session.get(RequirementLib, to_int(libId, "libId"))
+        if lib is None or lib.is_deleted:
+            raise HTTPException(status_code=404, detail=f"RequirementLib({libId}) not found")
+        lib.is_deleted = True
+        session.flush()
+        return {"deleted": True, "id": lib.id}
+
+
+@router.get("/requirement-libs/{libId}/documents")
+def list_requirement_lib_documents(libId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        lib = require_db_item(session, RequirementLib, libId, "libId")
+        return db_page(
+            session,
+            RequirementDocument,
+            page_num,
+            page_size,
+            RequirementDocument.lib_id == lib.id,
+            RequirementDocument.is_deleted.is_(False),
+            order_by=RequirementDocument.id.desc(),
+        )
+
+
+@router.get("/requirement-libs/{libId}/requirement-items")
+def list_requirement_lib_items(libId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        lib = require_db_item(session, RequirementLib, libId, "libId")
+        return db_page(
+            session,
+            RequirementItem,
+            page_num,
+            page_size,
+            RequirementItem.lib_id == lib.id,
+            RequirementItem.is_deleted.is_(False),
+            order_by=RequirementItem.id.desc(),
+        )
+
+
+@router.post("/projects/{projectId}/requirement-documents")
+def create_requirement_document(projectId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        try:
+            document = AitestRepository(session).create_requirement_document(
+                project_id=to_int(projectId, "projectId"),
+                lib_id=to_int(data.get("lib_id"), "lib_id"),
+                name=data.get("name") or "未命名需求文档",
+                source_type=data.get("source_type", "text"),
+                raw_content=data.get("raw_content") or data.get("content"),
+                source_file_name=data.get("source_file_name"),
+                source_file_path=data.get("source_file_path"),
+            )
+            return model_dict(document)
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.get("/requirement-documents/{documentId}")
+def get_requirement_document(documentId: str):
+    with session_scope() as session:
+        document = session.get(RequirementDocument, to_int(documentId, "documentId"))
+        if document is None or document.is_deleted:
+            raise HTTPException(status_code=404, detail=f"RequirementDocument({documentId}) not found")
+        return model_dict(document)
+
+
+@router.patch("/requirement-documents/{documentId}")
+def update_requirement_document(documentId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        document = session.get(RequirementDocument, to_int(documentId, "documentId"))
+        if document is None or document.is_deleted:
+            raise HTTPException(status_code=404, detail=f"RequirementDocument({documentId}) not found")
+        for key in ("name", "source_type", "source_file_name", "source_file_path", "raw_content", "parser_status"):
+            if key in data:
+                setattr(document, key, data[key])
+        session.flush()
+        return model_dict(document)
+
+
+@router.post("/requirement-documents/{documentId}/parse")
+def parse_requirement_document(documentId: str, payload: WritePayload | None = None):
+    with session_scope() as session:
+        try:
+            repo = AitestRepository(session)
+            job = repo.parse_requirement_document(to_int(documentId, "documentId"))
+            blocks = list(session.scalars(select(RequirementDocumentBlock).where(RequirementDocumentBlock.document_id == to_int(documentId, "documentId")).order_by(RequirementDocumentBlock.order_no)))
+            return {"document_id": to_int(documentId, "documentId"), "job": model_dict(job), "blocks": [model_dict(block) for block in blocks], "input": payload_dict(payload)}
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.get("/requirement-documents/{documentId}/blocks")
+def list_requirement_blocks(documentId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        doc_id = to_int(documentId, "documentId")
+        return db_page(session, RequirementDocumentBlock, page_num, page_size, RequirementDocumentBlock.document_id == doc_id, order_by=RequirementDocumentBlock.order_no)
+
+
+@router.post("/requirement-documents/{documentId}/extract-items")
+def extract_requirement_items(documentId: str, payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        try:
+            repo = AitestRepository(session)
+            doc_id = to_int(documentId, "documentId")
+            document = require_db_item(session, RequirementDocument, doc_id, "documentId")
+            config = default_llm_config(session, data.get("config_id") or data.get("configId"))
+            generated_items: list[dict[str, Any]] | None = None
+            source = "placeholder"
+            fallback_reason: str | None = "no_enabled_llm_config"
+            usage: dict[str, Any] = {}
+
+            if config is not None:
+                fallback, settings = require_llm_runtime(config)
+                if fallback is not None:
+                    record_llm_usage(session, config.id, "requirement_extract", duration_ms=1)
+                    fallback_reason = safe_fallback_reason(fallback.get("reason") or fallback.get("error") or fallback.get("status"))
+                else:
+                    blocks = list(
+                        session.scalars(
+                            select(RequirementDocumentBlock)
+                            .where(RequirementDocumentBlock.document_id == doc_id)
+                            .order_by(RequirementDocumentBlock.order_no)
+                        )
+                    )
+                    try:
+                        result = structured_generation_service(config, settings).generate_requirement_items(
+                            document=model_dict(document),
+                            blocks=[model_dict(block) for block in blocks],
+                        )
+                        generated_items = result.records
+                        source = "llm"
+                        fallback_reason = None
+                        usage = {"input_tokens": result.input_tokens, "output_tokens": result.output_tokens, "duration_ms": result.duration_ms}
+                        record_llm_usage(session, config.id, "requirement_extract", result.input_tokens, result.output_tokens, result.duration_ms)
+                    except (LlmClientError, ValueError) as exc:
+                        record_llm_usage(session, config.id, "requirement_extract", duration_ms=1)
+                        fallback_reason = safe_fallback_reason(exc)
+
+            job = repo.extract_requirement_items_placeholder(doc_id, items=generated_items)
+            annotate_generation_job(
+                job,
+                source=source,
+                fallback_reason=fallback_reason,
+                config_id=config.id if config is not None else None,
+                usage=usage,
+            )
+            item_ids = (job.output_payload or {}).get("item_ids", [])
+            items = list(session.scalars(select(RequirementItem).where(RequirementItem.id.in_(item_ids)).order_by(RequirementItem.id))) if item_ids else []
+            return {"document_id": to_int(documentId, "documentId"), "job": model_dict(job), "items": [model_dict(item) for item in items], "input": sanitize_payload(payload_dict(payload))}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.get("/requirement-documents/{documentId}/requirement-items")
+def list_document_requirement_items(documentId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        doc_id = to_int(documentId, "documentId")
+        return db_page(session, RequirementItem, page_num, page_size, RequirementItem.document_id == doc_id, RequirementItem.is_deleted.is_(False), order_by=RequirementItem.id)
+
+
+@router.patch("/requirement-items/{itemId}")
+def update_requirement_item(itemId: str, payload: WritePayload):
+    with session_scope() as session:
+        try:
+            return model_dict(AitestRepository(session).update_requirement_item(to_int(itemId, "itemId"), **payload_dict(payload)))
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.post("/requirement-items/{itemId}/confirm")
+def confirm_requirement_item(itemId: str):
+    with session_scope() as session:
+        try:
+            return model_dict(AitestRepository(session).confirm_requirement_item(to_int(itemId, "itemId")))
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.post("/requirement-items/{itemId}/split")
+def split_requirement_item(itemId: str, payload: WritePayload | None = None):
+    item = ensure_requirement_item_ref(itemId)
+    child = create("requirement_items", {**item, "parent_id": itemId, "title": f"{item.get('title', itemId)} - 拆分项", "status": "draft"})
+    return {"source": item, "children": [child], "input": payload_dict(payload)}
+
+
+@router.post("/requirement-items/merge")
+def merge_requirement_items(payload: WritePayload):
+    data = payload_dict(payload)
+    merged = create("requirement_items", {"title": data.get("title", "合并需求项"), "source_item_ids": data.get("item_ids", []), "status": "draft"})
+    return {"merged": merged}
+
+
+@router.delete("/requirement-items/{itemId}")
+def delete_requirement_item(itemId: str):
+    if str(itemId).isdigit():
+        with session_scope() as session:
+            item = session.get(RequirementItem, int(itemId))
+            if item is not None and not item.is_deleted:
+                item.is_deleted = True
+                session.flush()
+                return {"deleted": True, "id": item.id}
+    return delete("requirement_items", itemId)
+
+
+@router.post("/requirement-libs/{libId}/brain/analyze")
+def analyze_requirement_brain(libId: str):
+    ensure_requirement_lib_ref(libId)
+    brain = create("requirement_brains", {"lib_id": libId, "summary": "需求库分析占位结果。", "risks": [], "relations": []})
+    job = store.create_job("requirement_brain_analyze", {"lib_id": libId})
+    return {"brain": brain, "job": job}
+
+
+@router.get("/requirement-libs/{libId}/brain")
+def get_requirement_brain(libId: str):
+    ensure_requirement_lib_ref(libId)
+    return store.list("requirement_brains", filters={"lib_id": libId})
+
+
+@router.post("/requirement-items/{itemId}/traceability/refresh")
+def refresh_traceability(itemId: str):
+    ensure_requirement_item_ref(itemId)
+    job = store.create_job("refresh_traceability", {"requirement_item_id": itemId})
+    return {"requirement_item_id": itemId, "job": job, "coverage": coverage_matrix(itemId)}
+
+
+@router.get("/generation-jobs/{jobId}")
+def get_generation_job(jobId: str):
+    with session_scope() as session:
+        job = session.get(GenerationJob, to_int(jobId, "jobId"))
+        if job is not None:
+            return model_dict(job)
+    return ensure("generation_jobs", jobId)
+
+
+@router.get("/generation-jobs/{jobId}/events")
+def generation_job_events(jobId: str):
+    with session_scope() as session:
+        db_job = session.get(GenerationJob, to_int(jobId, "jobId")) if str(jobId).isdigit() else None
+        job = model_dict(db_job) if db_job is not None else ensure("generation_jobs", jobId)
+
+    def events():
+        for event in [
+            {"event": "started", "progress": 0, "job_id": jobId},
+            {"event": "progress", "progress": job.get("progress", 100), "job_id": jobId},
+            {"event": job.get("status", "completed"), "progress": job.get("progress", 100), "job_id": jobId},
+        ]:
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream")
+
+
+@router.post("/generation-jobs/{jobId}/cancel")
+def cancel_generation_job(jobId: str):
+    with session_scope() as session:
+        db_job = session.get(GenerationJob, to_int(jobId, "jobId")) if str(jobId).isdigit() else None
+        if db_job is not None:
+            db_job.status = "cancelled"
+            db_job.progress = 100
+            session.flush()
+            return model_dict(db_job)
+    ensure("generation_jobs", jobId)
+    return update("generation_jobs", jobId, {"status": "cancelled", "progress": 100})
+
+
+@router.post("/requirement-items/{itemId}/generate-test-points")
+def generate_test_points(itemId: str, payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        try:
+            repo = AitestRepository(session)
+            item_id = to_int(itemId, "itemId")
+            item = require_db_item(session, RequirementItem, item_id, "itemId")
+            config = default_llm_config(session, data.get("config_id") or data.get("configId"))
+            generated_points: list[dict[str, Any]] | None = None
+            source = "placeholder"
+            fallback_reason: str | None = "no_enabled_llm_config"
+            usage: dict[str, Any] = {}
+
+            if config is not None:
+                fallback, settings = require_llm_runtime(config)
+                if fallback is not None:
+                    record_llm_usage(session, config.id, "test_point_generation", duration_ms=1)
+                    fallback_reason = safe_fallback_reason(fallback.get("reason") or fallback.get("error") or fallback.get("status"))
+                else:
+                    try:
+                        result = structured_generation_service(config, settings).generate_test_points(item=model_dict(item))
+                        generated_points = result.records
+                        source = "llm"
+                        fallback_reason = None
+                        usage = {"input_tokens": result.input_tokens, "output_tokens": result.output_tokens, "duration_ms": result.duration_ms}
+                        record_llm_usage(session, config.id, "test_point_generation", result.input_tokens, result.output_tokens, result.duration_ms)
+                    except (LlmClientError, ValueError) as exc:
+                        record_llm_usage(session, config.id, "test_point_generation", duration_ms=1)
+                        fallback_reason = safe_fallback_reason(exc)
+
+            job = repo.generate_test_points(item_id, points=generated_points)
+            annotate_generation_job(
+                job,
+                source=source,
+                fallback_reason=fallback_reason,
+                config_id=config.id if config is not None else None,
+                usage=usage,
+            )
+            point_ids = (job.output_payload or {}).get("test_point_ids", [])
+            points = list(session.scalars(select(TestPoint).where(TestPoint.id.in_(point_ids)).order_by(TestPoint.id))) if point_ids else []
+            return {"job": model_dict(job), "test_points": [model_dict(point) for point in points], "input": sanitize_payload(payload_dict(payload))}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.get("/requirement-items/{itemId}/test-points")
+def list_test_points(itemId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        iid = to_int(itemId, "itemId")
+        return db_page(session, TestPoint, page_num, page_size, TestPoint.requirement_item_id == iid, TestPoint.is_deleted.is_(False), order_by=TestPoint.id)
+
+
+@router.patch("/test-points/{testPointId}")
+def update_test_point(testPointId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        point = session.get(TestPoint, to_int(testPointId, "testPointId"))
+        if point is None or point.is_deleted:
+            raise HTTPException(status_code=404, detail=f"TestPoint({testPointId}) not found")
+        for key in ("title", "point_type", "target", "priority", "suggested_method", "coverage_status", "note"):
+            if key in data:
+                setattr(point, key, data[key])
+        session.flush()
+        return model_dict(point)
+
+
+@router.get("/requirement-items/{itemId}/coverage-matrix")
+def coverage_matrix(itemId: str):
+    iid = to_int(itemId, "itemId")
+    with session_scope() as session:
+        item = session.get(RequirementItem, iid)
+        if item is None or item.is_deleted:
+            raise HTTPException(status_code=404, detail=f"RequirementItem({itemId}) not found")
+        points = list(session.scalars(select(TestPoint).where(TestPoint.requirement_item_id == iid, TestPoint.is_deleted.is_(False)).order_by(TestPoint.id)))
+        cases = list(session.scalars(select(TestCase).where(TestCase.requirement_item_id == iid, TestCase.is_deleted.is_(False)).order_by(TestCase.id)))
+        covered_point_ids = {case.test_point_id for case in cases if case.test_point_id is not None}
+        coverage_rate = round(len(covered_point_ids) / len(points), 4) if points else 0
+        return {"requirement_item_id": iid, "test_points": [model_dict(point) for point in points], "test_cases": [model_dict(case) for case in cases], "coverage_rate": coverage_rate}
+
+
+@router.post("/requirement-items/{itemId}/refresh-coverage")
+def refresh_coverage(itemId: str):
+    return coverage_matrix(itemId)
+
+
+@router.post("/requirement-items/{itemId}/generate-test-cases")
+def generate_test_cases(itemId: str, payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        try:
+            repo = AitestRepository(session)
+            item_id = to_int(itemId, "itemId")
+            item = require_db_item(session, RequirementItem, item_id, "itemId")
+            generation_mode = data.get("mode", "standard")
+            test_point_ids = data.get("test_point_ids") or data.get("testPointIds")
+            if isinstance(test_point_ids, list):
+                selected_point_ids = [to_int(point_id, "test_point_id") for point_id in test_point_ids]
+            else:
+                selected_point_ids = None
+            config = default_llm_config(session, data.get("config_id") or data.get("configId"))
+            generated_cases: list[dict[str, Any]] | None = None
+            source = "placeholder"
+            fallback_reason: str | None = "no_enabled_llm_config"
+            usage: dict[str, Any] = {}
+
+            if config is not None:
+                fallback, settings = require_llm_runtime(config)
+                if fallback is not None:
+                    record_llm_usage(session, config.id, "test_case_generation", duration_ms=1)
+                    fallback_reason = safe_fallback_reason(fallback.get("reason") or fallback.get("error") or fallback.get("status"))
+                else:
+                    point_stmt = select(TestPoint).where(TestPoint.requirement_item_id == item_id, TestPoint.is_deleted.is_(False))
+                    if selected_point_ids:
+                        point_stmt = point_stmt.where(TestPoint.id.in_(selected_point_ids))
+                    points = list(session.scalars(point_stmt.order_by(TestPoint.id)))
+                    if not points:
+                        record_llm_usage(session, config.id, "test_case_generation", duration_ms=1)
+                        fallback_reason = "no_test_points_available"
+                    else:
+                        try:
+                            result = structured_generation_service(config, settings).generate_test_cases(
+                                item=model_dict(item),
+                                points=[model_dict(point) for point in points],
+                                generation_mode=generation_mode,
+                            )
+                            generated_cases = result.records
+                            source = "llm"
+                            fallback_reason = None
+                            usage = {"input_tokens": result.input_tokens, "output_tokens": result.output_tokens, "duration_ms": result.duration_ms}
+                            record_llm_usage(session, config.id, "test_case_generation", result.input_tokens, result.output_tokens, result.duration_ms)
+                        except (LlmClientError, ValueError) as exc:
+                            record_llm_usage(session, config.id, "test_case_generation", duration_ms=1)
+                            fallback_reason = safe_fallback_reason(exc)
+
+            job = repo.generate_test_cases(item_id, test_point_ids=selected_point_ids, generation_mode=generation_mode, cases=generated_cases)
+            annotate_generation_job(
+                job,
+                source=source,
+                fallback_reason=fallback_reason,
+                config_id=config.id if config is not None else None,
+                usage=usage,
+            )
+            case_ids = (job.output_payload or {}).get("test_case_ids", [])
+            cases = list(session.scalars(select(TestCase).where(TestCase.id.in_(case_ids)).order_by(TestCase.id))) if case_ids else []
+            serialized = [model_dict(case) for case in cases]
+            return {"job": model_dict(job), "test_cases": serialized, "cases": serialized}
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.get("/requirement-items/{itemId}/test-cases")
+def list_test_cases(itemId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        iid = to_int(itemId, "itemId")
+        return db_page(session, TestCase, page_num, page_size, TestCase.requirement_item_id == iid, TestCase.is_deleted.is_(False), order_by=TestCase.id)
+
+
+@router.get("/projects/{projectId}/test-cases")
+def list_project_test_cases(
+    projectId: str,
+    page_num: int = Query(1, alias="page"),
+    page_size: int = Query(20, alias="pageSize"),
+    libId: str | None = None,
+    requirementItemId: str | None = None,
+):
+    with session_scope() as session:
+        project = require_db_item(session, Project, projectId, "projectId")
+        criteria: list[Any] = [TestCase.project_id == project.id, TestCase.is_deleted.is_(False)]
+        if libId is not None:
+            criteria.append(TestCase.lib_id == to_int(libId, "libId"))
+        if requirementItemId is not None:
+            criteria.append(TestCase.requirement_item_id == to_int(requirementItemId, "requirementItemId"))
+        return db_page(session, TestCase, page_num, page_size, *criteria, order_by=TestCase.id.desc())
+
+
+@router.get("/test-cases/export")
+def export_test_cases_endpoint(
+    projectId: str | None = None,
+    project_id: str | None = None,
+    requirementItemId: str | None = None,
+    requirement_item_id: str | None = None,
+    caseIds: str | None = None,
+    case_ids: str | None = None,
+    caseType: str | None = None,
+    case_type: str | None = None,
+    format: str = Query("markdown"),
+):
+    with session_scope() as session:
+        try:
+            return export_test_cases_payload(
+                session,
+                project_id=to_int(project_id or projectId, "projectId") if (project_id or projectId) is not None else None,
+                requirement_item_id=to_int(requirement_item_id or requirementItemId, "requirementItemId") if (requirement_item_id or requirementItemId) is not None else None,
+                case_ids=parse_int_list(case_ids or caseIds, "caseIds"),
+                case_type=case_type or caseType,
+                output_format=format,
+            )
+        except ExportPayloadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/test-cases/{caseId}")
+def update_test_case(caseId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        case = session.get(TestCase, to_int(caseId, "caseId"))
+        if case is None or case.is_deleted:
+            raise HTTPException(status_code=404, detail=f"TestCase({caseId}) not found")
+        for key in ("title", "case_type", "precondition", "steps", "expected_result", "priority", "tags", "status"):
+            if key in data:
+                setattr(case, key, data[key])
+        session.flush()
+        return model_dict(case)
+
+
+@router.post("/test-cases/rule-validate")
+def rule_validate_test_cases(payload: WritePayload):
+    return {"valid": True, "score": 85, "findings": [], "input": payload_dict(payload)}
+
+
+@router.post("/test-cases/ai-review")
+def ai_review_test_cases(payload: WritePayload):
+    return {"reviewed": True, "score": 82, "suggestions": ["建议补充异常路径和权限边界。"], "input": payload_dict(payload)}
+
+
+@router.post("/test-cases/{caseId}/confirm")
+def confirm_test_case(caseId: str):
+    with session_scope() as session:
+        case = session.get(TestCase, to_int(caseId, "caseId"))
+        if case is None or case.is_deleted:
+            raise HTTPException(status_code=404, detail=f"TestCase({caseId}) not found")
+        case.status = "confirmed"
+        session.flush()
+        return model_dict(case)
+
+
+@router.delete("/test-cases/{caseId}")
+def delete_test_case(caseId: str):
+    with session_scope() as session:
+        case = session.get(TestCase, to_int(caseId, "caseId"))
+        if case is None or case.is_deleted:
+            raise HTTPException(status_code=404, detail=f"TestCase({caseId}) not found")
+        case.is_deleted = True
+        session.flush()
+        return {"deleted": True, "id": case.id}
+
+
+@router.post("/projects/{projectId}/test-rounds")
+def create_test_round(projectId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        try:
+            round_ = AitestRepository(session).create_test_round(
+                to_int(projectId, "projectId"),
+                data.get("name") or "未命名测试轮次",
+                to_int(data["requirement_item_id"], "requirement_item_id") if data.get("requirement_item_id") is not None else None,
+                to_int(data["document_id"], "document_id") if data.get("document_id") is not None else None,
+            )
+            return model_dict(round_)
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.get("/projects/{projectId}/test-rounds")
+def list_project_test_rounds(
+    projectId: str,
+    page_num: int = Query(1, alias="page"),
+    page_size: int = Query(20, alias="pageSize"),
+    status: str | None = None,
+):
+    with session_scope() as session:
+        project = require_db_item(session, Project, projectId, "projectId")
+        criteria: list[Any] = [TestRound.project_id == project.id]
+        if status:
+            criteria.append(TestRound.status == status)
+        return db_page(session, TestRound, page_num, page_size, *criteria, order_by=TestRound.id.desc())
+
+
+@router.get("/test-rounds/{roundId}")
+def get_test_round(roundId: str):
+    with session_scope() as session:
+        round_ = session.get(TestRound, to_int(roundId, "roundId"))
+        if round_ is None:
+            raise HTTPException(status_code=404, detail=f"TestRound({roundId}) not found")
+        return model_dict(round_)
+
+
+@router.patch("/test-rounds/{roundId}/complete")
+def complete_test_round(roundId: str):
+    with session_scope() as session:
+        round_ = session.get(TestRound, to_int(roundId, "roundId"))
+        if round_ is None:
+            raise HTTPException(status_code=404, detail=f"TestRound({roundId}) not found")
+        round_.status = "completed"
+        session.flush()
+        return model_dict(round_)
+
+
+@router.post("/executions")
+def create_execution(payload: WritePayload):
+    data = payload_dict(payload)
+    status_map = {"passed": "pass", "failed": "fail", "blocked": "blocked", "skipped": "skipped"}
+    with session_scope() as session:
+        try:
+            execution = AitestRepository(session).create_execution_record(
+                case_id=to_int(data.get("case_id"), "case_id"),
+                status=status_map.get(data.get("status", "passed"), data.get("status", "passed")),
+                round_id=to_int(data["round_id"], "round_id") if data.get("round_id") is not None else None,
+                executor_type=data.get("executor_type", "manual"),
+                actual_result=data.get("actual_result"),
+                execution_time=data.get("execution_time"),
+                block_reason=data.get("block_reason"),
+                skip_reason=data.get("skip_reason"),
+                pass_remark=data.get("pass_remark"),
+                create_defect=data.get("create_defect", True),
+                defect_title=data.get("defect_title"),
+            )
+            result = model_dict(execution)
+            result["status_alias"] = data.get("status", result["status"])
+            return result
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.post("/executions/batch")
+def batch_create_executions(payload: WritePayload):
+    data = payload_dict(payload)
+    rows = data.get("executions") or data.get("cases") or data.get("case_ids") or []
+    status_map = {"passed": "pass", "failed": "fail", "blocked": "blocked", "skipped": "skipped"}
+    executions: list[dict[str, Any]] = []
+    with session_scope() as session:
+        repo = AitestRepository(session)
+        try:
+            for row in rows:
+                row_data = row if isinstance(row, dict) else {"case_id": row}
+                merged = {**data, **row_data}
+                execution = repo.create_execution_record(
+                    case_id=to_int(merged.get("case_id"), "case_id"),
+                    status=status_map.get(merged.get("status", "passed"), merged.get("status", "passed")),
+                    round_id=to_int(merged["round_id"], "round_id") if merged.get("round_id") is not None else None,
+                    executor_type=merged.get("executor_type", "manual"),
+                    actual_result=merged.get("actual_result"),
+                    execution_time=merged.get("execution_time"),
+                    block_reason=merged.get("block_reason"),
+                    skip_reason=merged.get("skip_reason"),
+                    pass_remark=merged.get("pass_remark"),
+                    create_defect=merged.get("create_defect", True),
+                    defect_title=merged.get("defect_title"),
+                )
+                executions.append(model_dict(execution))
+            return {"executions": executions, "summary": {"total": len(executions), "passed": len([item for item in executions if item.get("status") == "pass"])}}
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.get("/executions/history")
+def execution_history(projectId: str | None = None, requirementItemId: str | None = None, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    criteria = []
+    if projectId is not None:
+        criteria.append(Execution.project_id == to_int(projectId, "projectId"))
+    if requirementItemId is not None:
+        criteria.append(Execution.requirement_item_id == to_int(requirementItemId, "requirementItemId"))
+    with session_scope() as session:
+        return db_page(session, Execution, page_num, page_size, *criteria, order_by=Execution.id.desc())
+
+
+@router.get("/executions/statistics")
+def execution_statistics(projectId: str | None = None):
+    criteria = [Execution.project_id == to_int(projectId, "projectId")] if projectId is not None else []
+    with session_scope() as session:
+        records = list(session.scalars(select(Execution).where(*criteria)))
+        return {"total": len(records), "passed": len([item for item in records if item.status in {"pass", "passed"}]), "failed": len([item for item in records if item.status in {"fail", "failed"}]), "blocked": len([item for item in records if item.status == "blocked"])}
+
+
+@router.get("/defects")
+def list_defects(projectId: str | None = None, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    criteria = [Defect.project_id == to_int(projectId, "projectId")] if projectId is not None else []
+    with session_scope() as session:
+        return db_page(session, Defect, page_num, page_size, *criteria, order_by=Defect.id.desc())
+
+
+@router.get("/defects/export")
+def export_defects_endpoint(projectId: str | None = None, project_id: str | None = None, status: str | None = None, format: str = Query("markdown")):
+    with session_scope() as session:
+        try:
+            return export_defects(
+                session,
+                project_id=to_int(project_id or projectId, "projectId") if (project_id or projectId) is not None else None,
+                status=status,
+                output_format=format,
+            )
+        except ExportPayloadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/defects/{defectId}")
+def update_defect(defectId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        defect = session.get(Defect, to_int(defectId, "defectId"))
+        if defect is None:
+            raise HTTPException(status_code=404, detail=f"Defect({defectId}) not found")
+        for key in ("title", "actual_result", "severity", "status", "remark"):
+            if key in data:
+                setattr(defect, key, data[key])
+        session.flush()
+        return model_dict(defect)
+
+
+@router.get("/defects/{defectId}/copy-text")
+def defect_copy_text(defectId: str):
+    with session_scope() as session:
+        defect = session.get(Defect, to_int(defectId, "defectId"))
+        if defect is None:
+            raise HTTPException(status_code=404, detail=f"Defect({defectId}) not found")
+        return {"text": f"标题：{defect.title}\n严重级别：{defect.severity}\n状态：{defect.status}"}
+
+
+@router.get("/projects/{projectId}/api-test-libs")
+def list_api_test_libs(projectId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        pid = to_int(projectId, "projectId")
+        return db_page(session, ApiTestLib, page_num, page_size, ApiTestLib.project_id == pid, ApiTestLib.is_deleted.is_(False), order_by=ApiTestLib.id.desc())
+
+
+@router.post("/projects/{projectId}/api-test-libs")
+def create_api_test_lib(projectId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        require_db_item(session, Project, projectId, "projectId")
+        lib = ApiTestLib(
+            project_id=to_int(projectId, "projectId"),
+            source_document_id=to_int(data["source_document_id"], "source_document_id") if data.get("source_document_id") is not None else None,
+            name=data.get("name") or "Unnamed API Test Lib",
+            description=data.get("description"),
+            import_source=data.get("import_source"),
+        )
+        session.add(lib)
+        session.flush()
+        r2_log(session, "api_test_lib", "create", lib.id, {"project_id": lib.project_id})
+        return model_dict(lib)
+
+
+@router.patch("/api-test-libs/{libId}")
+def update_api_test_lib(libId: str, payload: WritePayload):
+    with session_scope() as session:
+        lib = require_db_item(session, ApiTestLib, libId, "libId")
+        update_columns(lib, payload_dict(payload), ("name", "description", "import_source"))
+        session.flush()
+        r2_log(session, "api_test_lib", "update", lib.id)
+        return model_dict(lib)
+
+
+@router.delete("/api-test-libs/{libId}")
+def delete_api_test_lib(libId: str):
+    with session_scope() as session:
+        lib = require_db_item(session, ApiTestLib, libId, "libId")
+        lib.is_deleted = True
+        session.flush()
+        r2_log(session, "api_test_lib", "delete", lib.id)
+        return {"deleted": True, "id": lib.id}
+
+
+@router.post("/api-test-libs/{libId}/import-documents")
+def import_api_documents(libId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    try:
+        import_result = parse_api_import_payload(data)
+    except ApiImportError as exc:
+        raise HTTPException(status_code=400, detail=safe_import_error_detail(exc)) from exc
+    with session_scope() as session:
+        lib = require_db_item(session, ApiTestLib, libId, "libId")
+        response = _persist_imported_apis(session, lib, import_result, "import_document")
+        return response
+
+
+@router.get("/api-test-libs/{libId}/apis")
+def list_apis(libId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        require_db_item(session, ApiTestLib, libId, "libId")
+        return db_page(session, ApiEndpoint, page_num, page_size, ApiEndpoint.lib_id == to_int(libId, "libId"), ApiEndpoint.is_deleted.is_(False), order_by=ApiEndpoint.id.desc())
+
+
+@router.post("/api-test-libs/{libId}/apis/import")
+def import_apis(libId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    try:
+        import_result = parse_api_import_payload(data)
+    except ApiImportError as exc:
+        raise HTTPException(status_code=400, detail=safe_import_error_detail(exc)) from exc
+    with session_scope() as session:
+        lib = require_db_item(session, ApiTestLib, libId, "libId")
+        return _persist_imported_apis(session, lib, import_result, "import")
+
+
+def _persist_imported_apis(session: Any, lib: ApiTestLib, import_result: Any, action: str) -> dict[str, Any]:
+    created: list[dict[str, Any]] = []
+    created_cases: list[dict[str, Any]] = []
+    for index, api_data in enumerate(import_result.endpoints):
+        endpoint = ApiEndpoint(
+            lib_id=lib.id,
+            requirement_item_id=to_int(api_data["requirement_item_id"], "requirement_item_id") if api_data.get("requirement_item_id") is not None else None,
+            name=api_data.get("name") or f"{api_data.get('method', 'GET')} {api_data.get('path', '/')}",
+            method=(api_data.get("method") or "GET").upper(),
+            path=api_data.get("path") or "/",
+            headers_schema=sanitize_payload(api_data.get("headers_schema") or {}),
+            query_schema=sanitize_payload(api_data.get("query_schema") or {}),
+            body_schema=sanitize_payload(api_data.get("body_schema") or {}),
+            response_schema=sanitize_payload(api_data.get("response_schema") or {}),
+            description=api_data.get("description"),
+        )
+        session.add(endpoint)
+        session.flush()
+        created.append(model_dict(endpoint))
+        if import_result.generate_cases:
+            case_data = import_result.test_cases[index]
+            expected_status = int(case_data.get("expected_status", 200))
+            case = ApiTestCase(
+                endpoint_id=endpoint.id,
+                lib_id=lib.id,
+                requirement_item_id=endpoint.requirement_item_id,
+                name=case_data.get("name") or f"{endpoint.name} success",
+                category=case_data.get("category", "contract"),
+                request_headers=sanitize_payload(case_data.get("request_headers") or {}),
+                request_query=sanitize_payload(case_data.get("request_query") or {}),
+                request_body=sanitize_payload(case_data.get("request_body") or {}),
+                content_type=case_data.get("content_type", "application/json"),
+                expected_status=expected_status,
+                assertions=case_data.get("assertions") or [{"type": "status_code", "expected": expected_status}],
+                status=case_data.get("status", "ready"),
+                sort_order=index + 1,
+            )
+            session.add(case)
+            session.flush()
+            created_cases.append(model_dict(case))
+    lib.import_source = import_result.source
+    lib.latest_sync_at = datetime.now(timezone.utc)
+    session.flush()
+    r2_log(session, "api_endpoint", action, None, {"lib_id": lib.id, "count": len(created), "source": import_result.source, "test_case_count": len(created_cases)})
+    response: dict[str, Any] = {"imported": len(created), "apis": created}
+    if import_result.generate_cases:
+        response["test_cases"] = created_cases
+        response["test_case_count"] = len(created_cases)
+    return response
+
+
+@router.patch("/apis/{apiId}")
+def update_api(apiId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        endpoint = require_db_item(session, ApiEndpoint, apiId, "apiId")
+        update_columns(endpoint, data, ("name", "method", "path", "headers_schema", "query_schema", "body_schema", "response_schema", "description"))
+        if endpoint.method:
+            endpoint.method = endpoint.method.upper()
+        session.flush()
+        r2_log(session, "api_endpoint", "update", endpoint.id)
+        return model_dict(endpoint)
+
+
+@router.delete("/apis/{apiId}")
+def delete_api(apiId: str):
+    with session_scope() as session:
+        endpoint = require_db_item(session, ApiEndpoint, apiId, "apiId")
+        endpoint.is_deleted = True
+        session.flush()
+        r2_log(session, "api_endpoint", "delete", endpoint.id)
+        return {"deleted": True, "id": endpoint.id}
+
+
+@router.post("/apis/debug")
+def debug_api(payload: WritePayload):
+    result = run_api_request(payload_dict(payload))
+    response = result.get("response_snapshot") or {}
+    return {
+        "status_code": response.get("status_code"),
+        "duration_ms": result["duration_ms"],
+        "headers": response.get("headers", {}),
+        "body": response.get("body"),
+        "request": result["request_snapshot"],
+        "assertion_results": result["assertion_results"],
+        "status": result["status"],
+        "error_message": result["error_message"],
+    }
+
+
+def _active_api_environment(session: Any, lib_id: int) -> ApiEnvironment | None:
+    return session.scalar(
+        select(ApiEnvironment).where(
+            ApiEnvironment.lib_id == lib_id,
+            ApiEnvironment.is_active.is_(True),
+            ApiEnvironment.is_deleted.is_(False),
+        )
+    )
+
+
+def _api_case_payload(case: ApiTestCase, endpoint: ApiEndpoint, environment: ApiEnvironment | None, overrides: dict[str, Any]) -> dict[str, Any]:
+    env_headers = environment.headers if environment else {}
+    headers = {**(env_headers or {}), **(case.request_headers or {}), **(overrides.get("headers") or {})}
+    assertions = overrides.get("assertions") or case.assertions or [{"type": "status_code", "expected": case.expected_status}]
+    return {
+        "method": overrides.get("method") or endpoint.method,
+        "url": overrides.get("url"),
+        "base_url": overrides.get("base_url") or overrides.get("baseUrl") or (environment.base_url if environment else None),
+        "path": overrides.get("path") or endpoint.path,
+        "headers": headers,
+        "query": overrides.get("query") or overrides.get("params") or case.request_query or {},
+        "body": overrides["body"] if "body" in overrides else case.request_body,
+        "content_type": overrides.get("content_type") or overrides.get("contentType") or case.content_type,
+        "timeout_ms": overrides.get("timeout_ms") or overrides.get("timeoutMs"),
+        "assertions": assertions,
+    }
+
+
+def _create_api_execution(
+    session: Any,
+    case: ApiTestCase,
+    run_type: str,
+    result: dict[str, Any],
+    environment: ApiEnvironment | None = None,
+) -> ApiExecution:
+    execution = ApiExecution(
+        lib_id=case.lib_id,
+        endpoint_id=case.endpoint_id,
+        case_id=case.id,
+        environment_id=environment.id if environment else None,
+        run_type=run_type,
+        status=result["status"],
+        request_snapshot=sanitize_api_payload(result.get("request_snapshot")),
+        response_snapshot=sanitize_api_payload(result.get("response_snapshot")),
+        assertion_results=sanitize_api_payload(result.get("assertion_results") or []),
+        duration_ms=result.get("duration_ms"),
+        error_message=sanitize_api_payload({"error": result.get("error_message")}).get("error"),
+    )
+    session.add(execution)
+    session.flush()
+    return execution
+
+
+@router.post("/apis/{apiId}/generate-test-cases")
+def generate_api_test_cases(apiId: str, payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        api = require_db_item(session, ApiEndpoint, apiId, "apiId")
+        case = ApiTestCase(
+            endpoint_id=api.id,
+            lib_id=api.lib_id,
+            requirement_item_id=api.requirement_item_id,
+            name=data.get("name") or f"{api.name} normal response",
+            category=data.get("category", "contract"),
+            request_headers=sanitize_payload(data.get("request_headers") or {}),
+            request_query=sanitize_payload(data.get("request_query") or {}),
+            request_body=sanitize_payload(data.get("request_body")),
+            content_type=data.get("content_type", "application/json"),
+            expected_status=int(data.get("expected_status", 200)),
+            assertions=data.get("assertions") or [{"type": "status_code", "expected": 200}],
+            status="draft",
+        )
+        session.add(case)
+        session.flush()
+        lib = require_db_item(session, ApiTestLib, api.lib_id, "lib_id")
+        job = create_db_job(session, lib.project_id, "generate_api_test_cases", {"api_id": api.id, **data}, {"test_case_ids": [case.id]})
+        result = model_dict(case)
+        result["api_id"] = case.endpoint_id
+        return {"job": model_dict(job), "test_cases": [result]}
+
+
+@router.get("/apis/{apiId}/test-cases")
+def list_api_test_cases(apiId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        require_db_item(session, ApiEndpoint, apiId, "apiId")
+        result = db_page(session, ApiTestCase, page_num, page_size, ApiTestCase.endpoint_id == to_int(apiId, "apiId"), ApiTestCase.is_deleted.is_(False), order_by=ApiTestCase.id.desc())
+        for item in result["list"]:
+            item["api_id"] = item.get("endpoint_id")
+        return result
+
+
+@router.post("/api-test-cases/{caseId}/execute")
+def execute_api_test_case(caseId: str, payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        case = require_db_item(session, ApiTestCase, caseId, "caseId")
+        endpoint = require_db_item(session, ApiEndpoint, case.endpoint_id, "endpoint_id")
+        environment_id = data.get("environment_id") or data.get("environmentId")
+        environment = require_db_item(session, ApiEnvironment, environment_id, "environment_id") if environment_id else _active_api_environment(session, case.lib_id)
+        if environment is not None or data.get("base_url") or data.get("baseUrl"):
+            result = run_api_request(_api_case_payload(case, endpoint, environment, data))
+            execution = _create_api_execution(session, case, "case", result, environment)
+        else:
+            execution = ApiExecution(
+                lib_id=case.lib_id,
+                endpoint_id=case.endpoint_id,
+                case_id=case.id,
+                run_type="case",
+                status="passed",
+                request_snapshot=sanitize_payload({"method": endpoint.method, "path": endpoint.path, "headers": case.request_headers, "query": case.request_query, "body": case.request_body}),
+                response_snapshot={"status_code": case.expected_status, "body": {"placeholder": True}},
+                assertion_results=[{"type": "status_code", "passed": True, "expected": case.expected_status, "actual": case.expected_status}],
+                duration_ms=20,
+            )
+            session.add(execution)
+            session.flush()
+        r2_log(session, "api_execution", "execute_case", execution.id, {"case_id": case.id})
+        return model_dict(execution)
+
+
+@router.post("/api-test-cases/batch-executions")
+def batch_execute_api_test_cases(payload: WritePayload):
+    data = payload_dict(payload)
+    ids = data.get("case_ids", [])
+    executions = []
+    with session_scope() as session:
+        environment_id = data.get("environment_id") or data.get("environmentId")
+        specified_environment = require_db_item(session, ApiEnvironment, environment_id, "environment_id") if environment_id else None
+        for case_id in ids:
+            case = require_db_item(session, ApiTestCase, case_id, "case_id")
+            endpoint = require_db_item(session, ApiEndpoint, case.endpoint_id, "endpoint_id")
+            environment = specified_environment or _active_api_environment(session, case.lib_id)
+            if environment is not None or data.get("base_url") or data.get("baseUrl"):
+                result = run_api_request(_api_case_payload(case, endpoint, environment, data))
+                execution = _create_api_execution(session, case, "batch", result, environment)
+            else:
+                execution = ApiExecution(
+                    lib_id=case.lib_id,
+                    endpoint_id=case.endpoint_id,
+                    case_id=case.id,
+                    run_type="batch",
+                    status="passed",
+                    request_snapshot=sanitize_payload({"method": endpoint.method, "path": endpoint.path, "headers": case.request_headers, "query": case.request_query, "body": case.request_body}),
+                    response_snapshot={"status_code": case.expected_status, "body": {"placeholder": True}},
+                    assertion_results=[{"type": "status_code", "passed": True, "expected": case.expected_status, "actual": case.expected_status}],
+                    duration_ms=20,
+                )
+                session.add(execution)
+                session.flush()
+            executions.append(model_dict(execution))
+        r2_log(session, "api_execution", "batch_execute", None, {"count": len(executions)})
+        return {"executions": executions}
+
+
+@router.get("/api-test-libs/{libId}/environments")
+def list_api_environments(libId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        require_db_item(session, ApiTestLib, libId, "libId")
+        return db_page(session, ApiEnvironment, page_num, page_size, ApiEnvironment.lib_id == to_int(libId, "libId"), ApiEnvironment.is_deleted.is_(False), order_by=ApiEnvironment.id.desc())
+
+
+@router.post("/api-test-libs/{libId}/environments")
+def create_api_environment(libId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        require_db_item(session, ApiTestLib, libId, "libId")
+        env = ApiEnvironment(
+            lib_id=to_int(libId, "libId"),
+            name=data.get("name") or "Default",
+            base_url=data.get("base_url") or data.get("baseUrl") or "http://localhost",
+            headers=sanitize_payload(data.get("headers") or {}),
+            variables=sanitize_payload(data.get("variables") or {}),
+            is_active=bool(data.get("is_active", data.get("active", False))),
+            sort_order=int(data.get("sort_order", 0)),
+        )
+        session.add(env)
+        session.flush()
+        r2_log(session, "api_environment", "create", env.id, {"lib_id": libId})
+        return model_dict(env)
+
+
+@router.patch("/api-environments/{envId}")
+def update_api_environment(envId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        env = require_db_item(session, ApiEnvironment, envId, "envId")
+        if "baseUrl" in data and "base_url" not in data:
+            data["base_url"] = data["baseUrl"]
+        if "active" in data and "is_active" not in data:
+            data["is_active"] = data["active"]
+        update_columns(env, data, ("name", "base_url", "headers", "variables", "is_active", "sort_order"))
+        session.flush()
+        r2_log(session, "api_environment", "update", env.id)
+        return model_dict(env)
+
+
+@router.post("/api-environments/{envId}/activate")
+def activate_api_environment(envId: str):
+    with session_scope() as session:
+        env = require_db_item(session, ApiEnvironment, envId, "envId")
+        session.execute(text("UPDATE api_environment SET is_active = 0 WHERE lib_id = :lib_id"), {"lib_id": env.lib_id})
+        env.is_active = True
+        session.flush()
+        r2_log(session, "api_environment", "activate", env.id, {"lib_id": env.lib_id})
+        return model_dict(env)
+
+
+@router.get("/api-test-libs/{libId}/scenarios")
+def list_api_scenarios(libId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        require_db_item(session, ApiTestLib, libId, "libId")
+        return db_page(session, ApiScenario, page_num, page_size, ApiScenario.lib_id == to_int(libId, "libId"), order_by=ApiScenario.id.desc())
+
+
+@router.post("/api-test-libs/{libId}/scenarios")
+def create_api_scenario(libId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        require_db_item(session, ApiTestLib, libId, "libId")
+        scenario = ApiScenario(
+            lib_id=to_int(libId, "libId"),
+            name=data.get("name") or "API Scenario",
+            description=data.get("description"),
+            nodes=sanitize_scenario_nodes(data.get("nodes") or []),
+            edges=sanitize_payload(data.get("edges") or []),
+            data_mappings=sanitize_scenario_mapping_definition(data.get("data_mappings") or data.get("dataMappings") or {}),
+        )
+        session.add(scenario)
+        session.flush()
+        r2_log(session, "api_scenario", "create", scenario.id, {"lib_id": libId})
+        return model_dict(scenario)
+
+
+@router.patch("/api-scenarios/{scenarioId}")
+def update_api_scenario(scenarioId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    if "dataMappings" in data and "data_mappings" not in data:
+        data["data_mappings"] = data["dataMappings"]
+    with session_scope() as session:
+        scenario = require_db_item(session, ApiScenario, scenarioId, "scenarioId")
+        if "name" in data:
+            scenario.name = sanitize_payload(data["name"])
+        if "description" in data:
+            scenario.description = sanitize_payload(data["description"])
+        if "nodes" in data:
+            scenario.nodes = sanitize_scenario_nodes(data["nodes"])
+        if "edges" in data:
+            scenario.edges = sanitize_payload(data["edges"])
+        if "data_mappings" in data:
+            scenario.data_mappings = sanitize_scenario_mapping_definition(data["data_mappings"])
+        session.flush()
+        r2_log(session, "api_scenario", "update", scenario.id)
+        return model_dict(scenario)
+
+
+@router.post("/api-scenarios/{scenarioId}/execute")
+def execute_api_scenario(scenarioId: str, payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        scenario = require_db_item(session, ApiScenario, scenarioId, "scenarioId")
+        result = run_api_scenario(session, scenario, data)
+        r2_log(session, "api_execution", "execute_scenario", result.get("execution_id") or result.get("id"), {"scenario_id": scenario.id})
+        return result
+
+
+@router.get("/api-test-libs/{libId}/schedules")
+def list_api_schedules(libId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        require_db_item(session, ApiTestLib, libId, "libId")
+        return db_page(session, ApiSchedule, page_num, page_size, ApiSchedule.lib_id == to_int(libId, "libId"), ApiSchedule.is_deleted.is_(False), order_by=ApiSchedule.id.desc())
+
+
+@router.post("/api-test-libs/{libId}/schedules")
+def create_api_schedule(libId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        require_db_item(session, ApiTestLib, libId, "libId")
+        schedule = ApiSchedule(
+            lib_id=to_int(libId, "libId"),
+            name=data.get("name") or "API Schedule",
+            cron_expression=data.get("cron_expression") or data.get("cron") or "0 0 * * *",
+            target_type=data.get("target_type", "case"),
+            target_ids=[to_int(item, "target_id") for item in data.get("target_ids", [])],
+            is_enabled=bool(data.get("is_enabled", data.get("enabled", False))),
+            last_result=sanitize_payload(data.get("last_result")),
+        )
+        session.add(schedule)
+        session.flush()
+        r2_log(session, "api_schedule", "create", schedule.id, {"lib_id": libId})
+        return model_dict(schedule)
+
+
+@router.patch("/api-schedules/{scheduleId}")
+def update_api_schedule(scheduleId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    if "cron" in data and "cron_expression" not in data:
+        data["cron_expression"] = data["cron"]
+    if "enabled" in data and "is_enabled" not in data:
+        data["is_enabled"] = data["enabled"]
+    with session_scope() as session:
+        schedule = require_db_item(session, ApiSchedule, scheduleId, "scheduleId")
+        update_columns(schedule, data, ("name", "cron_expression", "target_type", "target_ids", "is_enabled", "last_result"))
+        session.flush()
+        r2_log(session, "api_schedule", "update", schedule.id)
+        return model_dict(schedule)
+
+
+@router.post("/api-schedules/{scheduleId}/toggle")
+def toggle_api_schedule(scheduleId: str):
+    with session_scope() as session:
+        schedule = require_db_item(session, ApiSchedule, scheduleId, "scheduleId")
+        schedule.is_enabled = not schedule.is_enabled
+        session.flush()
+        r2_log(session, "api_schedule", "toggle", schedule.id, {"is_enabled": schedule.is_enabled})
+        return model_dict(schedule)
+
+
+@router.post("/api-schedules/{scheduleId}/run")
+def run_api_schedule_now(scheduleId: str, payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        schedule = require_db_item(session, ApiSchedule, scheduleId, "scheduleId")
+        result = run_api_schedule(session, schedule, data)
+        r2_log(session, "api_schedule", "run", schedule.id, {"status": result.get("status"), "executed": result.get("executed")})
+        return result
+
+
+@router.post("/api-schedules/run-due")
+def run_due_api_schedule_now(payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        result = run_due_api_schedules(session, data)
+        r2_log(session, "api_schedule", "run_due", None, {"executed": len(result.get("executed", [])), "skipped": len(result.get("skipped", []))})
+        return result
+
+
+@router.get("/projects/{projectId}/auto-projects")
+def list_auto_projects(projectId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        pid = to_int(projectId, "projectId")
+        return db_page(session, AutoProject, page_num, page_size, AutoProject.project_id == pid, AutoProject.is_deleted.is_(False), order_by=AutoProject.id.desc())
+
+
+@router.post("/projects/{projectId}/auto-projects")
+def create_auto_project(projectId: str, payload: WritePayload):
+    data = sanitize_payload(payload_dict(payload))
+    with session_scope() as session:
+        require_db_item(session, Project, projectId, "projectId")
+        project = AutoProject(
+            project_id=to_int(projectId, "projectId"),
+            name=data.get("name") or "Automation Project",
+            type=data.get("type", "ui"),
+            language=data.get("language", "python"),
+            framework=data.get("framework", "pytest"),
+            extra_config=data.get("extra_config") or data.get("config") or {"status": "draft"},
+            git_repo_url=data.get("git_repo_url"),
+            git_auth_ref=data.get("git_auth_ref"),
+        )
+        session.add(project)
+        session.flush()
+        r2_log(session, "auto_project", "create", project.id, {"project_id": project.project_id})
+        return model_dict(project)
+
+
+@router.patch("/auto-projects/{autoProjectId}")
+def update_auto_project(autoProjectId: str, payload: WritePayload):
+    data = sanitize_payload(payload_dict(payload))
+    if "config" in data and "extra_config" not in data:
+        data["extra_config"] = data["config"]
+    with session_scope() as session:
+        project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
+        update_columns(project, data, ("name", "type", "language", "framework", "extra_config", "git_repo_url", "git_auth_ref", "framework_files", "readme"))
+        session.flush()
+        r2_log(session, "auto_project", "update", project.id)
+        return model_dict(project)
+
+
+@router.delete("/auto-projects/{autoProjectId}")
+def delete_auto_project(autoProjectId: str):
+    with session_scope() as session:
+        project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
+        project.is_deleted = True
+        session.flush()
+        r2_log(session, "auto_project", "delete", project.id)
+        return {"deleted": True, "id": project.id}
+
+
+@router.post("/auto-candidates/screen")
+def screen_auto_candidates(payload: WritePayload):
+    data = sanitize_payload(payload_dict(payload))
+    with session_scope() as session:
+        parent_id = data.get("auto_project_id") or data.get("autoProjectId")
+        return r2_create(
+            session,
+            "auto_candidate_screen",
+            {"criteria": data, "candidates": [], "summary": "Automation candidate screening placeholder result."},
+            parent_type="auto_project_id" if parent_id is not None else None,
+            parent_id=parent_id,
+        )
+
+
+@router.get("/auto-projects/{autoProjectId}/candidates")
+def list_auto_candidates(autoProjectId: str):
+    with session_scope() as session:
+        require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
+        return r2_page(session, "auto_candidate_screen", parent_id=autoProjectId)
+
+
+@router.post("/auto-projects/{autoProjectId}/generate-framework")
+def generate_auto_framework(autoProjectId: str):
+    with session_scope() as session:
+        project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
+        files = {"README.md": "# Automation Project\n", "tests/test_placeholder.py": "def test_placeholder():\n    assert True\n"}
+        project.framework_files = files
+        project.readme = files["README.md"]
+        job = create_db_job(session, project.project_id, "generate_auto_framework", {"auto_project_id": project.id}, {"files": list(files)})
+        session.flush()
+        return {"job": model_dict(job), "files": list(files), "auto_project": model_dict(project)}
+
+
+@router.post("/auto-projects/{autoProjectId}/generate-cases")
+def generate_auto_cases(autoProjectId: str):
+    with session_scope() as session:
+        project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
+        case_file = AutoCaseFile(
+            auto_project_id=project.id,
+            file_name="test_placeholder.py",
+            file_path="tests/test_placeholder.py",
+            content="def test_placeholder():\n    assert True\n",
+            case_count=1,
+            automation_dsl={"steps": [{"action": "placeholder_assert"}]},
+        )
+        session.add(case_file)
+        session.flush()
+        job = create_db_job(session, project.project_id, "generate_auto_cases", {"auto_project_id": project.id}, {"auto_case_file_ids": [case_file.id]})
+        return {"job": model_dict(job), "cases": [model_dict(case_file)]}
+
+
+@router.post("/auto-projects/{autoProjectId}/execute")
+def execute_auto_project(autoProjectId: str, payload: WritePayload | None = None):
+    data = sanitize_payload(payload_dict(payload))
+    with session_scope() as session:
+        project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
+        total_available = session.scalar(select(func.count()).select_from(AutoCaseFile).where(AutoCaseFile.auto_project_id == project.id, AutoCaseFile.is_deleted.is_(False))) or 0
+        stmt = select(AutoCaseFile).where(AutoCaseFile.auto_project_id == project.id, AutoCaseFile.is_deleted.is_(False))
+        requested_file_ids = data.get("case_file_ids")
+        has_file_filter = isinstance(requested_file_ids, list)
+        if has_file_filter:
+            file_ids = [int(item) for item in requested_file_ids if str(item).isdigit()]
+            if file_ids:
+                stmt = stmt.where(AutoCaseFile.id.in_(file_ids))
+            else:
+                stmt = stmt.where(AutoCaseFile.id.in_([]))
+        files = list(session.scalars(stmt.order_by(AutoCaseFile.id)))
+        if has_file_filter and total_available > 0 and not files:
+            execution = AutoExecution(
+                auto_project_id=project.id,
+                status="error",
+                summary={"total": 0, "passed": 0, "failed": 0, "errors": 1},
+                artifacts={"files": [], "return_code": None, "runner": {"mode": "selection"}, "error": "No matching AutoCaseFile records found for case_file_ids."},
+                log_excerpt="No matching AutoCaseFile records found for case_file_ids.",
+                duration_ms=1,
+            )
+            session.add(execution)
+            session.flush()
+            r2_log(session, "auto_execution", "execute", execution.id, {"auto_project_id": project.id, "runner": {"mode": "selection"}})
+            return model_dict(execution)
+        if files:
+            result = run_auto_project(
+                [
+                    AutoCaseFileInput(
+                        id=item.id,
+                        file_name=item.file_name,
+                        file_path=item.file_path,
+                        content=item.content,
+                        case_count=item.case_count,
+                    )
+                    for item in files
+                ],
+                framework_files=project.framework_files or {},
+                timeout_ms=data.get("timeout_ms"),
+                env=data.get("env") if isinstance(data.get("env"), dict) else {},
+                mode=str(data.get("mode") or "auto"),
+                artifact_root=data.get("artifact_root"),
+            )
+            execution = AutoExecution(
+                auto_project_id=project.id,
+                status=result["status"],
+                summary=result["summary"],
+                artifacts=result["artifacts"],
+                log_excerpt=result["log_excerpt"],
+                duration_ms=result["duration_ms"],
+            )
+            session.add(execution)
+            session.flush()
+            file_result = {
+                "execution_id": execution.id,
+                "status": execution.status,
+                "summary": execution.summary,
+                "return_code": (execution.artifacts or {}).get("return_code"),
+                "runner": (execution.artifacts or {}).get("runner"),
+            }
+            for file in files:
+                file.last_result = file_result
+            r2_log(session, "auto_execution", "execute", execution.id, {"auto_project_id": project.id, "runner": file_result.get("runner")})
+            return model_dict(execution)
+
+        execution = AutoExecution(
+            auto_project_id=project.id,
+            status="completed",
+            summary={"total": total_available, "passed": total_available, "failed": 0, "errors": 0},
+            artifacts={"report": f"/api/v2/auto-projects/{project.id}/download", "runner": {"mode": "placeholder"}, "return_code": 0, "files": []},
+            log_excerpt="Automation execution skipped real runner and completed deterministic placeholder.",
+            duration_ms=30,
+        )
+        session.add(execution)
+        session.flush()
+        r2_log(session, "auto_execution", "execute", execution.id, {"auto_project_id": project.id})
+        return model_dict(execution)
+
+
+@router.get("/auto-executions/{executionId}/events")
+def auto_execution_events(executionId: str):
+    with session_scope() as session:
+        if session.get(AutoExecution, to_int(executionId, "executionId")) is None:
+            raise HTTPException(status_code=404, detail=f"AutoExecution({executionId}) not found")
+    return StreamingResponse(iter([f"data: {json.dumps({'execution_id': executionId, 'status': 'completed'})}\n\n"]), media_type="text/event-stream")
+
+
+@router.get("/auto-projects/{autoProjectId}/download")
+def download_auto_project(autoProjectId: str):
+    with session_scope() as session:
+        try:
+            return build_auto_project_zip(session, auto_project_id=to_int(autoProjectId, "autoProjectId"))
+        except ExportPayloadError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/auto-projects/{autoProjectId}/git-pull")
+def auto_git_pull(autoProjectId: str):
+    with session_scope() as session:
+        project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
+        r2_log(session, "auto_project", "git_pull_skipped", project.id)
+        return {"auto_project_id": project.id, "status": "skipped", "reason": "Git operation is disabled in round 2."}
+
+
+@router.post("/auto-projects/{autoProjectId}/git-push")
+def auto_git_push(autoProjectId: str):
+    with session_scope() as session:
+        project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
+        r2_log(session, "auto_project", "git_push_skipped", project.id)
+        return {"auto_project_id": project.id, "status": "skipped", "reason": "Git operation is disabled in round 2."}
+
+
+@router.get("/projects/{projectId}/perf-plans")
+def list_perf_plans(projectId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        pid = to_int(projectId, "projectId")
+        return db_page(session, PerfPlan, page_num, page_size, PerfPlan.project_id == pid, PerfPlan.is_deleted.is_(False), order_by=PerfPlan.id.desc())
+
+
+@router.post("/projects/{projectId}/perf-plans")
+def create_perf_plan(projectId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        require_db_item(session, Project, projectId, "projectId")
+        plan = PerfPlan(
+            project_id=to_int(projectId, "projectId"),
+            source_document_id=to_int(data["source_document_id"], "source_document_id") if data.get("source_document_id") is not None else None,
+            name=data.get("name") or "Performance Plan",
+            description=data.get("description"),
+            requirement_item_ids_json=[to_int(item, "requirement_item_id") for item in data.get("requirement_item_ids", [])],
+            target_assets_json=sanitize_payload(data.get("target_assets") or data.get("target_assets_json") or {}),
+            target_doc=data.get("target_doc") or data.get("targetDoc"),
+            plan_content=data.get("plan_content"),
+            plan_schema=sanitize_payload(data.get("plan_schema")),
+            jmx_script=data.get("jmx_script"),
+            status=data.get("status", "draft"),
+        )
+        session.add(plan)
+        session.flush()
+        r2_log(session, "perf_plan", "create", plan.id, {"project_id": plan.project_id})
+        return model_dict(plan)
+
+
+@router.patch("/perf-plans/{planId}")
+def update_perf_plan(planId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    if "target_assets" in data and "target_assets_json" not in data:
+        data["target_assets_json"] = data["target_assets"]
+    with session_scope() as session:
+        plan = require_db_item(session, PerfPlan, planId, "planId")
+        update_columns(plan, data, ("name", "description", "requirement_item_ids_json", "target_assets_json", "target_doc", "plan_content", "plan_schema", "jmx_script", "status"))
+        session.flush()
+        r2_log(session, "perf_plan", "update", plan.id)
+        return model_dict(plan)
+
+
+@router.delete("/perf-plans/{planId}")
+def delete_perf_plan(planId: str):
+    with session_scope() as session:
+        plan = require_db_item(session, PerfPlan, planId, "planId")
+        plan.is_deleted = True
+        session.flush()
+        r2_log(session, "perf_plan", "delete", plan.id)
+        return {"deleted": True, "id": plan.id}
+
+
+@router.post("/perf-plans/{planId}/generate-plan")
+def generate_perf_plan(planId: str):
+    with session_scope() as session:
+        plan = require_db_item(session, PerfPlan, planId, "planId")
+        schema = {"scenarios": [{"name": "baseline", "users": 10, "duration": "1m"}], "targets": {"p95_ms": 500, "error_rate": 0.01}}
+        plan.plan_schema = schema
+        plan.plan_content = "Deterministic placeholder performance plan."
+        plan.status = "planned"
+        job = create_db_job(session, plan.project_id, "generate_perf_plan", {"plan_id": plan.id}, {"plan_schema": schema})
+        session.flush()
+        return {"job": model_dict(job), "plan": model_dict(plan)}
+
+
+@router.post("/perf-plans/{planId}/generate-script")
+def generate_perf_script(planId: str):
+    with session_scope() as session:
+        plan = require_db_item(session, PerfPlan, planId, "planId")
+        script = "<jmeterTestPlan version=\"1.2\"><hashTree /></jmeterTestPlan>"
+        plan.jmx_script = script
+        plan.status = "scripted"
+        job = create_db_job(session, plan.project_id, "generate_perf_script", {"plan_id": plan.id}, {"tool": "jmeter", "placeholder": True})
+        session.flush()
+        return {"job": model_dict(job), "script": {"tool": "jmeter", "content": script, "placeholder": True}}
+
+
+@router.get("/perf-plans/{planId}/download-script")
+def download_perf_script(planId: str):
+    with session_scope() as session:
+        try:
+            return export_perf_script(session, plan_id=to_int(planId, "planId"))
+        except ExportPayloadError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/perf-plans/{planId}/execute")
+def execute_perf_plan(planId: str, payload: WritePayload | None = None):
+    with session_scope() as session:
+        plan = require_db_item(session, PerfPlan, planId, "planId")
+        data = payload_dict(payload)
+        use_real_runner = data.get("real") is True or str(data.get("mode") or "").lower() == "real"
+        use_jmeter_runner = bool(plan.jmx_script and data.get("use_jmeter") is True)
+        if use_real_runner or use_jmeter_runner:
+            runner_result = run_jmeter_plan(plan.jmx_script, data)
+            result = PerfResult(
+                plan_id=plan.id,
+                project_id=plan.project_id,
+                status=runner_result["status"],
+                summary_data=runner_result["summary_data"],
+                timeline_data=runner_result["timeline_data"],
+                error_details=runner_result["error_details"],
+                artifacts=runner_result["artifacts"],
+                raw_data_path=runner_result.get("raw_data_path"),
+                duration=runner_result["duration"],
+            )
+            session.add(result)
+            plan.status = "executed" if runner_result["status"] == "completed" else "execution_failed"
+            session.flush()
+            job = create_db_job(
+                session,
+                plan.project_id,
+                "execute_perf_plan",
+                {"plan_id": plan.id, "mode": "jmeter", "payload": sanitize_perf_payload(data)},
+                {"perf_result_id": result.id, "status": result.status},
+            )
+            return {"job": model_dict(job), "result": model_dict(result)}
+        result = PerfResult(
+            plan_id=plan.id,
+            project_id=plan.project_id,
+            status="completed",
+            summary_data={"avg_ms": 120, "p95_ms": 240, "error_rate": 0},
+            timeline_data=[{"second": 1, "avg_ms": 120}],
+            error_details=[],
+            artifacts={"jtl": None, "html_report": None},
+            duration=60,
+        )
+        session.add(result)
+        plan.status = "executed"
+        session.flush()
+        job = create_db_job(session, plan.project_id, "execute_perf_plan", {"plan_id": plan.id}, {"perf_result_id": result.id})
+        return {"job": model_dict(job), "result": model_dict(result)}
+
+
+@router.get("/perf-plans/{planId}/results")
+def list_perf_results(planId: str):
+    with session_scope() as session:
+        require_db_item(session, PerfPlan, planId, "planId")
+        return db_page(session, PerfResult, 1, 200, PerfResult.plan_id == to_int(planId, "planId"), order_by=PerfResult.id.desc())
+
+
+@router.get("/perf-plans/{planId}/results/{resultId}/download")
+def download_perf_result(planId: str, resultId: str, format: str = Query("json")):
+    with session_scope() as session:
+        try:
+            return export_perf_result(
+                session,
+                plan_id=to_int(planId, "planId"),
+                result_id=None if str(resultId).lower() == "latest" else to_int(resultId, "resultId"),
+                output_format=format,
+            )
+        except ExportPayloadError as exc:
+            raise HTTPException(status_code=404 if "not found" in str(exc).lower() else 400, detail=str(exc)) from exc
+
+
+@router.post("/perf-plans/{planId}/generate-report")
+def generate_perf_report(planId: str):
+    with session_scope() as session:
+        try:
+            report, result = create_performance_report(session, plan_id=to_int(planId, "planId"))
+            job = create_db_job(
+                session,
+                report.project_id,
+                "generate_perf_report",
+                {"plan_id": to_int(planId, "planId")},
+                {"report_id": report.id, "perf_result_id": result.id if result else None},
+            )
+            return {"job": model_dict(job), "report": model_dict(report), "perf_result": model_dict(result) if result else None}
+        except ReportingPayloadError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/perf/quick-tests")
+def perf_quick_tests(payload: WritePayload):
+    data = sanitize_payload(payload_dict(payload))
+    with session_scope() as session:
+        return r2_create(session, "perf_quick_test", {"status": "completed", "metrics": {"avg_ms": 100, "p95_ms": 180, "error_rate": 0}, "input": data})
+
+
+@router.get("/projects/{projectId}/reports")
+def list_reports(projectId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        pid = to_int(projectId, "projectId")
+        return db_page(session, Report, page_num, page_size, Report.project_id == pid, order_by=Report.id.desc())
+
+
+@router.post("/reports/comprehensive")
+def create_comprehensive_report(payload: WritePayload):
+    data = payload_dict(payload)
+    project_id = data.get("project_id") or (data.get("scope") or {}).get("project_id")
+    if project_id is None:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    item_ids = data.get("requirement_item_ids") or (data.get("scope") or {}).get("requirement_item_ids") or []
+    with session_scope() as session:
+        try:
+            report = create_report_from_aggregator(
+                session,
+                project_id=to_int(project_id, "project_id"),
+                name=data.get("title") or data.get("name") or "综合测试报告",
+                report_type=data.get("type", "comprehensive"),
+                requirement_item_ids=[to_int(item_id, "requirement_item_id") for item_id in item_ids],
+                template_id=to_int(data["template_id"], "template_id") if data.get("template_id") is not None else None,
+                related_scope=sanitize_payload(data.get("scope") or {"project_id": project_id, "requirement_item_ids": item_ids}),
+            )
+            result = model_dict(report)
+            result["report"] = model_dict(report)
+            return result
+        except ReportingPayloadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.get("/reports/{reportId}")
+def get_report(reportId: str):
+    with session_scope() as session:
+        report = session.get(Report, to_int(reportId, "reportId"))
+        if report is None:
+            raise HTTPException(status_code=404, detail=f"Report({reportId}) not found")
+        return model_dict(report)
+
+
+@router.get("/reports/{reportId}/download")
+def download_report(reportId: str, format: str = Query("markdown")):
+    with session_scope() as session:
+        report = session.get(Report, to_int(reportId, "reportId"))
+        if report is None:
+            raise HTTPException(status_code=404, detail=f"Report({reportId}) not found")
+        try:
+            return export_report(report, format)
+        except ReportingPayloadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/report-templates")
+def list_report_templates(page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        return db_page(session, ReportTemplate, page_num, page_size, order_by=ReportTemplate.id.desc())
+
+
+@router.post("/report-templates")
+def create_report_template(payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        template = ReportTemplate(
+            name=data.get("name") or "Report Template",
+            report_type=data.get("report_type") or data.get("type") or "comprehensive",
+            sections=data.get("sections") or ["overview", "coverage", "executions", "defects"],
+            is_default=bool(data.get("is_default", data.get("enabled", False))),
+            template_version=data.get("template_version", "v1"),
+        )
+        session.add(template)
+        session.flush()
+        r2_log(session, "report_template", "create", template.id)
+        return model_dict(template)
+
+
+@router.patch("/report-templates/{templateId}")
+def update_report_template(templateId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    if "type" in data and "report_type" not in data:
+        data["report_type"] = data["type"]
+    with session_scope() as session:
+        template = require_db_item(session, ReportTemplate, templateId, "templateId")
+        update_columns(template, data, ("name", "report_type", "sections", "is_default", "template_version"))
+        session.flush()
+        r2_log(session, "report_template", "update", template.id)
+        return model_dict(template)
+
+
+@router.delete("/report-templates/{templateId}")
+def delete_report_template(templateId: str):
+    with session_scope() as session:
+        template = require_db_item(session, ReportTemplate, templateId, "templateId")
+        session.delete(template)
+        r2_log(session, "report_template", "delete", to_int(templateId, "templateId"))
+        return {"deleted": True, "id": to_int(templateId, "templateId")}
+
+
+@router.post("/reports/lightweight-conclusions")
+def lightweight_conclusions(payload: WritePayload):
+    data = payload_dict(payload)
+    scope = data.get("scope") if isinstance(data.get("scope"), dict) else {}
+    project_id = data.get("project_id") or data.get("projectId") or scope.get("project_id") or scope.get("projectId")
+    item_ids = data.get("requirement_item_ids") or data.get("requirementItemIds") or scope.get("requirement_item_ids") or scope.get("requirementItemIds") or []
+    conclusion_type = data.get("type") or data.get("conclusion_type") or data.get("scene") or "brief"
+    save = bool(data.get("save", False))
+    with session_scope() as session:
+        try:
+            return build_lightweight_conclusion(
+                session,
+                project_id=to_int(project_id, "project_id") if project_id is not None else None,
+                requirement_item_ids=[to_int(item_id, "requirement_item_id") for item_id in item_ids],
+                conclusion_type=str(conclusion_type),
+                save=save,
+                name=data.get("name") or data.get("title"),
+            )
+        except ReportingPayloadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/llm-configs")
+def list_llm_configs(page_num: int = Query(1, alias="page"), page_size: int = Query(100, alias="pageSize")):
+    with session_scope() as session:
+        return db_page(session, LlmConfig, page_num, page_size, order_by=(LlmConfig.sort_order.asc(), LlmConfig.id.desc()))
+
+
+@router.post("/llm-configs")
+def create_llm_config(payload: WritePayload):
+    data = sanitize_payload(payload_dict(payload))
+    with session_scope() as session:
+        config = LlmConfig(
+            name=data.get("name") or "LLM Config",
+            base_url=data.get("base_url"),
+            api_key_ref=data.get("api_key_ref") or ("***" if data.get("api_key") else None),
+            model_name=data.get("model_name") or data.get("model") or "placeholder",
+            max_tokens=int(data.get("max_tokens", 4096)),
+            temperature=float(data.get("temperature", 0.7)),
+            is_default=bool(data.get("is_default", False)),
+            is_enabled=bool(data.get("is_enabled", data.get("enabled", True))),
+            module_binding=sanitize_payload(data.get("module_binding") or {}),
+            sort_order=int(data.get("sort_order", 0)),
+        )
+        session.add(config)
+        session.flush()
+        r2_log(session, "llm_config", "create", config.id)
+        return model_dict(config)
+
+
+@router.patch("/llm-configs/{configId}")
+def update_llm_config(configId: str, payload: WritePayload):
+    data = sanitize_payload(payload_dict(payload))
+    if "model" in data and "model_name" not in data:
+        data["model_name"] = data["model"]
+    if "enabled" in data and "is_enabled" not in data:
+        data["is_enabled"] = data["enabled"]
+    if data.get("api_key") and "api_key_ref" not in data:
+        data["api_key_ref"] = "***"
+    with session_scope() as session:
+        config = require_db_item(session, LlmConfig, configId, "configId")
+        update_columns(config, data, ("name", "base_url", "api_key_ref", "model_name", "max_tokens", "temperature", "is_default", "is_enabled", "module_binding", "sort_order"))
+        session.flush()
+        r2_log(session, "llm_config", "update", config.id)
+        return model_dict(config)
+
+
+@router.post("/llm-configs/{configId}/test")
+def test_llm_config(configId: str):
+    with session_scope() as session:
+        config = require_db_item(session, LlmConfig, configId, "configId")
+        fallback, settings = require_llm_runtime(config)
+        if fallback is not None:
+            record_llm_usage(session, config.id, "llm_config_test", duration_ms=1)
+            return sanitize_payload(sanitize_llm_payload({**fallback, "config": llm_config_public(config)}))
+
+        assert settings.base_url is not None and settings.api_key is not None
+        client = OpenAICompatibleClient(base_url=settings.base_url, api_key=settings.api_key)
+        try:
+            models_response, duration_ms = client.list_models()
+            record_llm_usage(session, config.id, "llm_config_test", duration_ms=duration_ms)
+            models = models_response.get("data") if isinstance(models_response.get("data"), list) else []
+            model_ids = [item.get("id") for item in models if isinstance(item, dict) and item.get("id")]
+            return sanitize_payload(
+                sanitize_llm_payload(
+                    {
+                        "enabled": True,
+                        "connected": True,
+                        "status": "ok",
+                        "model": settings.model,
+                        "model_available": settings.model in model_ids if model_ids else None,
+                        "models": model_ids[:20],
+                        "config": llm_config_public(config),
+                    }
+                )
+            )
+        except LlmClientError as exc:
+            record_llm_usage(session, config.id, "llm_config_test", duration_ms=1)
+            return sanitize_payload(
+                sanitize_llm_payload(
+                    {
+                        "enabled": True,
+                        "connected": False,
+                        "status": "fallback",
+                        "error": str(exc),
+                        "config": llm_config_public(config),
+                    }
+                )
+            )
+
+
+@router.delete("/llm-configs/{configId}")
+def delete_llm_config(configId: str):
+    with session_scope() as session:
+        config = require_db_item(session, LlmConfig, configId, "configId")
+        config.is_enabled = False
+        r2_log(session, "llm_config", "delete", to_int(configId, "configId"))
+        return {"deleted": True, "id": to_int(configId, "configId")}
+
+
+@router.get("/llm-usage/statistics")
+def llm_usage_statistics():
+    with session_scope() as session:
+        rows = session.execute(
+            select(LlmUsage.module, func.sum(LlmUsage.input_tokens), func.sum(LlmUsage.output_tokens), func.count()).group_by(LlmUsage.module)
+        ).all()
+        by_module = [
+            {"module": row[0], "input_tokens": row[1] or 0, "output_tokens": row[2] or 0, "count": row[3] or 0}
+            for row in rows
+        ]
+        return {
+            "total_tokens": sum(item["input_tokens"] + item["output_tokens"] for item in by_module),
+            "total_cost": 0,
+            "by_module": by_module,
+        }
+
+
+@router.get("/prompt-templates")
+def list_prompt_templates(page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        existing = session.scalar(select(func.count()).select_from(PromptTemplate)) or 0
+        if existing == 0:
+            session.add(
+                PromptTemplate(
+                    scene="test_case_generation",
+                    name="Test Case Generation Prompt",
+                    content="Generate test cases for {{requirement}}.",
+                    variables=["requirement"],
+                    is_builtin=True,
+                )
+            )
+            session.flush()
+        return db_page(session, PromptTemplate, page_num, page_size, order_by=PromptTemplate.id.desc())
+
+
+@router.patch("/prompt-templates/{templateId}")
+def update_prompt_template(templateId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        template = require_db_item(session, PromptTemplate, templateId, "templateId")
+        update_columns(template, data, ("scene", "name", "content", "variables", "is_builtin"))
+        session.flush()
+        r2_log(session, "prompt_template", "update", template.id)
+        return model_dict(template)
+
+
+@router.post("/prompt-templates/{templateId}/test")
+def test_prompt_template(templateId: str, payload: WritePayload | None = None):
+    data = sanitize_payload(payload_dict(payload))
+    with session_scope() as session:
+        template = require_db_item(session, PromptTemplate, templateId, "templateId")
+        rendered = template.content
+        for key, value in data.items():
+            rendered = rendered.replace("{{" + key + "}}", str(value))
+        return {"template_id": template.id, "rendered": rendered, "input": data}
+
+
+def handle_chat_request(request: ChatRequest) -> dict[str, Any]:
+    message = request.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+    context = sanitize_llm_payload(sanitize_payload(request.context or {}))
+    fallback_reply = "Real LLM is disabled or unavailable, so this is a safe placeholder reply."
+    with session_scope() as session:
+        config = default_llm_config(session, context.get("config_id") or context.get("configId"))
+        if config is None:
+            return create("chat_messages", {"message": message, "context": context, "reply": fallback_reply, "status": "fallback", "reason": "No enabled LLM config found."})
+
+        fallback, settings = require_llm_runtime(config)
+        if fallback is not None:
+            record_llm_usage(session, config.id, "chat", duration_ms=1)
+            record = create("chat_messages", {"message": message, "context": context, "reply": fallback_reply, "status": fallback["status"], "llm": fallback})
+            return sanitize_payload(sanitize_llm_payload(record))
+
+        assert settings.base_url is not None and settings.api_key is not None and settings.model is not None
+        messages = [{"role": "user", "content": message}]
+        if isinstance(context.get("messages"), list):
+            messages = [
+                {"role": str(item.get("role", "user")), "content": str(item.get("content", ""))}
+                for item in context["messages"]
+                if isinstance(item, dict) and item.get("content")
+            ] or messages
+        client = OpenAICompatibleClient(base_url=settings.base_url, api_key=settings.api_key)
+        try:
+            response, duration_ms = client.chat_completions(
+                model=settings.model,
+                messages=messages,
+                max_tokens=config.max_tokens,
+                temperature=config.temperature,
+            )
+            reply = extract_chat_reply(response)
+            input_tokens, output_tokens = extract_usage_tokens(response)
+            record_llm_usage(session, config.id, "chat", input_tokens, output_tokens, duration_ms)
+            record = create(
+                "chat_messages",
+                {
+                    "message": message,
+                    "context": context,
+                    "reply": reply,
+                    "status": "ok",
+                    "model": settings.model,
+                    "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens, "duration_ms": duration_ms},
+                },
+            )
+            return sanitize_payload(sanitize_llm_payload(record))
+        except LlmClientError as exc:
+            record_llm_usage(session, config.id, "chat", duration_ms=1)
+            record = create(
+                "chat_messages",
+                {
+                    "message": message,
+                    "context": context,
+                    "reply": fallback_reply,
+                    "status": "fallback",
+                    "error": str(exc),
+                    "model": settings.model,
+                },
+            )
+            return sanitize_payload(sanitize_llm_payload(record))
+
+
+@router.post("/chat")
+def chat_real_llm(request: ChatRequest):
+    return handle_chat_request(request)
+
+
+def chat_legacy_placeholder(request: ChatRequest):
+    message = request.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+    record = create("chat_messages", {"message": message, "context": request.context or {}, "reply": "这是第一轮 API 的 AI 助手占位回复，尚未接入真实 LLM。"})
+    return record
+
+
+@router.get("/chat/favorites")
+def chat_favorites():
+    return store.list("chat_favorites")
+
+
+@router.post("/system/backup")
+def system_backup(payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    project_id = data.get("project_id") or data.get("projectId")
+    with session_scope() as session:
+        snapshot = AitestRepository(session).create_backup_snapshot(
+            project_id=to_int(project_id, "project_id") if project_id is not None else None,
+            name=data.get("name"),
+        )
+        result = model_dict(snapshot)
+        result["backup_id"] = snapshot.id
+        return result
+
+
+@router.post("/system/restore")
+def system_restore(payload: RestorePayload):
+    data = payload.model_dump(exclude_unset=True, by_alias=True)
+    with session_scope() as session:
+        try:
+            return restore_system_backup(session, data)
+        except RestorePayloadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/system/schema-status")
+def system_schema_status():
+    return get_schema_status()
+
+
+@router.get("/system/operation-logs")
+def operation_logs(page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        return db_page(session, OperationLog, page_num, page_size, order_by=OperationLog.id.desc())
+
+
+@router.get("/system/preferences")
+def system_preferences():
+    with session_scope() as session:
+        return list_preferences(session)
+
+
+@router.get("/system/preferences/{prefKey}")
+def system_get_preference(prefKey: str):
+    with session_scope() as session:
+        try:
+            return get_preference(session, prefKey)
+        except SystemStateError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/system/preferences/{prefKey}")
+def system_save_preference(prefKey: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        try:
+            return save_preference(session, prefKey, data.get("value", data))
+        except SystemStateError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/system/recent-activities")
+def system_recent_activities(projectId: str | None = None, limit: int = Query(20, ge=1, le=100)):
+    with session_scope() as session:
+        return list_recent_activities(session, project_id=to_int(projectId, "projectId") if projectId is not None else None, limit=limit)
+
+
+@router.post("/system/recent-activities")
+def system_record_recent_activity(payload: WritePayload):
+    with session_scope() as session:
+        return record_recent_activity(session, payload_dict(payload))
+
+
+@router.get("/system/recycle-bin")
+def recycle_bin():
+    items: list[dict[str, Any]] = []
+    with session_scope() as session:
+        items.extend(list_db_recycle_items(session))
+    for table, rows in store.tables.items():
+        items.extend({"type": table, **item} for item in rows.values() if item.get("deleted"))
+    return {"list": items, "total": len(items)}
+
+
+@router.post("/system/recycle-bin/{id}/restore")
+def restore_recycle_item(id: str):
+    if ":" in id:
+        with session_scope() as session:
+            try:
+                return restore_db_recycle_item(session, id)
+            except SystemStateError as exc:
+                raise HTTPException(status_code=404 if "not found" in str(exc).lower() else 400, detail=str(exc)) from exc
+    for table, rows in store.tables.items():
+        if id in rows:
+            return update(table, id, {"deleted": False})
+    raise HTTPException(status_code=404, detail=f"recycle item {id} not found")
+
+
+@router.get("/search")
+def search(q: str = Query("", min_length=0), types: str | None = None):
+    if not q:
+        return {"list": [], "total": 0}
+    requested = set(types.split(",")) if types else None
+    results: list[dict[str, Any]] = []
+    lowered = q.lower()
+    escaped = lowered.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    like_pattern = f"%{escaped}%"
+    with session_scope() as session:
+        searchable = [
+            ("projects", Project, ("name", "description")),
+            ("api_test_libs", ApiTestLib, ("name", "description")),
+            ("api_endpoints", ApiEndpoint, ("name", "path", "description")),
+            ("api_test_cases", ApiTestCase, ("name", "category")),
+            ("auto_projects", AutoProject, ("name", "framework", "language")),
+            ("perf_plans", PerfPlan, ("name", "description", "target_doc")),
+            ("reports", Report, ("name", "type", "content")),
+            ("report_templates", ReportTemplate, ("name", "report_type")),
+            ("llm_configs", LlmConfig, ("name", "model_name", "base_url")),
+            ("prompt_templates", PromptTemplate, ("scene", "name", "content")),
+        ]
+        for table, model, fields in searchable:
+            if requested and table not in requested:
+                continue
+            stmt = select(model)
+            if hasattr(model, "is_deleted"):
+                stmt = stmt.where(model.is_deleted.is_(False))
+            stmt = stmt.where(or_(*(func.lower(getattr(model, field)).like(like_pattern, escape="\\") for field in fields)))
+            if hasattr(model, "id"):
+                stmt = stmt.order_by(model.id.desc())
+            for item in session.scalars(stmt.limit(200)):
+                record = model_dict(item)
+                results.append({"type": table, "id": record["id"], "title": record.get("name") or record.get("title") or record["id"], "record": record})
+        if requested is None or "round2_resource" in requested:
+            r2_init(session)
+            rows = session.execute(
+                text(
+                    """
+                    SELECT *
+                    FROM round2_resource
+                    WHERE is_deleted = 0
+                      AND (
+                        lower(resource_type) LIKE :pattern ESCAPE '\\'
+                        OR lower(COALESCE(project_id, '')) LIKE :pattern ESCAPE '\\'
+                        OR lower(COALESCE(parent_type, '')) LIKE :pattern ESCAPE '\\'
+                        OR lower(COALESCE(parent_id, '')) LIKE :pattern ESCAPE '\\'
+                        OR lower(COALESCE(name, '')) LIKE :pattern ESCAPE '\\'
+                        OR lower(payload_json) LIKE :pattern ESCAPE '\\'
+                      )
+                    ORDER BY id DESC
+                    LIMIT 200
+                    """
+                ),
+                {"pattern": like_pattern},
+            ).mappings()
+            for row in rows:
+                record = r2_decode(row)
+                results.append({"type": row.resource_type, "id": record["id"], "title": record.get("name") or record.get("title") or record["id"], "record": record})
+    return {"list": results, "total": len(results)}

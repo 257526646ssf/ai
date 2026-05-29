@@ -1,0 +1,428 @@
+# 后端实现状态
+
+## 阶段
+- 当前阶段：Round 15 已验收；Execution MVP 前后端集成完成，下一轮继续扩大 ApiTesting / LlmConfig / Automation / Performance 页面接入范围
+- 目标：在不改变前端视觉风格的前提下，实现需求文档与技术实现方案中的后端基础能力。
+- 主线程职责：拆解、派工、验收、进度统一；产品实现代码由子任务完成。
+
+## 第一轮范围
+- P0：FastAPI 后端骨架。
+- P0：SQLite 本地持久化，保留 PostgreSQL 迁移空间。
+- P0：核心主链实体：Project、RequirementDocument、RequirementItem、TestPoint、TestCase、Execution、Defect、Report。
+- P0：`/api/v2` 基础接口可运行，可被前端后续替换 mock 数据。
+- P1：GenerationJob 模拟任务与 SSE 事件占位。
+- P1：系统备份/恢复、操作日志、搜索与接口测试/自动化/性能模块占位入口。
+
+## Worker 分配
+- backend_data_engineer：已交付 SQLite/ORM/repository/seed。
+- backend_api_engineer：已交付 FastAPI `/api/v2`，并完成 P0 SQLite 集成与 P1 DB/store 薄适配。
+- devops_qa_engineer：已交付后端运行文档与 P0 contract tests。
+
+## 主线程验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `cd backend; python -m pytest`：`6 passed, 2 warnings`。
+- OpenAPI `/api/v2` path 数：105。
+- P0 主链 smoke：project -> lib -> document -> parse -> extract -> confirm -> points -> cases -> execution -> report -> backup 通过。
+- P1 入口 smoke：DB project -> api-test-lib -> auto-project -> perf-plan 通过。
+- 追加验证：requirement brain analyze、traceability refresh、split、DB soft delete 均通过 smoke。
+
+## 残余风险
+- 第一轮未接真实 LLM、LangGraph、Celery/Redis、真实浏览器执行、JMeter CLI。
+- P1 模块资源本体仍主要使用内存 store，占位数据重启后不持久化。
+- 本机 FastAPI/Starlette 版本存在兼容补丁，后续统一依赖版本后可移除。
+- 测试和 smoke 会生成或复用 `backend/data/aitest.sqlite3`。
+
+## 第二轮范围
+- P0：把接口测试、自动化、性能、报告模板、LLM 配置、Prompt 模板从内存 store 迁移到 SQLite。
+- P0：保留占位执行，但执行结果必须结构化落库，可在重启后查询。
+- P0：补充 Round 2 contract tests，覆盖新增持久化链路。
+- P1：搜索和操作日志优先读取 SQLite 数据。
+- 非目标：真实外部 API 调用、真实 LLM、真实 JMeter、真实 Playwright 自动化执行、前端视觉重构。
+
+## 第二轮 Worker 分配
+- backend_data_engineer_round2：进行中，agent `019e6ee6-ba9f-70f2-9fcb-38793538e7a5`，负责 P1 数据模型与 repository。
+- backend_api_engineer_round2：进行中，agent `019e6ee7-00c0-76b3-9f26-c7cb8b68f812`，负责 P1 API 路由接库与响应契约。
+- qa_contract_engineer_round2：进行中，agent `019e6ee7-352a-7530-ae91-d3ec38b9140d`，负责 Round 2 验收测试和文档同步。
+
+## 第二轮接续说明
+- 上一批 Round 2 worker 会话中断后返回 `not_found`，但已落入部分模型/API 文件改动。
+- 主线程已验证当前基线：`compileall` 通过、`pytest` 为 `6 passed, 2 warnings`、OpenAPI `/api/v2` path 为 105。
+- 已重新派发窄范围收尾任务：
+  - backend_data_engineer_round2b：已交付，agent `019e6eeb-4a37-7fb2-ba4a-e3c90de7a013`。
+  - backend_api_engineer_round2b：已交付，agent `019e6eeb-8c43-70f3-83bc-2db7bda63601`。
+  - qa_contract_engineer_round2b：已交付，agent `019e6eeb-c6ed-78f1-9043-9ce7e96bcedf`。
+
+## 第二轮主线程验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `cd backend; python -m pytest`：`11 passed, 2 warnings`。
+- OpenAPI `/api/v2` path 数：105。
+- Round 2 contract tests 覆盖接口测试、自动化、性能、配置、安全脱敏、日志和搜索。
+- 主线程手工 smoke 通过：
+  - project -> api-test-lib -> import-documents -> apis/import -> api cases -> executions -> environment -> scenario -> schedule
+  - project -> auto-project -> candidates -> framework -> case files -> execution -> events -> download metadata
+  - project -> perf-plan -> generated plan -> script -> result -> performance report -> quick test
+  - report-template、llm-config、prompt-template、operation-logs、search
+
+## 第二轮残余风险
+- 生成/执行仍是确定性占位，不调用真实外部 API、LLM、JMeter、Playwright。
+- `auto-candidates/screen`、`perf/quick-tests` 使用轻量 `round2_resource` SQLite 表持久化，不是专用 ORM model。
+- LLM API key 目前保存为掩码/引用，不是真正加密存储。
+- 当前项目不是 git 仓库，无法提供提交级 diff。
+
+## 第三轮范围
+- P0：接入 OpenAI-compatible LLM client，支持本地 `/v1` base URL。
+- P0：`/api/v2/llm-configs/{configId}/test` 可在启用真实 LLM 时调用模型服务并记录 usage。
+- P0：`/api/v2/chat` 可在启用真实 LLM 时返回真实模型回复，失败时安全降级。
+- P0：密钥只通过环境变量或运行时传入，不写入代码、文档、数据库明文、日志或响应。
+- P0：补充 Round 3 LLM contract/security tests。
+- 非目标：把所有需求拆解/测试点/用例生成一次性改成真实 LLM；真实 JMeter/Playwright 执行；前端视觉改造。
+
+## 第三轮 Worker 分配
+- llm_integration_engineer_round3：已交付，agent `019e6eff-a73e-7a70-8db2-50accb58f8ee`，负责 LLM client 与 API 接入。
+- qa_security_engineer_round3：已交付，agent `019e6eff-da94-7b62-a1ba-c4a4f8087fbf`，负责 LLM 集成测试、安全脱敏测试和文档同步。
+
+## 第三轮主线程验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `cd backend; python -m pytest`：`16 passed, 2 warnings`。
+- OpenAPI `/api/v2` path 数：105。
+- 主线程 disabled smoke：`llm-config test` 和 `chat` 在 `AITEST_ENABLE_REAL_LLM=false` 时不触网，返回 `skipped`，并记录 usage。
+- 安全扫描：项目文件中未出现用户提供的真实 key 前缀。
+
+## 第三轮残余风险
+- 主线程未把真实 API key 注入命令行做 live smoke，避免密钥进入命令记录；真实连通性需通过环境变量临时设置后验证。
+- enabled path 已由 mock contract tests 覆盖，不同 OpenAI-compatible 服务响应细节仍可能需要小适配。
+- 真实 LLM 只接入 `llm-config test` 和 `chat`，需求拆解/测试点/用例生成仍是占位。
+
+## 第四轮范围
+- P0：将真实 LLM 接入主链生成：
+  - `POST /api/v2/requirement-documents/{documentId}/extract-items`
+  - `POST /api/v2/requirement-items/{itemId}/generate-test-points`
+  - `POST /api/v2/requirement-items/{itemId}/generate-test-cases`
+- P0：disabled 或 LLM 失败时继续安全降级到确定性占位。
+- P0：生成结果必须结构化解析、校验、写入 SQLite，并记录 `GenerationJob` 与 `LlmUsage`。
+- P0：新增 Round 4 contract tests，覆盖 disabled fallback、enabled mock LLM、坏 JSON 降级、secret redaction。
+- 非目标：真实 API 调试、真实 Playwright/JMeter 执行、Celery/Redis。
+
+## 第四轮 Worker 分配
+- llm_main_chain_engineer_round4：已交付，agent `019e6f11-be8f-7421-bb85-21130b560014`，负责主链 LLM 生成实现。
+- qa_main_chain_llm_round4：已交付，agent `019e6f12-016e-7e72-b107-9ed68807cf2a`，负责 Round 4 契约和安全测试。
+
+## 第四轮主线程验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `cd backend; python -m pytest`：`25 passed, 2 warnings`。
+- OpenAPI `/api/v2` path 数：106。
+- 主线程 disabled smoke：document parse -> extract-items -> generate-test-points -> generate-test-cases 通过，生成 1 个需求项、2 个测试点、2 个测试用例。
+- 安全扫描：文本文件中未发现非测试用的 `agt_codex_` 风格 key；smoke 响应未回显 fake key/token。
+- Round 4 contract/security tests 覆盖 disabled fallback、enabled mock LLM JSON、坏 JSON/provider error 降级、usage 统计和 secret redaction。
+
+## 第四轮残余风险
+- 主线程仍未把用户真实 API key 注入命令行做 live smoke，避免密钥进入命令记录；真实服务差异后续需用本地环境变量手动验证。
+- 主链 LLM 已接入三条核心生成接口，但 LangGraph 多轮编排、SSE 生成细节、Celery/Redis 异步任务仍未接入。
+- 真实外部 API 调试、真实 Playwright 自动化执行、真实 JMeter 执行仍未完成。
+- LLM API key 仍采用环境变量读取和数据库掩码引用，尚未做正式密钥管理或加密存储。
+
+## 第五轮范围
+- P0：实现真实 API 调试与接口用例执行器。
+- P0：`/api/v2/apis/debug` 支持通过 `httpx` 发起真实请求并返回响应快照和断言结果。
+- P0：`/api/v2/api-test-cases/{caseId}/execute` 在存在环境或 base URL 时真实执行，缺环境时保持 placeholder 兼容。
+- P0：`/api/v2/api-test-cases/batch-executions` 复用真实执行器并汇总结果。
+- P0：请求/响应/错误/日志必须脱敏，网络异常不得导致 500。
+- 非目标：Playwright/JMeter 执行器、Celery/Redis 调度、正式迁移。
+
+## 第五轮 Worker 分配
+- api_execution_engineer_round5：已交付，agent `019e6f22-b96a-7c30-bb6f-c6becc8eb30c`，负责真实 API runner 实现。
+- qa_api_execution_round5：已交付，agent `019e6f22-f495-7080-9e6d-34e9b9bf50cb`，负责 Round 5 契约和安全测试。
+
+## 第五轮主线程验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `cd backend; python -m pytest tests/test_round5_api_runner.py -q`：8 个用例通过。
+- `cd backend; python -m pytest`：`33 passed, 2 warnings`。
+- OpenAPI `/api/v2` path 数：106。
+- 主线程本地 HTTP smoke：临时 SQLite + 本机 HTTPServer，`apis/debug` 和 `api-test-cases/{caseId}/execute` 均真实请求成功，HTTP 201 断言通过。
+- 追加修复：`GET /llm-configs` 同 `sort_order` 下改为新记录优先，避免默认持久库历史数据导致第一页看不到新建配置。
+
+## 第五轮残余风险
+- 当前真实执行器支持基础 HTTP 请求和轻量断言，但未实现完整 OpenAPI/Postman/curl 导入解析。
+- 场景执行仍未实现跨步骤变量提取和数据传递。
+- 调度器仍是配置入口，没有真实定时执行。
+- Playwright 自动化执行器、JMeter 性能执行器、Celery/Redis 异步任务仍未完成。
+
+## 第六轮范围
+- P0：自动化项目执行从 deterministic placeholder 推进到本地 runner。
+- P0：性能测试执行支持 JMeter CLI 路径，缺工具时结构化 error，不抛 500。
+- P0：API 场景执行按节点顺序执行 case，并支持基础变量注入/提取。
+- P0：新增 Round 6 contract tests，覆盖成功、失败、超时/缺工具、安全脱敏与兼容 fallback。
+- 非目标：引入新生产依赖、真实 Celery/Redis 集群、完整 OpenAPI/Postman/curl 导入。
+
+## 第六轮 Worker 分配
+- auto_runner_engineer_round6：已交付，负责 `services/auto_runner.py`、`router.py` 自动化执行区。
+- perf_runner_engineer_round6：已交付，负责 `services/perf_runner.py`、`router.py` 性能执行区。
+- api_scenario_engineer_round6：已交付，负责 API 场景顺序执行与变量传递。
+- qa_execution_round6：已交付，负责 Round 6 契约/安全测试。
+
+## 第六轮主线程验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `cd backend; python -m pytest tests/test_round6_execution_runners.py -q`：9 个用例通过。
+- `cd backend; python -m pytest -o addopts='' -q`：`42 passed, 2 warnings`。
+- OpenAPI `/api/v2` path 数：105。
+- 安全扫描：仅发现测试和文档中明确标注的 fake secret；未发现用户真实 key。
+- Round 6 contract/security tests 覆盖自动化本地 runner、JMeter runner、API scenario 变量注入/提取、缺资产 fallback、缺工具/超时/失败降级、secret redaction。
+
+## 第六轮残余风险
+- 自动化 runner 当前执行 persisted Python/pytest case files；完整 Playwright trace、失败截图和浏览器 artifacts 尚未打包。
+- JMeter runner 已支持 CLI/JTL 摘要解析；JMeter HTML report 打包尚未实现。
+- API scenario 已支持基础顺序执行、`{{variable}}` 注入和 JSONPath 提取；复杂数据映射、条件分支、循环、并发场景尚未实现。
+- 调度器仍是配置和手动触发入口，尚未实现真实本地队列或 Celery/Redis 定时执行。
+- 当前 Codex 会话目录曾切到 `D:\codex-project\最新版ai测试平台`，但完整项目和本轮实现位于 `D:\codex-project\新ui-前端`；后续交付需继续以完整项目目录为准。
+
+## 第七轮范围
+- P0：OpenAPI JSON、Postman Collection JSON、curl 命令可导入为 `ApiEndpoint`，可按需生成 `ApiTestCase`。
+- P0：导入链路对 secret 做脱敏，非法格式返回结构化错误，不抛 500。
+- P0：API schedule 支持本地手动执行和 due-scan 触发，执行结果落库并更新 `last_run_at`、`last_result`。
+- P0：新增 Round 7 contract/security tests。
+- 非目标：新增生产依赖、完整 YAML 解析、Celery/Redis 分布式调度、前端视觉重构。
+
+## 第七轮 Worker 分配
+- api_import_engineer_round7：已交付，agent `019e6f82-825a-7421-8a61-d23fcd8e3a55`，负责 `services/api_importer.py` 与 import 路由区块。
+- schedule_runner_engineer_round7：已交付，agent `019e6f82-dce0-7b01-b322-c38763e6d0d9`，负责 `services/schedule_runner.py` 与 schedules 路由区块。
+- qa_contract_engineer_round7：已交付，agent `019e6f83-1ea0-7e40-a1e6-4fe776f020fa`，负责 `backend/tests/test_round7_import_schedule.py`。
+
+## 第七轮主线程验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `cd backend; python -m pytest tests/test_round7_import_schedule.py -q`：5 个用例通过。
+- `cd backend; python -m pytest -o addopts='' -q`：`47 passed, 2 warnings`。
+- OpenAPI `/api/v2` path 数：107。
+- 安全扫描：仅发现测试和文档中明确标注的 fake secret；未发现用户真实 key。
+- 主线程追加修复：
+  - `postman_collection` / `openapi_json` / `curl_command` 等别名进入正确解析分支。
+  - `collection` 字段可作为 Postman 文档来源。
+  - Postman 嵌套目录名不再并入 endpoint `name`。
+  - `run-due` 支持 `lib_id/libId` 过滤，并返回紧凑 executed 结果，避免默认持久库历史 schedule 污染测试。
+
+## 第七轮残余风险
+- OpenAPI YAML 未解析；当前只支持 JSON/dict/JSON string，符合本轮“不新增依赖”约束。
+- Postman prerequest/test scripts 尚未转换为断言或前后置脚本。
+- `run-due` 仍是轻量 due-scan，不是完整 cron parser 或后台常驻调度器。
+- 后端剩余较大项：完整执行证据打包、正式迁移/Alembic、正式密钥管理、生产级异步队列。
+
+## 第八轮范围
+- P0：自动化 runner 持久化运行日志和执行证据 artifacts 元数据。
+- P0：性能 runner 持久化 JMX/JTL/stdout/stderr，并支持可选 JMeter HTML report。
+- P0：新增 Round 8 contract/security tests。
+- 非目标：对象存储、Celery/Redis、Alembic、前端视觉重构。
+
+## 第八轮 Worker 分配
+- auto_artifact_engineer_round8：已交付，agent `019e6f8c-e77b-79d3-af36-0467d4930869`，负责 `services/auto_runner.py` 与自动化执行返回兼容。
+- perf_artifact_engineer_round8：已交付，agent `019e6f8d-1e7d-7493-9915-837f0035ffcb`，负责 `services/perf_runner.py`。
+- qa_artifact_engineer_round8：已交付，agent `019e6f8d-5ab3-7992-bb6e-04331852c4fd`，负责 `backend/tests/test_round8_artifacts.py`。
+
+## 第八轮主线程验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `cd backend; python -m pytest tests/test_round8_artifacts.py -q`：4 个用例通过。
+- `cd backend; python -m pytest -o addopts='' -q`：`51 passed, 2 warnings`。
+- OpenAPI `/api/v2` path 数：107。
+- 安全扫描：仅发现测试和文档中明确标注的 fake secret；未发现用户真实 key。
+- 自动化 runner 现可持久化 runner log、截图、trace、video、Junit/XML、HTML、log 等 evidence。
+- 性能 runner 现可持久化 `plan.jmx`、`result.jtl`、stdout/stderr，并可选生成 JMeter HTML report。
+
+## 第八轮残余风险
+- 二进制 artifacts 只做文件名和元数据脱敏，不解析内部二进制内容。
+- 真实 JMeter HTML dashboard 的目录结构依赖本机 JMeter 版本；当前实现按标准 `jmeter -g result.jtl -o report` 并做失败降级。
+- 对象存储、后台异步执行和正式迁移链路仍未接入。
+
+## 第九轮范围
+- P0：`/system/restore` 支持 dry-run/preview 与安全 merge restore。
+- P0：`/system/restore` 的 overwrite 模式必须显式确认，不允许误清库。
+- P0：`/system/schema-status` 提供 SQLite 表/列状态自检。
+- P0：新增 Round 9 contract/security tests。
+- 非目标：正式 Alembic、生产清库恢复、恢复所有复杂主链依赖对象。
+
+## 第九轮 Worker 分配
+- restore_engineer_round9：已交付，agent `019e6f94-2ab3-7362-acb8-2abe684ef783`，负责恢复服务与 `/system/restore` 接入。
+- schema_status_engineer_round9：已交付，agent `019e6f94-7441-7a73-8e60-b1bf748b548a`，负责 schema status 自检服务与路由。
+- qa_restore_engineer_round9：已交付，agent `019e6f94-acb7-73d3-bfff-e3d4550a6f3b`，负责 `backend/tests/test_round9_restore_schema.py`。
+
+## 第九轮主线程验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `cd backend; python -m pytest tests/test_round9_restore_schema.py -q`：5 个用例通过。
+- `cd backend; python -m pytest -o addopts='' -q`：`56 passed, 2 warnings`。
+- OpenAPI `/api/v2` path 数：108。
+- 安全扫描：仅发现测试和文档中明确标注的 fake secret；未发现用户真实 key。
+- 主线程追加修复：`/system/restore` dry-run 返回增加 `summary` 兼容别名，保留 `tables` 结构。
+
+## 第九轮残余风险
+- overwrite 模式本轮只加确认门槛并复用 merge 逻辑，未执行真实清库恢复。
+- 恢复范围仍限定为 Round9 指定表；复杂执行/报告/缺陷等深依赖对象暂未全量恢复。
+- schema-status 是 introspection 自检，不是正式 Alembic migration。
+
+## 第十轮范围
+- P0：报告中心增加统一 Reporting Aggregator，综合聚合需求项、用例、执行、缺陷、接口、自动化和性能结果。
+- P0：`/reports/comprehensive` 生成稳定快照，写入 `scope_snapshot`、`data_snapshot`、`source_refs_json`。
+- P0：`/perf-plans/{planId}/generate-report` 基于 PerfPlan 和最新 PerfResult 生成性能报告快照。
+- P0：`/reports/{reportId}/download` 支持 Markdown / HTML / JSON 下载内容。
+- P0：`/reports/lightweight-conclusions` 复用同一聚合上下文生成轻量结论，并支持可选保存。
+- P0：新增 Round 10 contract/security tests。
+- 非目标：PDF/Word 导出依赖、对象存储、Celery/Redis、前端视觉重构。
+
+## 第十轮 Worker 分配
+- reporting_aggregator_engineer_round10：进行中，agent `019e6ff8-ff12-7b52-bb03-0e1983b432f8`，负责报告聚合服务与报告相关路由。
+- qa_reporting_engineer_round10：进行中，agent `019e6ff9-39c6-7ac0-baf3-aa2120fe4799`，负责 `backend/tests/test_round10_reporting.py`。
+
+## 第十轮主线程验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `cd backend; python -m pytest tests/test_round10_reporting.py -q`：7 个用例通过。
+- `cd backend; python -m pytest -o addopts='' -q`：`63 passed, 2 warnings`。
+- OpenAPI `/api/v2` path 数：108。
+- 安全扫描：仅发现测试和文档中的 fake secret、文档说明和脱敏正则；未发现用户真实 key。
+- 报告聚合、快照、下载和轻量结论链路验收通过。
+
+## 第十轮残余风险
+- 报告总结仍为规则化生成，未接入真实 LLM 分章节总结。
+- HTML 导出为轻量 HTML，不是 PDF/Word 级模板导出。
+- 自动化 artifacts 只聚合元数据，不解析二进制内容。
+
+## 第十一轮范围
+- P0：测试用例支持 Markdown / CSV / JSON 导出。
+- P0：缺陷列表支持 Markdown / CSV / JSON 导出。
+- P0：自动化项目下载从 placeholder 推进为可解码 ZIP 包。
+- P0：性能计划支持下载 JMX 脚本与性能结果摘要/原始数据引用。
+- P0：新增 Round 11 contract/security tests。
+- 非目标：PDF/Word、真实 Excel `.xlsx`、对象存储、前端视觉重构。
+
+## 第十一轮 Worker 分配
+- export_download_engineer_round11：进行中，agent `019e7005-6461-7f00-b966-91180312367b`，负责导出服务与导出相关路由。
+- qa_export_engineer_round11：进行中，agent `019e7005-8f89-74b1-a12a-199a89ada5fe`，负责 Round11 合同/安全测试。
+
+## 第十一轮主线程验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `cd backend; python -m pytest tests/test_round11_exports.py -q`：7 个用例通过。
+- `cd backend; python -m pytest -o addopts='' -q`：`71 passed, 2 warnings`。
+- OpenAPI `/api/v2` path 数：112。
+- 安全扫描：仅发现测试和文档中的 fake secret、文档说明和脱敏正则；未发现用户真实 key。
+- 用例/缺陷导出、自动化 ZIP 下载、性能脚本/结果下载验收通过。
+
+## 第十一轮残余风险
+- Excel `.xlsx`、PDF、Word 仍未实现，需要确认是否允许新增导出依赖。
+- 自动化 ZIP 是即时本地打包，尚未接对象存储或持久下载文件。
+- 性能结果下载目前是 JSON 摘要和本地原始路径引用，尚未流式输出 JTL/CSV 真实附件。
+
+## 第十二轮范围
+- P0：`/system/recycle-bin` 列出数据库软删除对象，不再只看内存 store。
+- P0：`/system/recycle-bin/{id}/restore` 支持恢复 `type:id` 形式的数据库回收站对象，并保留旧兼容。
+- P0：用户偏好接口使用 SQLite 持久化。
+- P0：最近活动接口使用 SQLite 持久化。
+- P0：新增 Round 12 contract/security tests。
+- 非目标：清空全部数据、组织级用户系统、新表迁移、新依赖。
+
+## 第十二轮主线程验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `cd backend; python -m pytest tests/test_round12_system_state.py -q`：3 个用例通过。
+- `cd backend; python -m pytest -o addopts='' -q`：`74 passed, 2 warnings`。
+- OpenAPI `/api/v2` path 数：115。
+- 安全扫描：仅发现测试和文档中的 fake secret、文档说明和脱敏正则；未发现用户真实 key。
+- DB 回收站、用户偏好、最近活动验收通过。
+
+## 第十二轮残余风险
+- 回收站恢复只覆盖已有软删除模型，不做级联依赖修复。
+- 用户偏好和最近活动复用 `round2_resource`，不是正式独立表。
+- 清空所有数据/恢复出厂设置属于破坏性操作，仍需用户明确确认后才能实现。
+
+## 第十三轮范围
+- P0：新增前端 API client，统一连接后端 `/api/v2`。
+- P0：后端支持本地 Vite CORS，并修复统一响应 `Content-Length` 复用问题。
+- P0：Dashboard 接入默认项目、项目大盘、最近活动。
+- P0：Reports 接入报告列表、综合报告生成、报告下载、轻量结论生成/归档。
+- P0：Settings 接入 schema-status、runtime settings preference、system backup。
+- P0：浏览器真实验证三页主流程。
+- 非目标：前端视觉重构、PDF/Word/Excel `.xlsx` 导出、Celery/Redis、正式 Alembic。
+
+## 第十三轮主线程验收结果
+- `npm run build`：通过，Vite 仅提示 chunk size warning。
+- `cd backend; python -m pytest tests/test_round13_frontend_integration.py -q`：3 个用例通过。
+- `cd backend; python -m pytest -q`：全量通过，保留 FastAPI 依赖 deprecation warnings。
+- 浏览器验证通过：
+  - Dashboard 显示后端连接状态和项目大盘数据，无 console error。
+  - Reports 可读取/生成后端报告，详情页可下载 HTML。
+  - Settings 可读取 schema 状态，保存配置并创建后端备份。
+
+## 第十三轮残余风险
+- Requirements、TestCases、Execution、ApiTesting、Automation、Performance、LlmConfig 仍有较多 mock 数据，下一轮继续分批接入。
+- Reports 详情页主体仍有部分静态分析块，本轮只接入列表、生成、下载和轻量结论链路。
+- 默认项目来源临时使用第一页项目，后续应接正式当前项目上下文。
+- `dist` 由构建生成，后续提交时应按项目策略决定是否纳入版本管理。
+
+## 第十四轮范围
+- P0：Requirements 接入后端需求库、需求文档、需求项和测试点生成主链。
+- P0：TestCases 接入后端测试用例列表、需求项批量生成和导出。
+- P0：后端补齐前端所需的需求库详情和项目级用例过滤接口。
+- P0：浏览器真实验证需求库和测试用例库主流程。
+- 非目标：前端视觉重构、Excel `.xlsx`、PDF/Word、正式项目选择器、Celery/Redis。
+
+## 第十四轮主线程验收结果
+- `npm run build`：通过，Vite 仅提示 chunk size warning。
+- `python -m pytest backend/tests/test_round14_requirement_testcase_integration.py -q`：2 个用例通过。
+- `cd backend; python -m pytest -q`：全量通过，保留 2 个 FastAPI 依赖 deprecation warnings。
+- OpenAPI `/api/v2` path 数：118。
+- 浏览器验证通过：
+  - Requirements 可新建需求库并导入需求文档，无 console error。
+  - TestCases 可批量生成后端测试用例并导出 CSV，无 console error。
+  - 截图证据位于 `docs/orchestration/artifacts/round14-requirements.png` 和 `docs/orchestration/artifacts/round14-testcases.png`。
+
+## 第十四轮残余风险
+- Requirements / TestCases 仍保留部分演示分析块，核心后端主链已接入。
+- 当前项目上下文仍为前端自动选择，后续应补全局项目选择器。
+- 测试用例导出使用 CSV / Markdown / JSON，未实现真实 `.xlsx`。
+- Execution、ApiTesting、Automation、Performance、LlmConfig 仍待继续接后端。
+
+## 第十五轮范围
+- P0：Execution 接入后端测试用例、执行统计、执行历史、缺陷列表和测试轮次。
+- P0：后端新增 `GET /api/v2/projects/{projectId}/test-rounds`，支持项目级轮次分页和状态过滤。
+- P0：“批量执行”创建测试轮次并写入执行记录，失败记录生成缺陷。
+- P0：“重跑失败”写入新的通过记录并刷新执行状态。
+- P0：“导出缺陷列表”调用后端 CSV 导出。
+- P0：浏览器真实验证 Execution 主流程。
+- 非目标：真实浏览器自动化 runner、正式全局项目选择器、AI 修复闭环、前端视觉重构。
+
+## 第十五轮主线程验收结果
+- `npm run build`：通过，Vite 仅提示 chunk size warning。
+- `cd backend; python -m pytest tests/test_round15_execution_integration.py -q`：1 个用例通过。
+- `cd backend; python -m pytest -q`：全量通过，保留 2 个 FastAPI 依赖 deprecation warnings。
+- OpenAPI `/api/v2` path 数：119。
+- 浏览器验证通过：
+  - Execution 自动选择已有后端测试用例的项目，无 console error。
+  - “批量执行”创建测试轮次、写入执行记录并生成缺陷。
+  - “重跑失败”写入通过结果并刷新列表。
+  - “历史与缺陷记录”展示轮次、通过率、缺陷网格和关联测试用例。
+  - “导出缺陷列表”触发 CSV 下载提示。
+  - 截图证据位于 `docs/orchestration/artifacts/round15-execution-list.png` 和 `docs/orchestration/artifacts/round15-execution-history.png`。
+
+## 第十五轮残余风险
+- Execution 仍使用前端自动选择项目，只是已优先选择有测试用例的项目；正式全局项目上下文仍待补。
+- “关联现有缺陷”“智能新建缺陷”“AI 修复方案”仍为演示交互。
+- 执行结果为前端触发的确定性模拟执行，未接真实浏览器/接口自动化 runner。
+- 历史趋势图仍保留静态曲线，后续可接测试轮次统计。
+
+## 第十六轮范围
+- P0：ApiTesting 接入后端接口库、OpenAPI 导入、接口 debug 和接口用例批量执行主链路。
+- P0：LlmConfig 接入后端 LLM 配置列表、保存、设默认、停用和连接测试。
+- P0：Automation 接入后端自动化项目、框架生成、用例生成和执行结果。
+- P0：Performance 接入后端性能方案、计划生成、脚本生成、执行、报告生成和结果下载入口。
+- P0：浏览器真实验收四个页面主流按钮链路。
+- 非目标：视觉重构、正式全局项目选择器、真实外部 LLM 调用、真实 Playwright/JMeter 执行强制启用。
+
+## 第十六轮主线程验收结果
+- `npm run build`：通过，Vite 仅提示 chunk size warning。
+- `cd backend; python -m pytest -q`：通过，80 tests，保留 2 个 FastAPI 依赖 deprecation warnings。
+- 浏览器验证通过且无 console error：
+  - ApiTesting：Swagger 同步、进入工作台、debug 运行、批量执行物理断言。
+  - LlmConfig：配置加载、连接测试、保存配置。
+  - Automation：项目加载、构建运行、执行结果页。
+  - Performance：方案加载、执行、报告页。
+- 截图证据位于 `docs/orchestration/artifacts/round16-*.png`。
+
+## 第十六轮残余风险
+- ApiTesting / LlmConfig / Automation / Performance 仍保留部分演示型分析区块，但核心数据与操作主链路已接后端。
+- 项目上下文仍由页面扫描自动选择，后续应补正式全局项目选择器。
+- Automation 默认执行后端确定性占位用例；真实浏览器自动化 runner 尚未在前端强制启用。
+- Performance 默认执行后端确定性占位压测；真实 JMeter runner 仍取决于工具链和请求模式。
+- LLM 真实调用默认关闭，连接测试会展示 disabled/fallback 状态；真实连通需本地环境变量开启。

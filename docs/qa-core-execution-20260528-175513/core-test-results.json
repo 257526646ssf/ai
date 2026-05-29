@@ -1,0 +1,94 @@
+{
+  "base_url": "http://127.0.0.1:3001",
+  "run_id": "20260528-175513",
+  "total": 10,
+  "passed": 9,
+  "failed": 1,
+  "console_errors": [
+    "error: Invalid DOM property `%s`. Did you mean `%s`? paint-order paintOrder",
+    "error: Invalid DOM property `%s`. Did you mean `%s`? paint-order paintOrder"
+  ],
+  "failed_requests": [],
+  "results": [
+    {
+      "case_id": "TC01",
+      "name": "Root document loads",
+      "status": "passed",
+      "details": "Root document responds with HTTP 200.",
+      "screenshot": "D:\\codex-project\\新ui-前端\\docs\\qa-core-execution-20260528-175513\\screenshots\\tc01_http_root.png",
+      "error": null
+    },
+    {
+      "case_id": "TC02",
+      "name": "React boot smoke",
+      "status": "passed",
+      "details": "React app mounted with sidebar and main content.",
+      "screenshot": "D:\\codex-project\\新ui-前端\\docs\\qa-core-execution-20260528-175513\\screenshots\\tc02_app_boot.png",
+      "error": null
+    },
+    {
+      "case_id": "TC03",
+      "name": "Sidebar navigation",
+      "status": "passed",
+      "details": "Visited 10 sidebar destinations. Header samples: ['平台首页\\n/\\nDashboard\\n风格选择: 01 基础雅致版\\nLLM 状态\\n已连接\\nOpenAI GPT-4o\\n张明\\n测试负责人', '需求库\\n/\\n需求库\\n风格选择: 01 基础雅致版\\nLLM 状态\\n已连接\\nOpenAI GPT-4o\\n张明\\n测试负责人', '测试用例库\\n/\\n测试用例库\\n风格选择: 01 基础雅致版\\nLLM 状态\\n已连接\\nOpenAI GPT-4o\\n张明\\n测试负责人']",
+      "screenshot": "D:\\codex-project\\新ui-前端\\docs\\qa-core-execution-20260528-175513\\screenshots\\tc03_navigation.png",
+      "error": null
+    },
+    {
+      "case_id": "TC04",
+      "name": "Theme dropdown",
+      "status": "passed",
+      "details": "Theme dropdown switches dashboard theme to dark.",
+      "screenshot": "D:\\codex-project\\新ui-前端\\docs\\qa-core-execution-20260528-175513\\screenshots\\tc04_theme_switch.png",
+      "error": null
+    },
+    {
+      "case_id": "TC05",
+      "name": "Requirement upload modal",
+      "status": "passed",
+      "details": "Upload requirement modal opens and closes.",
+      "screenshot": "D:\\codex-project\\新ui-前端\\docs\\qa-core-execution-20260528-175513\\screenshots\\tc05_modal_upload.png",
+      "error": null
+    },
+    {
+      "case_id": "TC06",
+      "name": "AI case generation mutation",
+      "status": "passed",
+      "details": "AI generation modal inserts generated test cases into TestCases state.",
+      "screenshot": "D:\\codex-project\\新ui-前端\\docs\\qa-core-execution-20260528-175513\\screenshots\\tc06_generate_cases.png",
+      "error": null
+    },
+    {
+      "case_id": "TC07",
+      "name": "API request simulation",
+      "status": "passed",
+      "details": "API workbench run shows the mocked response body.",
+      "screenshot": "D:\\codex-project\\新ui-前端\\docs\\qa-core-execution-20260528-175513\\screenshots\\tc07_api_response.png",
+      "error": null
+    },
+    {
+      "case_id": "TC08",
+      "name": "Execution simulation",
+      "status": "passed",
+      "details": "Execution modal completes and publishes execution-finished event.",
+      "screenshot": "D:\\codex-project\\新ui-前端\\docs\\qa-core-execution-20260528-175513\\screenshots\\tc08_execution_flow.png",
+      "error": null
+    },
+    {
+      "case_id": "TC09",
+      "name": "AI assistant XSS probe",
+      "status": "failed",
+      "details": "User message HTML executed through dangerouslySetInnerHTML",
+      "screenshot": "D:\\codex-project\\新ui-前端\\docs\\qa-core-execution-20260528-175513\\screenshots\\tc09.png",
+      "error": "Traceback (most recent call last):\n  File \"D:\\codex-project\\新ui-前端\\_automation\\core_test_runner.py\", line 65, in run_case\n    details, shot_name = fn()\n                         ^^^^\n  File \"D:\\codex-project\\新ui-前端\\_automation\\core_test_runner.py\", line 270, in tc_ai_assistant_xss\n    assert xss == 0, \"User message HTML executed through dangerouslySetInnerHTML\"\n           ^^^^^^^^\nAssertionError: User message HTML executed through dangerouslySetInnerHTML\n"
+    },
+    {
+      "case_id": "TC10",
+      "name": "Mobile horizontal overflow",
+      "status": "passed",
+      "details": "Mobile layout stays within acceptable width: {'scrollWidth': 390, 'innerWidth': 390}",
+      "screenshot": "D:\\codex-project\\新ui-前端\\docs\\qa-core-execution-20260528-175513\\screenshots\\tc10_mobile_overflow.png",
+      "error": null
+    }
+  ]
+}
