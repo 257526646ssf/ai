@@ -433,3 +433,34 @@
 - `npm run build`: passed, with only Vite chunk size warning.
 - Headless Chrome CDP smoke: R23 专用项目进入测试用例库，质量摘要可见，批量评审/单条评审按钮可见，批量评审后结果可见，`window.__r23Errors` 为空。
 - Residual risks: 规则评分是 deterministic 启发式，阈值后续可按产品验收口径微调；人工评审意见保存到操作日志/状态字段，没有新增正式 Review 表；浏览器烟测使用本地临时 smoke 数据；真实 LLM 默认关闭。
+
+## 第二十四轮验收
+- [x] R24 名称为执行与缺陷闭环。
+- [x] 后端新增 deterministic execution defect loop service `backend/aitest_platform/services/execution_defect_loop.py`。
+- [x] 新增 `GET /executions/templates`、`POST /executions/{executionId}/defect-suggestion`、`POST /executions/{executionId}/create-defect`、`POST /defects/{defectId}/link-case`、`POST /defects/{defectId}/unlink-case`、`POST /defects/{defectId}/retest-reminder`、`GET /projects/{projectId}/execution-trend`、`GET /projects/{projectId}/defect-loop-summary`。
+- [x] 增强 batch/statistics/defects patch/copy-text。
+- [x] `defect-suggestion` 返回 top-level `steps_to_reproduce`。
+- [x] `copy-text` 使用中文标签“复现/实际/预期/复测建议”。
+- [x] R24 不接真实 LLM，并注意敏感信息脱敏。
+- [x] `src/pages/Execution.jsx` 接入 templates、trend、defect loop summary、suggestion/create/link/unlink/retest/status/copy。
+- [x] 批量摘要显示 `created_defects` / `failed` / `blocked` / `skipped`。
+- [x] 历史趋势优先后端数据。
+- [x] 前端做了 shape normalization。
+- [x] R24 定向测试覆盖项目链路、模板、建议、创建缺陷、关联/解除、复测提醒、趋势、摘要、统计、筛选/patch/copy、批量摘要、脱敏。
+- [x] 脱敏从整段替换改为片段级脱敏，`Round 11 defect ... sk-*` 普通标题不再被误伤。
+- [x] Round9 restore merge 测试改为分页查找以适配脏库。
+- [x] API 验收确认实际前缀为 `/api/v2`，`/api/v2/executions/templates` 返回 200。
+- [x] 浏览器轻量验收确认首页可加载并包含 `用例执行` 入口，未发现明显 JS runtime error。
+
+## Round 24 Evidence
+- Added `backend/tests/test_round24_execution_defect_loop.py`.
+- `python -m compileall backend\aitest_platform`: passed.
+- `python -m pytest backend\tests\test_round24_execution_defect_loop.py -q`: previously passed; after adding the redaction false-positive regression test, R24 targeted suite is 9 passed.
+- `python -m pytest backend\tests\test_round15_execution_history.py backend\tests\test_round23_testcase_quality.py -q`: 6 passed.
+- `npm run build`: passed.
+- `python -m pytest tests/test_round9_restore_schema.py::test_restore_merge_restores_project_api_assets_and_lists_can_read_them -q`: 1 passed.
+- `python -m pytest tests/test_round11_exports.py tests/test_round24_execution_defect_loop.py -q`: 17 passed.
+- `python -m pytest -q`: full backend regression passed, exit code 0.
+- API acceptance: actual project prefix is `/api/v2`; bare `/executions/templates` and `/api/executions/templates` return 404 due to prefix mismatch; `/api/v2/executions/templates` returns 200.
+- Browser light smoke: `http://127.0.0.1:3000/` loads and includes `用例执行`; QA-collected `console.error` / `pageerror` has no obvious JS runtime error. Deep interaction was affected by script Chinese encoding / Playwright lag and is not used as complete interaction evidence.
+- Residual risks: 深层浏览器交互仅轻量验证；扩展缺陷字段仍通过 `Defect.remark` 的 R24 JSON prefix 存储；建议/复测为 deterministic 规则，非真实 LLM；本地服务仍为原有 8000/3000 dev 进程。

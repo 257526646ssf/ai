@@ -67,6 +67,22 @@ def find_by_field(items: list[dict[str, Any]], field: str, expected: str) -> dic
     pytest.fail(f"Could not find {field}={expected!r} in {items!r}", pytrace=False)
 
 
+def find_project_by_code(client, code: str) -> dict[str, Any]:
+    page_size = 2000
+    page = 1
+    while True:
+        payload = data_of(client.get(f"{API_PREFIX}/projects", params={"page": page, "pageSize": page_size}))
+        projects = assert_list_like(payload)
+        for project in projects:
+            if project.get("code") == code:
+                return project
+
+        total = payload.get("total") if isinstance(payload, dict) else None
+        if not projects or (isinstance(total, int) and page * page_size >= total):
+            pytest.fail(f"Could not find code={code!r} across project pages; last_page={page}, total={total}", pytrace=False)
+        page += 1
+
+
 def marker_counts(marker: str) -> dict[str, int]:
     with session_scope() as session:
         return {
@@ -221,8 +237,7 @@ def test_restore_merge_restores_project_api_assets_and_lists_can_read_them(clien
     assert data.get("restored") is True, data
     assert_no_round9_secret(payload)
 
-    projects = assert_list_like(data_of(client.get(f"{API_PREFIX}/projects")))
-    project = find_by_field(projects, "code", marker)
+    project = find_project_by_code(client, marker)
     project_id = project["id"]
 
     libs = assert_list_like(data_of(client.get(f"{API_PREFIX}/projects/{project_id}/api-test-libs")))
@@ -262,8 +277,7 @@ def test_restore_redacts_fake_secrets_from_response_and_readback_lists(client):
     assert restore_response["data"].get("restored") is True, restore_response
     assert_no_round9_secret(restore_response)
 
-    projects = assert_list_like(data_of(client.get(f"{API_PREFIX}/projects")))
-    project = find_by_field(projects, "code", marker)
+    project = find_project_by_code(client, marker)
     libs = assert_list_like(data_of(client.get(f"{API_PREFIX}/projects/{project['id']}/api-test-libs")))
     lib = find_by_field(libs, "name", f"{marker}-lib")
     endpoints = assert_list_like(data_of(client.get(f"{API_PREFIX}/api-test-libs/{lib['id']}/apis")))

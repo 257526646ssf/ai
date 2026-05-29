@@ -80,10 +80,10 @@
 
 ## 当前下一步
 
-立即进入 R22：
-- 增强 TXT/Markdown 需求解析与来源锚点。
-- 补齐需求项编辑、合并、拆分、暂不入库和粒度质检闭环。
-- 让需求大脑输出可追溯摘要与风险，继续保持真实 LLM 默认关闭和脱敏约束。
+立即进入 R25：接口测试增强。
+- 支持 OpenAPI YAML/HAR 基础解析。
+- 补保存调试为用例、环境变量优先级、场景变量映射增强。
+- 推进 Mock 服务基础能力和前后置脚本受控执行，继续保持脱敏和本地优先约束。
 
 ## 当前进展
 
@@ -108,3 +108,13 @@
 - R23 验收证据见 `docs/orchestration/ROUND23_REPORT.md`：R23 定向测试 5 passed，R14/R22 回归 9 passed，后端全量 pytest 通过，`npm run build` 通过且仅 Vite chunk size warning，Headless Chrome CDP 烟测通过且 `window.__r23Errors` 为空。
 - R23 残余风险：规则评分是 deterministic 启发式，阈值后续可按产品验收口径微调；人工评审意见保存到操作日志/状态字段，没有新增正式 Review 表；浏览器烟测使用本地临时 smoke 数据；真实 LLM 默认关闭。
 - 下一步进入 R24：执行与缺陷闭环。
+
+## 当前进展补充：R24
+- R24 已完成文档收口：执行与缺陷闭环已落地。
+- 后端新增 deterministic execution defect loop service `backend/aitest_platform/services/execution_defect_loop.py`；新增 `GET /executions/templates`、`POST /executions/{executionId}/defect-suggestion`、`POST /executions/{executionId}/create-defect`、`POST /defects/{defectId}/link-case`、`POST /defects/{defectId}/unlink-case`、`POST /defects/{defectId}/retest-reminder`、`GET /projects/{projectId}/execution-trend`、`GET /projects/{projectId}/defect-loop-summary`；增强 batch/statistics/defects patch/copy-text；`defect-suggestion` 返回 top-level `steps_to_reproduce`；`copy-text` 使用中文标签“复现/实际/预期/复测建议”；不接真实 LLM，并注意敏感信息脱敏。
+- 前端 `src/pages/Execution.jsx` 已接入 templates、trend、defect loop summary、suggestion/create/link/unlink/retest/status/copy；批量摘要显示 `created_defects` / `failed` / `blocked` / `skipped`；历史趋势优先后端数据；做了 shape normalization。
+- R24 回归修复：脱敏从整段替换改为片段级脱敏，修复 `Round 11 defect ... sk-*` 普通标题被误伤；Round9 restore merge 测试改为分页查找以适配脏库。
+- R24 验收证据见 `docs/orchestration/ROUND24_REPORT.md`：`python -m compileall backend\aitest_platform` 通过；R24 定向测试先前通过，补充脱敏不误伤测试后为 9 passed；R15/R23 回归 6 passed；`npm run build` 通过；`python -m pytest tests/test_round9_restore_schema.py::test_restore_merge_restores_project_api_assets_and_lists_can_read_them -q` 1 passed；`python -m pytest tests/test_round11_exports.py tests/test_round24_execution_defect_loop.py -q` 17 passed；`python -m pytest -q` 完整后端回归通过，退出码 0。
+- R24 API 与浏览器验收：项目实际前缀为 `/api/v2`，裸 `/executions/templates` 和 `/api/executions/templates` 返回 404 是前缀不匹配，`/api/v2/executions/templates` 返回 200；`http://127.0.0.1:3000/` 可加载，页面入口包含 `用例执行`，QA 收集到 `console.error` / `pageerror` 无明显 JS runtime error；深层交互曾受脚本中文编码/Playwright 卡顿影响，未作为完整交互验收证据。
+- R24 残余风险：深层浏览器交互仅轻量验证；扩展缺陷字段仍通过 `Defect.remark` 的 R24 JSON prefix 存储；建议/复测为 deterministic 规则，非真实 LLM；本地服务仍为原有 8000/3000 dev 进程。
+- 下一步进入 R25：接口测试增强。

@@ -532,3 +532,14 @@
 - 验证：`python -m compileall backend\aitest_platform` 通过；`python -m pytest backend\tests\test_round23_testcase_quality.py -q` 5 passed；`python -m pytest backend\tests\test_round14_requirement_testcase_integration.py backend\tests\test_round22_requirement_closure.py -q` 9 passed；`cd backend; python -m pytest -q` 全量通过；`npm run build` 通过，仅 Vite chunk size warning；Headless Chrome CDP 烟测通过：R23 专用项目进入测试用例库，质量摘要可见，批量评审/单条评审按钮可见，批量评审后结果可见，`window.__r23Errors` 为空。
 - 残余风险：规则评分是 deterministic 启发式，阈值后续可按产品验收口径微调；人工评审意见保存到操作日志/状态字段，没有新增正式 Review 表；浏览器烟测使用本地临时 smoke 数据；真实 LLM 默认关闭。
 - 下一步进入 R24：执行与缺陷闭环。
+
+## 第二轮 R24 完成状态
+- R24 名称：执行与缺陷闭环。
+- 后端实现：新增 deterministic execution defect loop service `backend/aitest_platform/services/execution_defect_loop.py`；新增 `GET /executions/templates`、`POST /executions/{executionId}/defect-suggestion`、`POST /executions/{executionId}/create-defect`、`POST /defects/{defectId}/link-case`、`POST /defects/{defectId}/unlink-case`、`POST /defects/{defectId}/retest-reminder`、`GET /projects/{projectId}/execution-trend`、`GET /projects/{projectId}/defect-loop-summary`；增强 batch/statistics/defects patch/copy-text；`defect-suggestion` 返回 top-level `steps_to_reproduce`；`copy-text` 使用中文标签“复现/实际/预期/复测建议”；不接真实 LLM，并注意敏感信息脱敏。
+- 前端实现：`src/pages/Execution.jsx` 接入 templates、trend、defect loop summary、suggestion/create/link/unlink/retest/status/copy；批量摘要显示 `created_defects` / `failed` / `blocked` / `skipped`；历史趋势优先后端数据；做了 shape normalization。
+- QA：新增 `backend/tests/test_round24_execution_defect_loop.py`，覆盖项目链路、模板、建议、创建缺陷、关联/解除、复测提醒、趋势、摘要、统计、筛选/patch/copy、批量摘要、脱敏。
+- 验证：`python -m compileall backend\aitest_platform` 通过；`python -m pytest backend\tests\test_round24_execution_defect_loop.py -q` 8 passed；`python -m pytest backend\tests\test_round15_execution_history.py backend\tests\test_round23_testcase_quality.py -q` 6 passed；`npm run build` 通过；`python -m pytest -q` 完整后端回归通过，退出码 0。
+- API 验收：项目实际前缀为 `/api/v2`；裸 `/executions/templates` 和 `/api/executions/templates` 返回 404 是前缀不匹配，`/api/v2/executions/templates` 返回 200。
+- 浏览器轻量验收：`http://127.0.0.1:3000/` 可加载，页面入口包含 `用例执行`；QA 收集到 `console.error` / `pageerror` 无明显 JS runtime error。
+- 残余风险：扩展缺陷字段通过 `Defect.remark` 的 R24 JSON prefix 存储，避免 schema 迁移；建议和复测为 deterministic 规则，非真实 LLM；冒烟使用临时数据；趋势聚合基于本地 SQLite。
+- 下一步进入 R25：接口测试增强。

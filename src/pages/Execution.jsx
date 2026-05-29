@@ -17,11 +17,55 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, downloadTextFile, formatDateTime, pickList } from '../lib/api';
+import { apiGet, apiPost, apiRequest, downloadTextFile, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
 const DEMO_PROJECT_NAME = 'AI 测试演示项目';
 const TEST_CASE_PAGE_SIZE = 50;
+
+const normalizeList = (payload) => {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== 'object') return [];
+  const picked = pickList(payload);
+  if (picked.length) return picked;
+  const candidates = ['data', 'result', 'summary', 'trend', 'points', 'templates', 'defects', 'executions', 'cases', 'linked_cases'];
+  for (const key of candidates) {
+    if (Array.isArray(payload[key])) return payload[key];
+    if (payload[key] && typeof payload[key] === 'object') {
+      const nested = pickList(payload[key]);
+      if (nested.length) return nested;
+    }
+  }
+  return [];
+};
+
+const normalizeObject = (payload) => {
+  if (Array.isArray(payload)) return normalizeObject(payload[0]);
+  if (!payload || typeof payload !== 'object') return {};
+  return payload;
+};
+
+const firstValue = (...values) => values.find((value) => value !== undefined && value !== null && value !== '');
+
+const textValue = (value, fallback = '—') => {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (Array.isArray(value)) return value.filter(Boolean).join('\n') || fallback;
+  if (typeof value === 'object') return JSON.stringify(value, null, 2);
+  return String(value);
+};
+
+const normalizeSuggestion = (payload, fallbackCase = {}) => {
+  const source = normalizeObject(payload?.suggestion || payload?.data || payload);
+  return {
+    title: textValue(firstValue(source.title, source.defect_title, fallbackCase.title), '执行失败缺陷建议'),
+    severity: mapDefectSeverity(firstValue(source.severity, source.priority, fallbackCase.priority, 'medium')),
+    steps: textValue(firstValue(source.steps, source.reproduce_steps, source.reproduction_steps, fallbackCase.rawCase?.steps), '复现步骤待补充'),
+    expected: textValue(firstValue(source.expected, source.expected_result, fallbackCase.expected), '预期结果待补充'),
+    actual: textValue(firstValue(source.actual, source.actual_result, fallbackCase.actual), '实际结果待补充'),
+    impact: textValue(firstValue(source.impact, source.risk, source.scope), '影响范围待评估'),
+    retestSuggestion: textValue(firstValue(source.retest_suggestion, source.retestSuggestion, source.retest, source.verify_suggestion), '修复后重跑关联用例并验证缺陷状态')
+  };
+};
 
 const numberText = (value, fallback = '0') => {
   const num = Number(value);
@@ -97,6 +141,9 @@ const executionTextClass = (status) => {
 
 const mapDefectSeverity = (severity) => {
   const normalized = String(severity || '').toLowerCase();
+  if (['p0', 'p1'].includes(normalized)) return normalized === 'p0' ? '严重' : '高';
+  if (['p2'].includes(normalized)) return '中';
+  if (['p3', 'p4'].includes(normalized)) return '低';
   if (['fatal', 'blocker', 'critical'].includes(normalized)) return normalized === 'fatal' ? '致命' : '严重';
   if (['high', 'major'].includes(normalized)) return '高';
   if (['medium', 'normal'].includes(normalized)) return '中';
@@ -110,29 +157,59 @@ const mapDefectStatus = (status) => {
   if (['in_progress', 'processing'].includes(normalized)) return '进行中';
   if (['resolved', 'verified'].includes(normalized)) return '待验证';
   if (['closed', 'done'].includes(normalized)) return '已关闭';
+  if (['reopened', 'reopen'].includes(normalized)) return '重新打开';
   return status || '待修复';
 };
 
 const defectStatusClass = (status) => {
   const normalized = String(status || '').toLowerCase();
+  if (['已关闭'].includes(String(status || ''))) return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20';
+  if (['待验证', '已解决'].includes(String(status || ''))) return 'bg-blue-500/10 text-blue-500 border-blue-500/20';
+  if (['进行中', '处理中'].includes(String(status || ''))) return 'bg-amber-500/10 text-amber-500 border-amber-500/20';
   if (['closed', 'done'].includes(normalized)) return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20';
   if (['resolved', 'verified'].includes(normalized)) return 'bg-blue-500/10 text-blue-500 border-blue-500/20';
   if (['in_progress', 'processing'].includes(normalized)) return 'bg-amber-500/10 text-amber-500 border-amber-500/20';
   return 'bg-red-500/10 text-red-500 border-red-500/20';
 };
 
+const normalizeDefectStatusValue = (status) => {
+  const normalized = String(status || '').toLowerCase();
+  if (['待修复', '新建'].includes(String(status || ''))) return 'open';
+  if (['进行中', '处理中'].includes(String(status || ''))) return 'in_progress';
+  if (['待验证', '已解决'].includes(String(status || ''))) return 'resolved';
+  if (['已关闭'].includes(String(status || ''))) return 'closed';
+  if (['closed', 'done'].includes(normalized)) return 'closed';
+  if (['resolved', 'verified'].includes(normalized)) return 'resolved';
+  if (['in_progress', 'processing'].includes(normalized)) return 'in_progress';
+  if (['reopened', 'reopen'].includes(normalized)) return 'reopened';
+  return normalized || 'open';
+};
+
 const mapBackendDefect = (defect, casesById = new Map()) => {
-  const rawCase = casesById.get(Number(defect.case_id)) || {};
+  const linkedCases = normalizeList(defect.linked_cases || defect.test_cases || defect.cases);
+  const caseId = firstValue(defect.case_id, defect.test_case_id, linkedCases[0]?.id, linkedCases[0]?.case_id);
+  const rawCase = casesById.get(Number(caseId)) || {};
+  const caseLabel = firstValue(
+    rawCase.case_number,
+    defect.case_number,
+    linkedCases[0]?.case_number,
+    linkedCases[0]?.title,
+    caseId ? caseCode(caseId) : null
+  );
   return {
     id: defect.defect_number || defectCode(defect.id),
     backendId: defect.id,
-    caseBackendId: defect.case_id,
+    caseBackendId: caseId,
     title: defect.title || `缺陷 #${defect.id}`,
     severity: mapDefectSeverity(defect.severity),
     assignee: defect.assignee || '未分配',
     status: mapDefectStatus(defect.status),
+    statusValue: normalizeDefectStatusValue(defect.status),
     statusBg: defectStatusClass(defect.status),
-    caseId: rawCase.case_number || (defect.case_id ? caseCode(defect.case_id) : '—'),
+    caseId: caseLabel || '—',
+    linkedCases,
+    retestReminderAt: firstValue(defect.retest_reminder_at, defect.retest_reminder, defect.reminder_at),
+    retestSuggestion: firstValue(defect.retest_suggestion, defect.verify_suggestion, defect.retestSuggestion),
     time: formatDateTime(defect.updated_at || defect.created_at),
     raw: defect
   };
@@ -189,8 +266,11 @@ const mapBackendCaseRow = (testCase, latestExecution, defectsByCase) => {
 };
 
 const buildExecutionRows = (testCases, executions, defects) => {
-  const casesById = new Map(testCases.map((item) => [Number(item.id), item]));
-  const mappedDefects = defects.map((item) => mapBackendDefect(item, casesById));
+  const normalizedCases = normalizeList(testCases);
+  const normalizedExecutions = normalizeList(executions);
+  const normalizedDefects = normalizeList(defects);
+  const casesById = new Map(normalizedCases.map((item) => [Number(item.id), item]));
+  const mappedDefects = normalizedDefects.map((item) => mapBackendDefect(item, casesById));
   const defectsByCase = new Map();
   mappedDefects.forEach((defect) => {
     if (defect.caseBackendId && !defectsByCase.has(Number(defect.caseBackendId))) {
@@ -198,7 +278,7 @@ const buildExecutionRows = (testCases, executions, defects) => {
     }
   });
 
-  const sortedExecutions = [...executions].sort((a, b) => {
+  const sortedExecutions = [...normalizedExecutions].sort((a, b) => {
     const timeDiff = new Date(b.executed_at || b.created_at || 0).getTime() - new Date(a.executed_at || a.created_at || 0).getTime();
     if (timeDiff) return timeDiff;
     return toFiniteNumber(b.id) - toFiniteNumber(a.id);
@@ -208,7 +288,7 @@ const buildExecutionRows = (testCases, executions, defects) => {
     if (!latestByCase.has(Number(item.case_id))) latestByCase.set(Number(item.case_id), item);
   });
 
-  const caseRows = testCases.map((item) => mapBackendCaseRow(item, latestByCase.get(Number(item.id)), defectsByCase));
+  const caseRows = normalizedCases.map((item) => mapBackendCaseRow(item, latestByCase.get(Number(item.id)), defectsByCase));
   const extraRows = sortedExecutions
     .filter((item) => !casesById.has(Number(item.case_id)))
     .map((item) => mapBackendExecutionRow(item, casesById, defectsByCase));
@@ -216,12 +296,15 @@ const buildExecutionRows = (testCases, executions, defects) => {
   return { rows: [...caseRows, ...extraRows], defects: mappedDefects };
 };
 
-const buildStatsFromBackend = (statistics, rows, defects) => {
+const buildStatsFromBackend = (statistics, rows, defects, loopSummary = {}) => {
+  const summary = normalizeObject(statistics);
+  const loop = normalizeObject(loopSummary);
   const executedRows = rows.filter((row) => row.status !== '待执行');
-  const total = toFiniteNumber(statistics?.total, executedRows.length);
-  const passed = toFiniteNumber(statistics?.passed, executedRows.filter((row) => row.status === '通过').length);
-  const failed = toFiniteNumber(statistics?.failed, executedRows.filter((row) => row.status === '失败').length);
-  const blocked = toFiniteNumber(statistics?.blocked, executedRows.filter((row) => row.status === '阻塞').length);
+  const total = toFiniteNumber(firstValue(summary.total, summary.executed, summary.execution_count), executedRows.length);
+  const passed = toFiniteNumber(firstValue(summary.passed, summary.pass, summary.pass_count), executedRows.filter((row) => row.status === '通过').length);
+  const failed = toFiniteNumber(firstValue(summary.failed, summary.fail, summary.fail_count), executedRows.filter((row) => row.status === '失败').length);
+  const blocked = toFiniteNumber(firstValue(summary.blocked, summary.block, summary.block_count), executedRows.filter((row) => row.status === '阻塞').length);
+  const skipped = toFiniteNumber(firstValue(summary.skipped, summary.skip, summary.skip_count), executedRows.filter((row) => row.status === '跳过').length);
   const totalCases = rows.length || total;
   const passRate = toPercentLabel(passed, total, total ? '0.0%' : '0%');
   const progressRate = totalCases ? clampPercent((total / totalCases) * 100) : 0;
@@ -232,19 +315,23 @@ const buildStatsFromBackend = (statistics, rows, defects) => {
   const highCount = defects.filter((item) => item.severity === '高').length;
   const mediumCount = defects.filter((item) => item.severity === '中').length;
   const lowCount = defects.filter((item) => item.severity === '低').length;
+  const closedDefects = toFiniteNumber(firstValue(loop.closed_defects, loop.closed, loop.resolved), defects.filter((item) => item.statusValue === 'closed').length);
+  const openDefects = toFiniteNumber(firstValue(loop.open_defects, loop.open), Math.max(defects.length - closedDefects, 0));
+  const reminderCount = toFiniteNumber(firstValue(loop.retest_reminders, loop.reminders, loop.retest_due), defects.filter((item) => item.retestReminderAt).length);
+  const unlinkedCount = toFiniteNumber(firstValue(loop.unlinked_defects, loop.unlinked), defects.filter((item) => !item.caseBackendId).length);
 
   return [
-    { label: '用例通过率', val: passRate, detail: `通过 ${passed} | 失败 ${failed} | 阻塞 ${blocked}`, hasPie: true, pieRate: parsePercent(passRate) },
+    { label: '用例通过率', val: passRate, detail: `通过 ${passed} | 失败 ${failed} | 阻塞 ${blocked} | 跳过 ${skipped}`, hasPie: true, pieRate: parsePercent(passRate) },
     { label: '执行进度', val: `${numberText(total)} / ${numberText(totalCases)}`, detail: `已执行 ${numberText(total)} | 进度 ${progressRate.toFixed(1)}%`, hasProgress: true, progressRate },
     { label: '预计剩余时间', val: remainingMinutes ? `${remainingMinutes}m` : '0m', detail: remaining ? `平均耗时: ${Math.round(avgSeconds || 0)}s/条 | 剩余: ${remaining}条` : '已全部执行完毕' },
-    { label: '缺陷统计', val: numberText(defects.length), detail: `严重 ${severeCount} | 高 ${highCount} | 中 ${mediumCount} | 低 ${lowCount}`, change: '后端同步' },
-    { label: '稳定性趋势', val: passRate, detail: `最近执行通过率 ${passRate}`, hasTrend: true }
+    { label: '缺陷闭环', val: `${openDefects}/${closedDefects}`, detail: `Open ${openDefects} | Closed ${closedDefects} | 未关联 ${unlinkedCount}`, change: '后端同步' },
+    { label: '复测与严重级别', val: numberText(reminderCount), detail: `复测提醒 ${reminderCount} | 严重 ${severeCount} | 高 ${highCount} | 中 ${mediumCount} | 低 ${lowCount}`, hasTrend: true }
   ];
 };
 
 const buildRunCards = (executions, rounds = []) => {
   const groups = new Map();
-  executions.forEach((item) => {
+  normalizeList(executions).forEach((item) => {
     const key = item.round_id || `exec-${item.id}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
@@ -275,7 +362,7 @@ const buildRunCards = (executions, rounds = []) => {
     .sort((a, b) => new Date(b.latestAt || 0).getTime() - new Date(a.latestAt || 0).getTime());
 
   const existingRoundIds = new Set(executionCards.map((card) => String(card.roundBackendId || '')).filter(Boolean));
-  const roundCards = rounds
+  const roundCards = normalizeList(rounds)
     .filter((round) => round?.id && !existingRoundIds.has(String(round.id)))
     .map((round) => {
       const total = toFiniteNumber(round.total_count);
@@ -303,6 +390,51 @@ const buildRunCards = (executions, rounds = []) => {
     .slice(0, 5);
 };
 
+const normalizeTrendPoints = (payload, fallbackRuns = []) => {
+  const source = normalizeList(payload).length ? normalizeList(payload) : normalizeList(fallbackRuns);
+  return source.slice(-10).map((item, idx) => {
+    const passRate = firstValue(item.pass_rate, item.passRate, item.rate, item.success_rate, item.successRate);
+    const passed = toFiniteNumber(firstValue(item.passed, item.pass, item.pass_count));
+    const total = toFiniteNumber(firstValue(item.total, item.cases, item.total_count));
+    const rawRate = Number(String(passRate ?? '').replace('%', ''));
+    const rate = passRate !== undefined && passRate !== null && Number.isFinite(rawRate)
+      ? (rawRate <= 1 && !String(passRate).includes('%') ? rawRate * 100 : rawRate)
+      : parsePercent(toPercentLabel(passed, total, '0%'));
+    return {
+      label: String(firstValue(item.label, item.name, item.runId, item.date, item.day, `#${idx + 1}`)),
+      rate: clampPercent(rate),
+      failed: toFiniteNumber(firstValue(item.failed, item.fail, item.fail_count)),
+      blocked: toFiniteNumber(firstValue(item.blocked, item.block, item.block_count)),
+      skipped: toFiniteNumber(firstValue(item.skipped, item.skip, item.skip_count))
+    };
+  });
+};
+
+const buildTrendChart = (points) => {
+  const safePoints = normalizeTrendPoints(points);
+  const fallback = safePoints.length ? safePoints : normalizeTrendPoints([
+    { label: 'Build #6', rate: 62 },
+    { label: 'Build #7', rate: 78 },
+    { label: 'Build #8', rate: 70 },
+    { label: 'Build #9', rate: 92 },
+    { label: 'Build #10', rate: 86 },
+    { label: 'Build #11', rate: 88 },
+    { label: 'Build #12', rate: 96 },
+    { label: 'Build #13', rate: 74 },
+    { label: 'Build #14', rate: 92 },
+    { label: 'Build #15', rate: 84 }
+  ]);
+  const count = Math.max(fallback.length - 1, 1);
+  const coords = fallback.map((point, idx) => {
+    const x = 50 + (900 * idx) / count;
+    const y = 150 - (clampPercent(point.rate) / 100) * 130;
+    return { ...point, x, y };
+  });
+  const line = coords.map((point, idx) => `${idx === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ');
+  const fill = `${line} L ${coords[coords.length - 1]?.x.toFixed(1) || 950} 160 L ${coords[0]?.x.toFixed(1) || 50} 160 Z`;
+  return { coords, line, fill, labels: fallback.map((point) => point.label) };
+};
+
 const fetchProjectTestCases = async (projectId) => {
   const payload = await apiGet(`/projects/${projectId}/test-cases`, {
     params: { page: 1, pageSize: TEST_CASE_PAGE_SIZE }
@@ -312,6 +444,9 @@ const fetchProjectTestCases = async (projectId) => {
 
 const toActiveCase = (row) => ({
   id: row.id,
+  backendId: row.backendId,
+  backendExecutionId: row.backendExecutionId,
+  roundId: row.roundId,
   title: row.title,
   priority: row.priority,
   status: row.status,
@@ -320,7 +455,9 @@ const toActiveCase = (row) => ({
   time: row.duration,
   date: row.date || '-- --',
   user: row.user,
-  bug: row.bug
+  bug: row.bug,
+  raw: row.raw,
+  rawCase: row.rawCase
 });
 
 const countCaseStatuses = (rows) => rows.reduce((acc, row) => {
@@ -378,6 +515,11 @@ export default function Execution() {
   const [remoteExecutions, setRemoteExecutions] = useState([]);
   const [remoteDefects, setRemoteDefects] = useState([]);
   const [remoteBuildRuns, setRemoteBuildRuns] = useState([]);
+  const [executionTemplates, setExecutionTemplates] = useState([]);
+  const [remoteTrendPoints, setRemoteTrendPoints] = useState([]);
+  const [defectLoopSummary, setDefectLoopSummary] = useState({});
+  const [defectSuggestions, setDefectSuggestions] = useState({});
+  const [batchSummary, setBatchSummary] = useState(null);
   const [executionStatus, setExecutionStatus] = useState({
     loading: true,
     message: '正在同步后端执行数据...',
@@ -386,6 +528,9 @@ export default function Execution() {
   const [isBatchRunning, setIsBatchRunning] = useState(false);
   const [isRerunningFailed, setIsRerunningFailed] = useState(false);
   const [isExportingDefects, setIsExportingDefects] = useState(false);
+  const [isSuggestingDefect, setIsSuggestingDefect] = useState(false);
+  const [isCreatingDefect, setIsCreatingDefect] = useState(false);
+  const [defectActionId, setDefectActionId] = useState(null);
 
   React.useEffect(() => {
     const handleExecutionFinished = (e) => {
@@ -438,39 +583,69 @@ export default function Execution() {
         setRemoteExecutions([]);
         setRemoteDefects([]);
         setRemoteBuildRuns([]);
+        setExecutionTemplates([]);
+        setRemoteTrendPoints([]);
+        setDefectLoopSummary({});
+        setBatchSummary(null);
         setStats(execStats);
         setExecutionStatus({ loading: false, message: projectError || '后端暂无项目，显示演示执行数据', usingBackend: false });
         return;
       }
 
       const selectedProjectCases = await fetchProjectTestCases(project.id);
-      const [statisticsPayload, historyPayload, defectsPayload, roundsPayload] = await Promise.all([
-        apiGet('/executions/statistics', { params: { projectId: project.id } }).catch(() => null),
-        apiGet('/executions/history', { params: { projectId: project.id, page: 1, pageSize: 50 } }).catch(() => null),
-        apiGet('/defects', { params: { projectId: project.id, page: 1, pageSize: 50 } }).catch(() => null),
-        apiGet(`/projects/${project.id}/test-rounds`, { params: { page: 1, pageSize: 5 } }).catch(() => null)
+      const unavailableEndpoints = [];
+      const readEndpoint = async (label, request) => request.catch((error) => {
+        unavailableEndpoints.push(label);
+        return { __error: error };
+      });
+      const [
+        statisticsPayload,
+        historyPayload,
+        defectsPayload,
+        roundsPayload,
+        templatesPayload,
+        trendPayload,
+        loopPayload
+      ] = await Promise.all([
+        readEndpoint('执行统计', apiGet('/executions/statistics', { params: { projectId: project.id } })),
+        readEndpoint('执行历史', apiGet('/executions/history', { params: { projectId: project.id, page: 1, pageSize: 50 } })),
+        readEndpoint('缺陷列表', apiGet('/defects', { params: { projectId: project.id, page: 1, pageSize: 50 } })),
+        readEndpoint('测试轮次', apiGet(`/projects/${project.id}/test-rounds`, { params: { page: 1, pageSize: 5 } })),
+        readEndpoint('执行模板', apiGet('/executions/templates')),
+        readEndpoint('执行趋势', apiGet(`/projects/${project.id}/execution-trend`)),
+        readEndpoint('缺陷闭环摘要', apiGet(`/projects/${project.id}/defect-loop-summary`))
       ]);
 
       if (isCancelled()) return;
 
-      const executions = pickList(historyPayload);
-      const testCases = selectedProjectCases.list || [];
-      const defects = pickList(defectsPayload);
-      const testRounds = pickList(roundsPayload);
+      const executions = normalizeList(historyPayload);
+      const testCases = normalizeList(selectedProjectCases.list);
+      const defects = normalizeList(defectsPayload);
+      const testRounds = normalizeList(roundsPayload);
+      const templates = normalizeList(templatesPayload);
+      const trendPoints = normalizeTrendPoints(trendPayload);
+      const loopSummary = normalizeObject(loopPayload);
       const { rows, defects: mappedDefects } = buildExecutionRows(testCases, executions, defects);
       const runCards = buildRunCards(executions, testRounds);
-      const totalExecutions = toFiniteNumber(statisticsPayload?.total, executions.length);
-      const hasBackendData = rows.length > 0 || mappedDefects.length > 0 || totalExecutions > 0 || testRounds.length > 0;
+      const totalExecutions = toFiniteNumber(firstValue(statisticsPayload?.total, statisticsPayload?.executed), executions.length);
+      const hasBackendData = rows.length > 0 || mappedDefects.length > 0 || totalExecutions > 0 || testRounds.length > 0 || trendPoints.length > 0;
 
       setProjectContext(project);
       setBackendCases(testCases);
       setRemoteExecutions(executions);
+      setExecutionTemplates(templates);
+      setRemoteTrendPoints(trendPoints);
+      setDefectLoopSummary(loopSummary);
+
+      if (unavailableEndpoints.length && !silent) {
+        showToast(`${unavailableEndpoints.slice(0, 3).join('、')}暂不可用，页面已保留演示降级。`, 'warning');
+      }
 
       if (hasBackendData) {
         setRemoteExecCases(rows);
         setRemoteDefects(mappedDefects);
         setRemoteBuildRuns(runCards);
-        setStats(buildStatsFromBackend(statisticsPayload, rows, mappedDefects));
+        setStats(buildStatsFromBackend(statisticsPayload, rows, mappedDefects, loopSummary));
         setActiveCase(prev => {
           const next = rows.find((row) => row.id === prev.id) || rows[0];
           return next ? toActiveCase(next) : prev;
@@ -499,6 +674,9 @@ export default function Execution() {
       setRemoteExecutions([]);
       setRemoteDefects([]);
       setRemoteBuildRuns([]);
+      setExecutionTemplates([]);
+      setRemoteTrendPoints([]);
+      setDefectLoopSummary({});
       setStats(execStats);
       setExecutionStatus({
         loading: false,
@@ -553,8 +731,15 @@ export default function Execution() {
         executions
       });
 
-      const total = result?.summary?.total || result?.executions?.length || executions.length;
-      showToast(`已创建 ${round.name || `Round #${round.id}`}，写入 ${total} 条执行记录。`, 'success');
+      const summary = normalizeObject(result?.summary || result);
+      const resultExecutions = normalizeList(result?.executions);
+      const total = toFiniteNumber(firstValue(summary.total, resultExecutions.length), executions.length);
+      const failed = toFiniteNumber(firstValue(summary.failed, summary.fail), executions.filter((item) => item.status === 'failed').length);
+      const blocked = toFiniteNumber(firstValue(summary.blocked, summary.block), executions.filter((item) => item.status === 'blocked').length);
+      const skipped = toFiniteNumber(firstValue(summary.skipped, summary.skip), 0);
+      const createdDefects = toFiniteNumber(firstValue(summary.created_defects, summary.createdDefects, summary.defects_created), normalizeList(result?.created_defects).length);
+      setBatchSummary({ total, failed, blocked, skipped, createdDefects });
+      showToast(`已创建 ${round.name || `Round #${round.id}`}：执行 ${total}，失败 ${failed}，阻塞 ${blocked}，跳过 ${skipped}，新缺陷 ${createdDefects}。`, 'success');
       await loadExecutionData({ silent: true });
     } catch (error) {
       showToast(error?.message || '批量执行失败，请检查后端服务。', 'error');
@@ -625,9 +810,193 @@ export default function Execution() {
     }
   };
 
+  const activeCaseKey = activeCase.backendExecutionId || activeCase.id;
+
+  const handleGenerateDefectSuggestion = async () => {
+    if (!isFailedOrBlocked(activeCase.status)) {
+      showToast('当前用例未失败或阻塞，无需生成缺陷建议。', 'info');
+      return;
+    }
+
+    setIsSuggestingDefect(true);
+    try {
+      let suggestion;
+      if (activeCase.backendExecutionId) {
+        const payload = await apiPost(`/executions/${activeCase.backendExecutionId}/defect-suggestion`, {
+          case_id: activeCase.backendId,
+          project_id: projectContext?.id
+        });
+        suggestion = normalizeSuggestion(payload, activeCase);
+      } else {
+        suggestion = normalizeSuggestion(null, activeCase);
+      }
+      setDefectSuggestions((prev) => ({ ...prev, [activeCaseKey]: suggestion }));
+      showToast('已生成缺陷建议。', 'success');
+    } catch (error) {
+      const suggestion = normalizeSuggestion(null, activeCase);
+      setDefectSuggestions((prev) => ({ ...prev, [activeCaseKey]: suggestion }));
+      showToast(error?.message || '缺陷建议接口不可用，已使用页面降级建议。', 'warning');
+    } finally {
+      setIsSuggestingDefect(false);
+    }
+  };
+
+  const handleCreateDefectFromExecution = async () => {
+    if (!isFailedOrBlocked(activeCase.status)) return;
+
+    const suggestion = defectSuggestions[activeCaseKey] || normalizeSuggestion(null, activeCase);
+    if (!activeCase.backendExecutionId) {
+      setDefectSuggestions((prev) => ({ ...prev, [activeCaseKey]: suggestion }));
+      showToast('后端执行记录不可用，已保留缺陷建议供演示查看。', 'warning');
+      return;
+    }
+
+    setIsCreatingDefect(true);
+    try {
+      const created = await apiPost(`/executions/${activeCase.backendExecutionId}/create-defect`, {
+        case_id: activeCase.backendId,
+        project_id: projectContext?.id,
+        title: suggestion.title,
+        severity: suggestion.severity,
+        steps: suggestion.steps,
+        expected: suggestion.expected,
+        actual: suggestion.actual,
+        impact: suggestion.impact,
+        retest_suggestion: suggestion.retestSuggestion
+      });
+      const createdId = firstValue(created?.defect_number, created?.id, created?.defect_id, '新缺陷');
+      showToast(`已创建缺陷 ${createdId}，并刷新闭环数据。`, 'success');
+      await loadExecutionData({ silent: true });
+    } catch (error) {
+      showToast(error?.message || '创建缺陷接口不可用，页面已保留当前建议。', 'error');
+    } finally {
+      setIsCreatingDefect(false);
+    }
+  };
+
+  const handleLinkCaseToDefect = async (bug, caseId = activeCase.backendId) => {
+    if (!bug?.backendId || !caseId) {
+      showToast('缺少后端缺陷或用例 ID，暂无法关联。', 'warning');
+      return;
+    }
+
+    setDefectActionId(`${bug.backendId}-link`);
+    try {
+      await apiPost(`/defects/${bug.backendId}/link-case`, {
+        case_id: caseId,
+        execution_id: activeCase.backendExecutionId || undefined
+      });
+      showToast(`已关联 ${bug.id} 与用例 ${activeCase.id}。`, 'success');
+      await loadExecutionData({ silent: true });
+    } catch (error) {
+      showToast(error?.message || '关联用例接口不可用，已保留当前数据。', 'error');
+    } finally {
+      setDefectActionId(null);
+    }
+  };
+
+  const handleUnlinkCaseFromDefect = async (bug) => {
+    if (!bug?.backendId || !bug.caseBackendId) {
+      showToast('该缺陷暂无可解除的用例关联。', 'info');
+      return;
+    }
+
+    setDefectActionId(`${bug.backendId}-unlink`);
+    try {
+      await apiPost(`/defects/${bug.backendId}/unlink-case`, {
+        case_id: bug.caseBackendId
+      });
+      showToast(`已解除 ${bug.id} 的用例关联。`, 'success');
+      await loadExecutionData({ silent: true });
+    } catch (error) {
+      showToast(error?.message || '解除关联接口不可用，已保留当前数据。', 'error');
+    } finally {
+      setDefectActionId(null);
+    }
+  };
+
+  const handleRetestReminder = async (bug) => {
+    if (!bug?.backendId) {
+      showToast('缺少后端缺陷 ID，暂无法创建复测提醒。', 'warning');
+      return;
+    }
+
+    setDefectActionId(`${bug.backendId}-reminder`);
+    try {
+      const payload = await apiPost(`/defects/${bug.backendId}/retest-reminder`, {
+        case_id: bug.caseBackendId || activeCase.backendId || undefined,
+        suggestion: bug.retestSuggestion || '修复后请重跑关联用例并确认缺陷可关闭'
+      });
+      const reminderAt = firstValue(payload?.reminder_at, payload?.retest_reminder_at, payload?.due_at, '已创建');
+      showToast(`复测提醒已创建：${reminderAt}。`, 'success');
+      await loadExecutionData({ silent: true });
+    } catch (error) {
+      showToast(error?.message || '复测提醒接口不可用，已保留演示状态。', 'error');
+    } finally {
+      setDefectActionId(null);
+    }
+  };
+
+  const handleDefectStatusChange = async (bug, status) => {
+    if (!bug?.backendId) {
+      showToast('演示缺陷不支持状态写回。', 'warning');
+      return;
+    }
+
+    setDefectActionId(`${bug.backendId}-status`);
+    try {
+      await apiRequest(`/defects/${bug.backendId}`, {
+        method: 'PATCH',
+        body: { status }
+      });
+      showToast(`已更新 ${bug.id} 状态。`, 'success');
+      await loadExecutionData({ silent: true });
+    } catch (error) {
+      showToast(error?.message || '缺陷状态更新失败。', 'error');
+    } finally {
+      setDefectActionId(null);
+    }
+  };
+
+  const handleCopyDefectText = async (bug) => {
+    if (!bug?.backendId) {
+      showToast('演示缺陷暂无后端复制文本。', 'info');
+      return;
+    }
+
+    setDefectActionId(`${bug.backendId}-copy`);
+    try {
+      const payload = await apiGet(`/defects/${bug.backendId}/copy-text`);
+      const content = textValue(firstValue(payload?.content, payload?.text, payload?.copy_text, payload), '');
+      if (content && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(content);
+      }
+      showToast(content ? '缺陷复制文本已写入剪贴板。' : '缺陷复制文本为空。', content ? 'success' : 'warning');
+    } catch (error) {
+      showToast(error?.message || '复制文本接口不可用。', 'error');
+    } finally {
+      setDefectActionId(null);
+    }
+  };
+
+  const handleLinkActiveCaseToFirstDefect = async () => {
+    const candidate = remoteDefects.find((item) => !item.caseBackendId) || remoteDefects[0];
+    if (!candidate) {
+      showToast('暂无可关联的后端缺陷，请先创建缺陷。', 'warning');
+      return;
+    }
+    await handleLinkCaseToDefect(candidate, activeCase.backendId);
+  };
+
   const displayCases = remoteExecCases.length ? remoteExecCases : execCases;
   const displayBuildRuns = remoteBuildRuns.length ? remoteBuildRuns : buildRuns;
   const displayHistoryBugs = remoteDefects.length ? remoteDefects : historyBugs;
+  const trendChart = buildTrendChart(remoteTrendPoints.length ? remoteTrendPoints : displayBuildRuns);
+  const activeSuggestion = defectSuggestions[activeCaseKey];
+  const openDefectCount = displayHistoryBugs.filter((item) => item.statusValue ? item.statusValue !== 'closed' : item.status !== '已关闭').length;
+  const closedDefectCount = Math.max(displayHistoryBugs.length - openDefectCount, 0);
+  const reminderCount = toFiniteNumber(firstValue(defectLoopSummary.retest_reminders, defectLoopSummary.reminders), displayHistoryBugs.filter((item) => item.retestReminderAt).length);
+  const unlinkedDefectCount = toFiniteNumber(firstValue(defectLoopSummary.unlinked_defects, defectLoopSummary.unlinked), displayHistoryBugs.filter((item) => !item.caseBackendId).length);
   const caseCounters = countCaseStatuses(displayCases);
   const currentProjectName = projectContext?.name || projectContext?.code || DEMO_PROJECT_NAME;
   const latestRun = displayBuildRuns[0] || buildRuns[0];
@@ -643,7 +1012,6 @@ export default function Execution() {
     : { startedAt: '2025-05-20', executor: '张明', env: '测试环境' };
   const usingRemoteHistory = remoteExecutions.length > 0 || remoteDefects.length > 0;
   const remoteRoundCount = new Set(remoteExecutions.map((item) => item.round_id || `exec-${item.id}`)).size;
-  const remoteClosedDefects = remoteDefects.filter((item) => item.status === '已关闭').length;
   const remoteSevereDefects = remoteDefects.filter((item) => ['致命', '严重'].includes(item.severity)).length;
   const remoteHighMediumDefects = remoteDefects.filter((item) => ['高', '中'].includes(item.severity)).length;
   const averageRate = displayBuildRuns.length
@@ -657,8 +1025,8 @@ export default function Execution() {
         rateHint: '按最近执行记录统计',
         defects: remoteDefects.length,
         severityHint: `致命/严重: ${remoteSevereDefects} | 高/中: ${remoteHighMediumDefects}`,
-        fixRate: toPercentLabel(remoteClosedDefects, remoteDefects.length, '0%'),
-        fixHint: `已关闭 ${remoteClosedDefects} / 剩余待办 ${Math.max(remoteDefects.length - remoteClosedDefects, 0)}`
+        fixRate: toPercentLabel(closedDefectCount, displayHistoryBugs.length, '0%'),
+        fixHint: `Open ${openDefectCount} / Closed ${closedDefectCount} / 复测提醒 ${reminderCount} / 未关联 ${unlinkedDefectCount}`
       }
     : {
         rounds: 15,
@@ -737,8 +1105,8 @@ export default function Execution() {
               <line x1="0" y1="100" x2="1000" y2="100" stroke="var(--border-color)" strokeWidth="1" strokeDasharray="5,5" />
               <line x1="0" y1="140" x2="1000" y2="140" stroke="var(--border-color)" strokeWidth="1" strokeDasharray="5,5" />
               {/* 走势折线 */}
-              <path 
-                d="M 50 140 L 150 100 L 250 120 L 350 40 L 450 60 L 550 50 L 650 30 L 750 90 L 850 40 L 950 80" 
+              <path
+                d={trendChart.line}
                 fill="none" 
                 stroke="var(--accent-color)" 
                 strokeWidth="3" 
@@ -747,8 +1115,8 @@ export default function Execution() {
                 className="path-drawn"
               />
               {/* 填充渐变 */}
-              <path 
-                d="M 50 140 L 150 100 L 250 120 L 350 40 L 450 60 L 550 50 L 650 30 L 750 90 L 850 40 L 950 80 L 950 160 L 50 160 Z" 
+              <path
+                d={trendChart.fill}
                 fill="url(#grad)" 
                 opacity="0.1" 
               />
@@ -759,31 +1127,17 @@ export default function Execution() {
                 </linearGradient>
               </defs>
               {/* 节点标记 */}
-              <circle cx="50" cy="140" r="4" fill="var(--accent-color)" stroke="#fff" strokeWidth="2" />
-              <circle cx="150" cy="100" r="4" fill="var(--accent-color)" stroke="#fff" strokeWidth="2" />
-              <circle cx="250" cy="120" r="4" fill="var(--accent-color)" stroke="#fff" strokeWidth="2" />
-              <circle cx="350" cy="40" r="4" fill="var(--accent-color)" stroke="#fff" strokeWidth="2" />
-              <circle cx="450" cy="60" r="4" fill="var(--accent-color)" stroke="#fff" strokeWidth="2" />
-              <circle cx="550" cy="50" r="4" fill="var(--accent-color)" stroke="#fff" strokeWidth="2" />
-              <circle cx="650" cy="30" r="4" fill="var(--accent-color)" stroke="#fff" strokeWidth="2" />
-              <circle cx="750" cy="90" r="4" fill="var(--accent-color)" stroke="#fff" strokeWidth="2" />
-              <circle cx="850" cy="40" r="4" fill="var(--accent-color)" stroke="#fff" strokeWidth="2" />
-              <circle cx="950" cy="80" r="4" fill="#10b981" stroke="#fff" strokeWidth="2" />
+              {trendChart.coords.map((point, idx) => (
+                <circle key={`${point.label}-${idx}`} cx={point.x} cy={point.y} r="4" fill={idx === trendChart.coords.length - 1 ? '#10b981' : 'var(--accent-color)'} stroke="#fff" strokeWidth="2" />
+              ))}
             </svg>
             <div className="absolute top-2 left-2 text-[8px] text-[var(--text-secondary)] bg-[var(--bg-app)]/80 px-1 py-0.5 rounded border border-[var(--border-color)]">通过率: 100%</div>
             <div className="absolute bottom-2 left-2 text-[8px] text-[var(--text-secondary)] bg-[var(--bg-app)]/80 px-1 py-0.5 rounded border border-[var(--border-color)]">通过率: 50%</div>
           </div>
           <div className="flex justify-between text-[9px] text-[var(--text-secondary)] mt-2 font-mono px-6">
-            <span>Build #6</span>
-            <span>Build #7</span>
-            <span>Build #8</span>
-            <span>Build #9</span>
-            <span>Build #10</span>
-            <span>Build #11</span>
-            <span>Build #12</span>
-            <span>Build #13</span>
-            <span>Build #14</span>
-            <span>Build #15</span>
+            {trendChart.labels.map((label, idx) => (
+              <span key={`${label}-${idx}`} className="truncate max-w-[80px]" title={label}>{label}</span>
+            ))}
           </div>
         </div>
 
@@ -838,7 +1192,7 @@ export default function Execution() {
                     <th className="py-2 px-1">负责人</th>
                     <th className="py-2 px-1 text-center">当前状态</th>
                     <th className="py-2 px-1">关联测试用例</th>
-                    <th className="py-2.5 px-2 text-center">AI 修复</th>
+                    <th className="py-2.5 px-2 text-center">闭环操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--border-color)] text-[var(--text-secondary)] font-medium">
@@ -855,18 +1209,51 @@ export default function Execution() {
                       </td>
                       <td className="py-2.5 px-1 text-[var(--text-primary)]">{bug.assignee}</td>
                       <td className="py-2.5 px-1 text-center">
-                        <span className={`px-1.5 py-0.5 rounded border text-[8px] font-bold ${bug.statusBg}`}>
-                          {bug.status}
-                        </span>
+                        <select
+                          value={bug.statusValue || 'open'}
+                          onChange={(event) => handleDefectStatusChange(bug, event.target.value)}
+                          disabled={!bug.backendId || defectActionId === `${bug.backendId}-status`}
+                          className={`px-1.5 py-0.5 rounded border text-[8px] font-bold bg-[var(--bg-card)] outline-none ${bug.statusBg}`}
+                        >
+                          <option value="open">open</option>
+                          <option value="in_progress">in_progress</option>
+                          <option value="resolved">resolved</option>
+                          <option value="closed">closed</option>
+                          <option value="reopened">reopened</option>
+                        </select>
                       </td>
                       <td className="py-2.5 px-1 text-[var(--text-primary)] font-mono font-bold hover:underline cursor-pointer">{bug.caseId}</td>
                       <td className="py-2.5 px-1 text-center">
-                        <button 
-                          onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: `AI 为 ${bug.id} 推荐了修改方案：检查事务提交冲突并升级超时机制。`, type: 'info' } }))}
-                          className="px-1.5 py-0.5 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 text-[8px] rounded border border-purple-500/25 font-bold cursor-pointer"
-                        >
-                          方案
-                        </button>
+                        <div className="flex items-center justify-center gap-1 flex-wrap max-w-[190px] mx-auto">
+                          <button
+                            onClick={() => handleLinkCaseToDefect(bug)}
+                            disabled={!bug.backendId || !activeCase.backendId || defectActionId === `${bug.backendId}-link`}
+                            className="px-1.5 py-0.5 bg-blue-500/10 hover:bg-blue-500/20 text-blue-500 text-[8px] rounded border border-blue-500/25 font-bold cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                          >
+                            关联
+                          </button>
+                          <button
+                            onClick={() => handleUnlinkCaseFromDefect(bug)}
+                            disabled={!bug.backendId || !bug.caseBackendId || defectActionId === `${bug.backendId}-unlink`}
+                            className="px-1.5 py-0.5 bg-slate-500/10 hover:bg-slate-500/20 text-[var(--text-secondary)] text-[8px] rounded border border-[var(--border-color)] font-bold cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                          >
+                            解除
+                          </button>
+                          <button
+                            onClick={() => handleRetestReminder(bug)}
+                            disabled={!bug.backendId || defectActionId === `${bug.backendId}-reminder`}
+                            className="px-1.5 py-0.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 text-[8px] rounded border border-amber-500/25 font-bold cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                          >
+                            复测
+                          </button>
+                          <button
+                            onClick={() => handleCopyDefectText(bug)}
+                            disabled={!bug.backendId || defectActionId === `${bug.backendId}-copy`}
+                            className="px-1.5 py-0.5 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 text-[8px] rounded border border-purple-500/25 font-bold cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                          >
+                            复制
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -918,7 +1305,17 @@ export default function Execution() {
             <span>开始时间: {executionMeta.startedAt}</span>
             <span>执行人: {executionMeta.executor}</span>
             <span>环境: {executionMeta.env}</span>
-            <span>{executionStatus.message}</span>
+            <span className="truncate max-w-[260px]" title={executionStatus.message}>{executionStatus.message}</span>
+            {batchSummary && (
+              <span className="col-span-2 text-red-500 truncate">
+                批量摘要: 新缺陷 {batchSummary.createdDefects} | 失败 {batchSummary.failed} | 阻塞 {batchSummary.blocked} | 跳过 {batchSummary.skipped}
+              </span>
+            )}
+            {executionTemplates.length > 0 && (
+              <span className="col-span-2 text-[var(--text-secondary)] truncate">
+                可用执行模板: {executionTemplates.length} 个
+              </span>
+            )}
           </div>
           <button 
             onClick={handleBatchExecution}
@@ -1071,7 +1468,23 @@ export default function Execution() {
                           <FileImage className="size-3.5 hover:text-[var(--accent-color)]" />
                         </div>
                       </td>
-                      <td className="py-2.5 px-2 text-red-500 font-mono font-bold hover:underline cursor-pointer">{row.bug}</td>
+                      <td className="py-2.5 px-2">
+                        <div className="flex items-center gap-1.5 min-w-[120px]">
+                          <span className="text-red-500 font-mono font-bold truncate max-w-[82px]" title={row.bug}>{row.bug}</span>
+                          {isFailedOrBlocked(row.status) && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveCase(toActiveCase(row));
+                                showToast('已切换到该失败/阻塞记录，可在右侧生成缺陷建议。', 'info');
+                              }}
+                              className="px-1.5 py-0.5 rounded border border-red-500/20 bg-red-500/5 text-red-500 text-[8px] font-bold whitespace-nowrap"
+                            >
+                              建议
+                            </button>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   );
                 })}
@@ -1174,6 +1587,39 @@ export default function Execution() {
                       <span className="underline cursor-pointer hover:text-purple-600">应用自动修复</span>
                     </div>
                   </div>
+
+                  <div className="p-3 border border-red-500/20 bg-red-500/5 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1 text-red-500 font-bold text-[9.5px]">
+                        <AlertTriangle className="size-3.5" />
+                        <span>缺陷建议</span>
+                      </div>
+                      <button
+                        onClick={handleGenerateDefectSuggestion}
+                        disabled={isSuggestingDefect}
+                        className="px-2 py-1 rounded border border-red-500/20 bg-[var(--bg-card)] text-red-500 text-[8px] font-bold cursor-pointer disabled:opacity-60 whitespace-nowrap"
+                      >
+                        {isSuggestingDefect ? '生成中...' : '生成建议'}
+                      </button>
+                    </div>
+                    {activeSuggestion ? (
+                      <div className="space-y-1.5 text-[8px] leading-relaxed">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[var(--text-primary)] font-bold truncate">{activeSuggestion.title}</span>
+                          <span className="px-1 py-0.5 rounded bg-red-500 text-white text-[7px] shrink-0">{activeSuggestion.severity}</span>
+                        </div>
+                        <p><span className="text-[var(--text-primary)]">Steps:</span> {activeSuggestion.steps}</p>
+                        <p><span className="text-[var(--text-primary)]">Expected:</span> {activeSuggestion.expected}</p>
+                        <p><span className="text-[var(--text-primary)]">Actual:</span> {activeSuggestion.actual}</p>
+                        <p><span className="text-[var(--text-primary)]">Impact:</span> {activeSuggestion.impact}</p>
+                        <p><span className="text-[var(--text-primary)]">Retest:</span> {activeSuggestion.retestSuggestion}</p>
+                      </div>
+                    ) : (
+                      <p className="text-[8px] leading-relaxed text-[var(--text-secondary)]">
+                        对失败/阻塞记录生成缺陷标题、严重级别、复现步骤、预期、实际、影响面与复测建议。
+                      </p>
+                    )}
+                  </div>
                 </>
               ) : (
                 /* 如果成功：展示 TTFB 延迟 Sparkline 曲线 */
@@ -1242,16 +1688,18 @@ export default function Execution() {
             {isFailedOrBlocked(activeCase.status) ? (
               <div className="border-t border-[var(--border-color)] pt-3 mt-2.5 flex gap-2 shrink-0">
                 <button 
-                  onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '缺陷关联成功！', type: 'success' } }))}
-                  className="flex-1 py-1.5 border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[9.5px] text-[var(--text-primary)] font-bold rounded-lg cursor-pointer text-center"
+                  onClick={handleLinkActiveCaseToFirstDefect}
+                  disabled={defectActionId?.endsWith('-link') || !activeCase.backendId}
+                  className="flex-1 py-1.5 border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[9.5px] text-[var(--text-primary)] font-bold rounded-lg cursor-pointer text-center disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   关联现有缺陷
                 </button>
                 <button 
-                  onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '已智能生成并签发新缺陷工单。', type: 'success' } }))}
-                  className="flex-1 py-1.5 bg-red-600 hover:bg-red-700 text-white text-[9.5px] font-bold rounded-lg cursor-pointer text-center"
+                  onClick={handleCreateDefectFromExecution}
+                  disabled={isCreatingDefect}
+                  className="flex-1 py-1.5 bg-red-600 hover:bg-red-700 text-white text-[9.5px] font-bold rounded-lg cursor-pointer text-center disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  智能新建缺陷
+                  {isCreatingDefect ? '创建中...' : '智能新建缺陷'}
                 </button>
               </div>
             ) : (

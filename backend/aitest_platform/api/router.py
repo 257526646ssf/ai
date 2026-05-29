@@ -79,6 +79,21 @@ from aitest_platform.services.exporting import (
     export_perf_script,
     export_test_cases as export_test_cases_payload,
 )
+from aitest_platform.services.execution_defect_loop import (
+    aggregate_execution_trend,
+    build_copy_text,
+    build_defect_suggestion,
+    build_retest_reminder,
+    defect_loop_summary as build_defect_loop_summary,
+    encode_defect_remark,
+    enrich_defect_dict,
+    execution_statistics as build_execution_statistics,
+    execution_templates,
+    normalize_execution_status,
+    remark_update_fields,
+    sanitize_loop_payload,
+    status_bucket,
+)
 from aitest_platform.services.perf_runner import inspect_jmeter_dependency, run_jmeter_plan, sanitize_perf_payload
 from aitest_platform.services.reporting import (
     ReportingPayloadError,
@@ -113,6 +128,11 @@ router = APIRouter()
 
 SENSITIVE_KEYS = {"api_key", "apikey", "token", "cookie", "authorization", "git_auth", "password", "secret"}
 _ORIGINAL_HTTPX_CLIENT_REQUEST = httpx.Client.request
+SENSITIVE_TEXT_RE = re.compile(
+    r"(?i)(authorization|api[_-]?key|api-key|apikey|token|cookie|secret|password)(\s*[:=]\s*)(Bearer\s+)?[^\s,;}\"']+"
+)
+AUTH_VALUE_RE = re.compile(r"(?i)\b(?:bearer|basic)\s+[^\s,;}\"']+")
+SECRET_VALUE_RE = re.compile(r"(?i)\bsk-[a-z0-9][a-z0-9_-]{6,}")
 
 
 def _patch_testclient_request_for_network_blockers() -> None:
@@ -156,24 +176,9 @@ def is_sensitive_key_name(key: Any) -> bool:
 
 
 def redact_sensitive_text(value: str) -> str:
-    lowered = value.lower()
-    secret_like = re.search(r"\bsk-[a-z0-9][a-z0-9_-]{6,}", lowered) is not None
-    if secret_like or any(
-        marker in lowered
-        for marker in (
-            "authorization:",
-            "bearer ",
-            "basic ",
-            "api_key=",
-            "apikey=",
-            "token=",
-            "cookie=",
-            "password=",
-            "secret=",
-        )
-    ):
-        return "***"
-    return value
+    text = SENSITIVE_TEXT_RE.sub("***", value)
+    text = AUTH_VALUE_RE.sub("***", text)
+    return SECRET_VALUE_RE.sub("***", text)
 
 
 def safe_summary_payload(value: Any) -> Any:
@@ -1974,15 +1979,91 @@ def complete_test_round(roundId: str):
         return model_dict(round_)
 
 
+def _execution_defect(session: Any, execution_id: int) -> Defect | None:
+    return session.scalar(select(Defect).where(Defect.execution_id == execution_id).order_by(Defect.id.desc()))
+
+
+def _execution_public_dict(session: Any, execution: Execution) -> dict[str, Any]:
+    data = model_dict(execution)
+    defect = _execution_defect(session, execution.id)
+    if defect is not None:
+        data["defect_id"] = defect.id
+        data["defect"] = enrich_defect_dict(defect)
+    return sanitize_payload(data)
+
+
+def _defect_status_from_payload(data: dict[str, Any], default: str = "open") -> str:
+    raw = data.get("defect_status", data.get("defectStatus"))
+    if raw is None:
+        raw = data.get("status") if str(data.get("status") or "").lower() not in {"pass", "passed", "fail", "failed", "blocked", "skipped"} else None
+    return str(raw or default)
+
+
+def _create_or_update_defect_for_execution(session: Any, execution: Execution, payload: dict[str, Any] | None = None) -> Defect:
+    case = session.get(TestCase, execution.case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail=f"TestCase({execution.case_id}) not found")
+    data = sanitize_loop_payload(payload or {})
+    suggestion_input = data.get("suggestion") if isinstance(data.get("suggestion"), dict) else data
+    suggestion = build_defect_suggestion(execution, case, suggestion_input)
+    existing = _execution_defect(session, execution.id)
+    if existing is None:
+        defect = Defect(
+            defect_number=AitestRepository(session)._next_code("DEF", Defect, "defect_number"),
+            project_id=execution.project_id,
+            execution_id=execution.id,
+            case_id=to_int(data.get("case_id"), "case_id") if data.get("case_id") is not None else execution.case_id,
+            requirement_item_id=execution.requirement_item_id,
+            title=str(data.get("title") or data.get("defect_title") or suggestion["title"])[:255],
+            actual_result=data.get("actual_result") or suggestion.get("actual_result"),
+            severity=data.get("severity") or suggestion.get("severity") or "normal",
+            status=_defect_status_from_payload(data, "open"),
+            remark=encode_defect_remark(suggestion.get("suggested_defect_fields", suggestion), data.get("remark")),
+        )
+        session.add(defect)
+    else:
+        defect = existing
+        defect.case_id = to_int(data.get("case_id"), "case_id") if data.get("case_id") is not None else defect.case_id or execution.case_id
+        defect.title = str(data.get("title") or data.get("defect_title") or defect.title or suggestion["title"])[:255]
+        defect.actual_result = data.get("actual_result") or defect.actual_result or suggestion.get("actual_result")
+        defect.severity = data.get("severity") or defect.severity or suggestion.get("severity") or "normal"
+        defect.status = _defect_status_from_payload(data, defect.status or "open")
+        defect.remark = encode_defect_remark({**suggestion.get("suggested_defect_fields", suggestion), **remark_update_fields(data)}, defect.remark)
+    case_id = defect.case_id
+    if case_id is not None:
+        linked_case = session.get(TestCase, case_id)
+        if linked_case is None:
+            raise HTTPException(status_code=404, detail=f"TestCase({case_id}) not found")
+        if linked_case.project_id != defect.project_id:
+            raise HTTPException(status_code=400, detail="case_id must belong to the same project")
+    session.flush()
+    r2_log(session, "defect", "create_from_execution", defect.id, {"execution_id": execution.id, "case_id": defect.case_id})
+    return defect
+
+
+def _defect_reminders(session: Any, project_id: int | None = None) -> list[OperationLog]:
+    criteria: list[Any] = [OperationLog.module == "defect", OperationLog.action == "retest_reminder"]
+    if project_id is not None:
+        defect_ids = list(session.scalars(select(Defect.id).where(Defect.project_id == project_id)))
+        if not defect_ids:
+            return []
+        criteria.append(OperationLog.target_id.in_(defect_ids))
+    return list(session.scalars(select(OperationLog).where(*criteria).order_by(OperationLog.id.desc())))
+
+
+@router.get("/executions/templates")
+def get_execution_templates():
+    return execution_templates()
+
+
 @router.post("/executions")
 def create_execution(payload: WritePayload):
     data = payload_dict(payload)
-    status_map = {"passed": "pass", "failed": "fail", "blocked": "blocked", "skipped": "skipped"}
     with session_scope() as session:
         try:
             execution = AitestRepository(session).create_execution_record(
                 case_id=to_int(data.get("case_id"), "case_id"),
-                status=status_map.get(data.get("status", "passed"), data.get("status", "passed")),
+                status=normalize_execution_status(data.get("status", "passed")),
                 round_id=to_int(data["round_id"], "round_id") if data.get("round_id") is not None else None,
                 executor_type=data.get("executor_type", "manual"),
                 actual_result=data.get("actual_result"),
@@ -1990,13 +2071,17 @@ def create_execution(payload: WritePayload):
                 block_reason=data.get("block_reason"),
                 skip_reason=data.get("skip_reason"),
                 pass_remark=data.get("pass_remark"),
-                create_defect=data.get("create_defect", True),
+                create_defect=False,
                 defect_title=data.get("defect_title"),
             )
-            result = model_dict(execution)
+            if status_bucket(execution.status) in {"failed", "blocked"} and data.get("create_defect", True):
+                _create_or_update_defect_for_execution(session, execution, data)
+            result = _execution_public_dict(session, execution)
             result["status_alias"] = data.get("status", result["status"])
             return result
         except Exception as exc:
+            if isinstance(exc, HTTPException):
+                raise exc
             raise repo_error(exc)
 
 
@@ -2004,8 +2089,8 @@ def create_execution(payload: WritePayload):
 def batch_create_executions(payload: WritePayload):
     data = payload_dict(payload)
     rows = data.get("executions") or data.get("cases") or data.get("case_ids") or []
-    status_map = {"passed": "pass", "failed": "fail", "blocked": "blocked", "skipped": "skipped"}
     executions: list[dict[str, Any]] = []
+    created_defects = 0
     with session_scope() as session:
         repo = AitestRepository(session)
         try:
@@ -2014,7 +2099,7 @@ def batch_create_executions(payload: WritePayload):
                 merged = {**data, **row_data}
                 execution = repo.create_execution_record(
                     case_id=to_int(merged.get("case_id"), "case_id"),
-                    status=status_map.get(merged.get("status", "passed"), merged.get("status", "passed")),
+                    status=normalize_execution_status(merged.get("status", "passed")),
                     round_id=to_int(merged["round_id"], "round_id") if merged.get("round_id") is not None else None,
                     executor_type=merged.get("executor_type", "manual"),
                     actual_result=merged.get("actual_result"),
@@ -2022,13 +2107,57 @@ def batch_create_executions(payload: WritePayload):
                     block_reason=merged.get("block_reason"),
                     skip_reason=merged.get("skip_reason"),
                     pass_remark=merged.get("pass_remark"),
-                    create_defect=merged.get("create_defect", True),
+                    create_defect=False,
                     defect_title=merged.get("defect_title"),
                 )
-                executions.append(model_dict(execution))
-            return {"executions": executions, "summary": {"total": len(executions), "passed": len([item for item in executions if item.get("status") == "pass"])}}
+                before_defect = _execution_defect(session, execution.id)
+                if status_bucket(execution.status) in {"failed", "blocked"} and merged.get("create_defect", True):
+                    defect = _create_or_update_defect_for_execution(session, execution, merged)
+                    if before_defect is None and defect is not None:
+                        created_defects += 1
+                executions.append(_execution_public_dict(session, execution))
+            summary_counts = {key: 0 for key in ("passed", "failed", "blocked", "skipped")}
+            for item in executions:
+                bucket = status_bucket(item.get("status"))
+                if bucket in summary_counts:
+                    summary_counts[bucket] += 1
+            return {
+                "executions": executions,
+                "summary": {
+                    "total": len(executions),
+                    "passed": summary_counts["passed"],
+                    "failed": summary_counts["failed"],
+                    "blocked": summary_counts["blocked"],
+                    "skipped": summary_counts["skipped"],
+                    "created_defects": created_defects,
+                },
+            }
         except Exception as exc:
+            if isinstance(exc, HTTPException):
+                raise exc
             raise repo_error(exc)
+
+
+@router.post("/executions/{executionId}/defect-suggestion")
+def execution_defect_suggestion(executionId: str, payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        execution = session.get(Execution, to_int(executionId, "executionId"))
+        if execution is None:
+            raise HTTPException(status_code=404, detail=f"Execution({executionId}) not found")
+        case = session.get(TestCase, execution.case_id)
+        return build_defect_suggestion(execution, case, data)
+
+
+@router.post("/executions/{executionId}/create-defect")
+def create_defect_from_execution_endpoint(executionId: str, payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        execution = session.get(Execution, to_int(executionId, "executionId"))
+        if execution is None:
+            raise HTTPException(status_code=404, detail=f"Execution({executionId}) not found")
+        defect = _create_or_update_defect_for_execution(session, execution, data)
+        return {"defect": enrich_defect_dict(defect), "execution": _execution_public_dict(session, execution)}
 
 
 @router.get("/executions/history")
@@ -2047,14 +2176,39 @@ def execution_statistics(projectId: str | None = None):
     criteria = [Execution.project_id == to_int(projectId, "projectId")] if projectId is not None else []
     with session_scope() as session:
         records = list(session.scalars(select(Execution).where(*criteria)))
-        return {"total": len(records), "passed": len([item for item in records if item.status in {"pass", "passed"}]), "failed": len([item for item in records if item.status in {"fail", "failed"}]), "blocked": len([item for item in records if item.status == "blocked"])}
+        defect_criteria = [Defect.project_id == to_int(projectId, "projectId")] if projectId is not None else []
+        defects = list(session.scalars(select(Defect).where(*defect_criteria)))
+        reminders = _defect_reminders(session, to_int(projectId, "projectId")) if projectId is not None else _defect_reminders(session)
+        return build_execution_statistics(records, defects, reminders)
 
 
 @router.get("/defects")
-def list_defects(projectId: str | None = None, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+def list_defects(
+    projectId: str | None = None,
+    page_num: int = Query(1, alias="page"),
+    page_size: int = Query(20, alias="pageSize"),
+    status: str | None = None,
+    severity: str | None = None,
+    caseId: str | None = None,
+    case_id: str | None = None,
+):
     criteria = [Defect.project_id == to_int(projectId, "projectId")] if projectId is not None else []
+    if status:
+        criteria.append(Defect.status == status)
+    if severity:
+        criteria.append(Defect.severity == severity)
+    linked_case_id = case_id or caseId
+    if linked_case_id is not None:
+        criteria.append(Defect.case_id == to_int(linked_case_id, "caseId"))
     with session_scope() as session:
-        return db_page(session, Defect, page_num, page_size, *criteria, order_by=Defect.id.desc())
+        stmt = select(Defect).where(*criteria).order_by(Defect.id.desc()).offset((page_num - 1) * page_size).limit(page_size)
+        count_stmt = select(func.count()).select_from(Defect).where(*criteria)
+        return {
+            "list": [enrich_defect_dict(item) for item in session.scalars(stmt)],
+            "total": session.scalar(count_stmt) or 0,
+            "page": page_num,
+            "pageSize": page_size,
+        }
 
 
 @router.get("/defects/export")
@@ -2078,14 +2232,117 @@ def update_defect(defectId: str, payload: WritePayload):
         defect = session.get(Defect, to_int(defectId, "defectId"))
         if defect is None:
             raise HTTPException(status_code=404, detail=f"Defect({defectId}) not found")
-        for key in ("title", "actual_result", "severity", "status", "remark"):
+        for key in ("title", "actual_result", "severity", "status"):
             if key in data:
-                setattr(defect, key, data[key])
+                value = sanitize_payload(data[key])
+                setattr(defect, key, str(value)[:255] if key == "title" and value is not None else value)
+        if "case_id" in data or "caseId" in data:
+            value = data.get("case_id", data.get("caseId"))
+            if value in (None, ""):
+                defect.case_id = None
+            else:
+                case = session.get(TestCase, to_int(value, "case_id"))
+                if case is None:
+                    raise HTTPException(status_code=404, detail=f"TestCase({value}) not found")
+                if case.project_id != defect.project_id:
+                    raise HTTPException(status_code=400, detail="case_id must belong to the same project")
+                defect.case_id = case.id
+                defect.requirement_item_id = defect.requirement_item_id or case.requirement_item_id
+        remark_fields = remark_update_fields(data)
+        if "remark" in data:
+            remark_fields["note"] = data.get("remark")
+        if remark_fields:
+            defect.remark = encode_defect_remark(remark_fields, defect.remark)
         session.flush()
-        return model_dict(defect)
+        r2_log(session, "defect", "update", defect.id, {"fields": [key for key in data if not is_sensitive_key_name(key)]})
+        return enrich_defect_dict(defect)
+
+
+@router.post("/defects/{defectId}/link-case")
+def link_defect_case(defectId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        defect = session.get(Defect, to_int(defectId, "defectId"))
+        if defect is None:
+            raise HTTPException(status_code=404, detail=f"Defect({defectId}) not found")
+        case_id = data.get("case_id", data.get("caseId"))
+        case = session.get(TestCase, to_int(case_id, "case_id"))
+        if case is None:
+            raise HTTPException(status_code=404, detail=f"TestCase({case_id}) not found")
+        if case.project_id != defect.project_id:
+            raise HTTPException(status_code=400, detail="case_id must belong to the same project")
+        defect.case_id = case.id
+        defect.requirement_item_id = defect.requirement_item_id or case.requirement_item_id
+        session.flush()
+        r2_log(session, "defect", "link_case", defect.id, {"case_id": case.id})
+        return enrich_defect_dict(defect)
+
+
+@router.post("/defects/{defectId}/unlink-case")
+def unlink_defect_case(defectId: str):
+    with session_scope() as session:
+        defect = session.get(Defect, to_int(defectId, "defectId"))
+        if defect is None:
+            raise HTTPException(status_code=404, detail=f"Defect({defectId}) not found")
+        defect.case_id = None
+        session.flush()
+        r2_log(session, "defect", "unlink_case", defect.id, {})
+        return enrich_defect_dict(defect)
+
+
+@router.post("/defects/{defectId}/retest-reminder")
+def defect_retest_reminder(defectId: str, payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        defect = session.get(Defect, to_int(defectId, "defectId"))
+        if defect is None:
+            raise HTTPException(status_code=404, detail=f"Defect({defectId}) not found")
+        reminder = build_retest_reminder(defect, due_at=data.get("due_at") or data.get("dueAt"), assignee=data.get("assignee"))
+        if data.get("save", True):
+            session.add(
+                OperationLog(
+                    module="defect",
+                    action="retest_reminder",
+                    target_type="defect",
+                    target_id=defect.id,
+                    detail=sanitize_payload(reminder),
+                )
+            )
+        defect.remark = encode_defect_remark({"due_at": reminder["due_at"], "assignee": reminder.get("assignee")}, defect.remark)
+        session.flush()
+        return reminder
 
 
 @router.get("/defects/{defectId}/copy-text")
+def defect_copy_text_r24(defectId: str):
+    with session_scope() as session:
+        defect = session.get(Defect, to_int(defectId, "defectId"))
+        if defect is None:
+            raise HTTPException(status_code=404, detail=f"Defect({defectId}) not found")
+        case = session.get(TestCase, defect.case_id) if defect.case_id is not None else None
+        return {"text": build_copy_text(defect, case)}
+
+
+@router.get("/projects/{projectId}/execution-trend")
+def project_execution_trend(projectId: str, days: int | None = Query(None, ge=1, le=366)):
+    with session_scope() as session:
+        project = require_db_item(session, Project, projectId, "projectId")
+        records = list(session.scalars(select(Execution).where(Execution.project_id == project.id).order_by(Execution.executed_at.asc())))
+        defects = list(session.scalars(select(Defect).where(Defect.project_id == project.id).order_by(Defect.created_at.asc())))
+        trend = aggregate_execution_trend(records, defects, recent_days=days)
+        return {"project_id": project.id, **trend, "list": trend["trend"]}
+
+
+@router.get("/projects/{projectId}/defect-loop-summary")
+def project_defect_loop_summary(projectId: str):
+    with session_scope() as session:
+        project = require_db_item(session, Project, projectId, "projectId")
+        records = list(session.scalars(select(Execution).where(Execution.project_id == project.id)))
+        defects = list(session.scalars(select(Defect).where(Defect.project_id == project.id)))
+        reminders = _defect_reminders(session, project.id)
+        return {"project_id": project.id, **build_defect_loop_summary(records, defects, reminders)}
+
+
 def defect_copy_text(defectId: str):
     with session_scope() as session:
         defect = session.get(Defect, to_int(defectId, "defectId"))

@@ -46,6 +46,7 @@ from aitest_platform.services.requirement_parser import (
     parse_requirement_blocks,
 )
 from aitest_platform.services.requirement_quality import assess_requirement_quality
+from aitest_platform.services.execution_defect_loop import build_defect_suggestion, encode_defect_remark, status_bucket
 
 
 class NotFoundError(ValueError):
@@ -689,13 +690,14 @@ class AitestRepository:
         self.session.flush()
         if round_id:
             self._update_round_counts(round_id)
-        if status == "fail" and extra.get("create_defect", True):
+        if status_bucket(status) in {"failed", "blocked"} and extra.get("create_defect", True):
             self.create_defect_from_execution(execution, extra.get("defect_title"))
         self._log("execution", "create", "execution_record", execution.id, {"case_id": case_id, "status": status})
         return execution
 
     def create_defect_from_execution(self, execution: Execution, title: str | None = None) -> Defect:
         case = self._get(TestCase, execution.case_id)
+        suggestion = build_defect_suggestion(execution, case, {"defect_title": title} if title else None)
         defect = Defect(
             defect_number=self._next_code("DEF", Defect, "defect_number"),
             project_id=execution.project_id,
@@ -703,10 +705,13 @@ class AitestRepository:
             case_id=execution.case_id,
             requirement_item_id=execution.requirement_item_id,
             title=title or f"{case.title} 执行失败",
-            actual_result=execution.actual_result,
-            severity="normal",
+            actual_result=suggestion.get("actual_result") or execution.actual_result,
+            severity=suggestion.get("severity") or "normal",
             status="open",
+            remark=encode_defect_remark(suggestion.get("suggested_defect_fields", suggestion)),
         )
+        if not title:
+            defect.title = suggestion["title"]
         self.session.add(defect)
         self.session.flush()
         return defect
