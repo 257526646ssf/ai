@@ -302,3 +302,16 @@
   - `docs/orchestration/artifacts/round16-automation-result.png`
   - `docs/orchestration/artifacts/round16-performance-list.png`
   - `docs/orchestration/artifacts/round16-performance-report.png`
+
+## 第十七轮验收
+- [x] 顶栏提供全局项目选择器，并持久化当前项目上下文。
+- [x] ApiTesting 环境、场景、计划任务可走后端创建、执行和回写链路。
+- [x] Automation 可切换真实本地 runner、Playwright runner、占位 runner，并可下载工程 ZIP 与执行 artifacts ZIP。
+- [x] Performance 可下载 JMX，导出 JSON/HTML 结果，并可显式启用真实 JMeter 与 HTML report。
+- [x] 自动化 artifacts 下载和性能 HTML 导出有后端契约测试覆盖。
+
+## Round 17 Evidence
+- `python -m compileall backend\aitest_platform`: passed.
+- `npm run build`: passed, with only Vite chunk size warning.
+- `python -m pytest backend\tests\test_round11_exports.py -q`: passed, 8 tests, with 2 FastAPI dependency warnings.
+- `cd backend; python -m pytest -q`: passed, with 2 FastAPI dependency warnings.

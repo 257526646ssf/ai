@@ -1,7 +1,16 @@
 import React from 'react';
 import { Bell, HelpCircle, ChevronDown, Sparkles } from 'lucide-react';
+import { useProjectContext } from '../lib/projectContext';
 
 export default function Topbar({ activeTab, theme, setTheme }) {
+  const {
+    projects,
+    selectedProjectId,
+    setSelectedProjectId,
+    selectedProject,
+    loading: projectLoading,
+    error: projectError
+  } = useProjectContext();
   // 10种首页美学风格
   const themeOptions = [
     { id: 'basic', label: '01 基础雅致版' },
@@ -47,6 +56,27 @@ export default function Topbar({ activeTab, theme, setTheme }) {
 
       {/* 右侧：功能按钮与用户信息 */}
       <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--border-color)]/40 text-xs font-black text-[var(--text-primary)]">
+          <span className="text-[var(--text-secondary)]">项目</span>
+          <select
+            value={selectedProjectId}
+            onChange={(event) => setSelectedProjectId(event.target.value)}
+            disabled={projectLoading || projects.length === 0}
+            title={projectError || selectedProject?.name || '全局项目'}
+            className="max-w-[180px] bg-transparent border-none outline-none text-[var(--text-primary)] font-black cursor-pointer disabled:cursor-not-allowed"
+          >
+            {projects.length ? (
+              projects.map((project) => (
+                <option key={project.id} value={String(project.id)}>
+                  {project.name || project.code || `Project #${project.id}`}
+                </option>
+              ))
+            ) : (
+              <option value="">{projectLoading ? '加载中' : '暂无项目'}</option>
+            )}
+          </select>
+        </div>
+
         {/* 核心：10 套全站风格秒切换器 */}
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--border-color)]/40 text-xs font-black text-[var(--text-primary)] hover:bg-[var(--border-color)]/60 cursor-pointer relative group z-50 transition-all shadow-sm">
           <Sparkles className="size-3.5 text-amber-500 animate-pulse" />

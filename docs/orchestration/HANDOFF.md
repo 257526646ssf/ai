@@ -297,3 +297,18 @@
 - 将 Automation 前端执行入口进一步区分占位 runner 与真实 Playwright runner，并展示 artifacts 下载。
 - 将 Performance 前端补齐 JMX 下载、结果 JSON/HTML 导出和真实 JMeter 执行模式开关。
 - 继续减少四页剩余静态演示区块，优先替换会影响用户决策的数据。
+
+## 第十七轮完成状态
+- `src/lib/projectContext.jsx` 与 `src/components/Topbar.jsx` 已新增全局项目选择器，页面优先使用当前选中项目。
+- `src/pages/ApiTesting.jsx` 已接入环境、场景、计划任务后端链路，可创建环境、编排 scenario、执行 scenario 并运行 schedule。
+- `src/pages/Automation.jsx` 已支持真实本地 runner / Playwright runner / 占位 runner 切换，展示 runner mode 与 artifacts，并可下载工程 ZIP 和执行 artifacts ZIP。
+- `src/pages/Performance.jsx` 已支持真实 JMeter 开关、HTML report 开关、JMX 下载、JSON/HTML 结果导出。
+- `backend/aitest_platform/api/router.py`、`services/auto_runner.py`、`services/exporting.py` 已补齐 Playwright 文件生成、Playwright runner 分支、自动化 artifacts 下载和性能 HTML 导出。
+- `docs/orchestration/ROUND17_REPORT.md` 已记录实现、验证和残余风险。
+- Round 17 主线程验收：`python -m compileall backend\aitest_platform` 通过；`npm run build` 通过；`python -m pytest backend\tests\test_round11_exports.py -q` 通过；`cd backend; python -m pytest -q` 通过。
+
+## 下一轮建议范围
+- 将全局项目选择器进一步下沉到 Requirements / TestCases / Execution / Reports / Settings，消除旧页面各自选择项目的差异。
+- 为真实 Playwright runner 增加依赖安装状态检测和更明确的前端错误提示。
+- 为 JMeter HTML report 提供静态文件预览或受控下载入口，而不仅是结果 HTML 摘要导出。
+- 继续减少历史演示数据区块，优先替换图表和风险列表为后端真实统计。

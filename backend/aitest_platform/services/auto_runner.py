@@ -93,7 +93,7 @@ def run_auto_project(
     started = time.perf_counter()
     timeout = clamp_timeout_ms(timeout_ms)
     selected_mode = (mode or "auto").strip().lower() or "auto"
-    if selected_mode not in {"auto", "pytest", "python"}:
+    if selected_mode not in {"auto", "pytest", "python", "playwright"}:
         selected_mode = "auto"
     run_id = uuid.uuid4().hex
     run_artifact_dir = _prepare_run_artifact_dir(artifact_root, run_id)
@@ -392,7 +392,16 @@ def _is_relative_to(path: Path, root: Path) -> bool:
 def _build_command(workdir: Path, files: list[dict[str, Any]], mode: str) -> list[str] | None:
     case_paths = [str(item["path"]) for item in files if item.get("source") == "case_file"]
     python_case_paths = [path for path in case_paths if path.endswith(".py")]
+    playwright_case_paths = [
+        path
+        for path in case_paths
+        if path.endswith((".spec.js", ".spec.ts", ".test.js", ".test.ts"))
+    ]
     pytest_targets = [path for path in python_case_paths if path.startswith("tests/") or Path(path).name.startswith("test_")]
+
+    if mode == "playwright" or (mode == "auto" and playwright_case_paths):
+        npx = shutil.which("npx") or shutil.which("npx.cmd") or "npx"
+        return [npx, "playwright", "test", *playwright_case_paths]
 
     if mode == "python":
         target = python_case_paths[0] if python_case_paths else None
@@ -412,6 +421,8 @@ def _build_command(workdir: Path, files: list[dict[str, Any]], mode: str) -> lis
 
 
 def _runner_mode(command: list[str]) -> str:
+    if any(str(part).lower() == "playwright" for part in command):
+        return "playwright"
     return "pytest" if "-m" in command and "pytest" in command else "python"
 
 

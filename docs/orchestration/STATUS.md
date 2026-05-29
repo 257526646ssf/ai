@@ -1,7 +1,7 @@
 # 后端实现状态
 
 ## 阶段
-- 当前阶段：Round 15 已验收；Execution MVP 前后端集成完成，下一轮继续扩大 ApiTesting / LlmConfig / Automation / Performance 页面接入范围
+- 当前阶段：Round 17 已验收；全局项目选择器、ApiTesting 场景/计划链路、Automation runner/artifacts、Performance JMX/JSON/HTML 导出已完成
 - 目标：在不改变前端视觉风格的前提下，实现需求文档与技术实现方案中的后端基础能力。
 - 主线程职责：拆解、派工、验收、进度统一；产品实现代码由子任务完成。
 
@@ -426,3 +426,20 @@
 - Automation 默认执行后端确定性占位用例；真实浏览器自动化 runner 尚未在前端强制启用。
 - Performance 默认执行后端确定性占位压测；真实 JMeter runner 仍取决于工具链和请求模式。
 - LLM 真实调用默认关闭，连接测试会展示 disabled/fallback 状态；真实连通需本地环境变量开启。
+
+## 第十七轮范围
+- P0：新增全局项目选择器，替代 ApiTesting / Automation / Performance 的自动扫描项目策略。
+- P0：ApiTesting 环境、场景编排、计划任务页面接后端运行链路。
+- P0：Automation 区分真实 runner、Playwright runner、占位 runner，并支持执行 artifacts 下载。
+- P0：Performance 补齐 JMX 下载、结果 JSON/HTML 导出、真实 JMeter 执行开关。
+
+## 第十七轮验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `npm run build`：通过，仅保留 Vite chunk size warning。
+- `python -m pytest backend\tests\test_round11_exports.py -q`：8 passed，2 warnings。
+- `cd backend; python -m pytest -q`：通过，2 warnings。
+
+## 第十七轮残余风险
+- 真实 Playwright runner 依赖本机 Node/Playwright 环境；缺依赖时返回结构化失败。
+- 真实 JMeter runner 依赖 JMeter CLI；缺工具时返回结构化 error。
+- 旧页面仍有部分静态演示图表，后续需继续替换为后端统计。

@@ -15,7 +15,8 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { API_BASE_URL, apiGet, apiPost, formatDateTime, pickList } from '../lib/api';
+import { apiGet, apiPost, downloadTextFile, formatDateTime, pickList } from '../lib/api';
+import { useProjectContext } from '../lib/projectContext';
 
 const PROJECT_SCAN_LIMIT = 80;
 
@@ -47,6 +48,7 @@ const mapBackendPerfPlan = (plan, latestResult = null) => {
 };
 
 export default function Performance() {
+  const { selectedProject } = useProjectContext();
   const [viewMode, setViewMode] = useState('list'); // 'list', 'report', 'plan-create', 'script-gen', 'history-compare'
   const [isRunning, setIsRunning] = useState(false);
   const [pressureMode, setPressureMode] = useState(0);
@@ -57,6 +59,8 @@ export default function Performance() {
   const [perfStatus, setPerfStatus] = useState({ loading: true, usingBackend: false, message: '正在同步后端性能方案...' });
   const [perfExecution, setPerfExecution] = useState(null);
   const [generatedScriptContent, setGeneratedScriptContent] = useState('');
+  const [useJMeterRunner, setUseJMeterRunner] = useState(false);
+  const [generateHtmlReport, setGenerateHtmlReport] = useState(true);
   const [targetApis, setTargetApis] = useState([
     { method: 'POST', url: '/api/v1/auth/login', weight: 30 },
     { method: 'POST', url: '/api/v1/session/create', weight: 40 },
@@ -95,8 +99,9 @@ export default function Performance() {
   const loadPerformanceData = React.useCallback(async ({ silent = false } = {}) => {
     if (!silent) setPerfStatus(prev => ({ ...prev, loading: true }));
     try {
-      const projectsPayload = await apiGet('/projects', { params: { page: 1, pageSize: PROJECT_SCAN_LIMIT } });
-      const projects = pickList(projectsPayload);
+      const projects = selectedProject?.id
+        ? [selectedProject]
+        : pickList(await apiGet('/projects', { params: { page: 1, pageSize: PROJECT_SCAN_LIMIT } }));
       if (!projects.length) {
         setPerfStatus({ loading: false, usingBackend: false, message: '后端暂无项目，列表使用内置样例。' });
         return;
@@ -132,7 +137,7 @@ export default function Performance() {
       setPerfStatus({ loading: false, usingBackend: false, message: `性能方案加载失败：${error.message || error}` });
       showToast(`性能方案加载失败：${error.message || error}`, 'error');
     }
-  }, []);
+  }, [selectedProject]);
 
   React.useEffect(() => {
     loadPerformanceData();
@@ -209,7 +214,9 @@ export default function Performance() {
       const scriptResult = await apiPost(`/perf-plans/${target.backendId}/generate-script`, {});
       setGeneratedScriptContent(scriptResult?.script?.content || '');
       const executionPayload = await apiPost(`/perf-plans/${target.backendId}/execute`, {
-        mode: 'placeholder',
+        mode: useJMeterRunner ? 'real' : 'placeholder',
+        use_jmeter: useJMeterRunner,
+        generate_html_report: generateHtmlReport,
         virtual_users: target.vus,
         target_apis: targetApis
       });
@@ -249,14 +256,37 @@ export default function Performance() {
     handleRunPerfPlan(activePlan);
   };
 
-  const handleExportPerfResult = () => {
+  const handleDownloadPerfScript = async () => {
+    const planId = activePlan?.backendId;
+    if (!planId) {
+      showToast('当前没有可下载的后端 JMX 脚本。', 'info');
+      return;
+    }
+    try {
+      const payload = await apiGet(`/perf-plans/${planId}/download-script`, { timeoutMs: 15000 });
+      if (!payload.available && !payload.content) {
+        showToast('当前方案还没有 JMX 脚本，请先生成脚本。', 'info');
+        return;
+      }
+      downloadTextFile({ filename: payload.filename, content: payload.content, mimeType: payload.mime_type || payload.mimeType });
+    } catch (error) {
+      showToast(`JMX 下载失败：${error.message || error}`, 'error');
+    }
+  };
+
+  const handleExportPerfResult = async (format = 'json') => {
     const planId = perfExecution?.planId || activePlan?.backendId;
     const resultId = perfExecution?.id || activePlan?.latestResult?.id || 'latest';
     if (!planId) {
       showToast('当前没有可导出的后端性能结果。', 'info');
       return;
     }
-    window.open(`${API_BASE_URL}/perf-plans/${planId}/results/${resultId}/download?format=json`, '_blank', 'noopener,noreferrer');
+    try {
+      const payload = await apiGet(`/perf-plans/${planId}/results/${resultId}/download`, { params: { format }, timeoutMs: 15000 });
+      downloadTextFile({ filename: payload.filename, content: payload.content, mimeType: payload.mime_type || payload.mimeType });
+    } catch (error) {
+      showToast(`性能结果导出失败：${error.message || error}`, 'error');
+    }
   };
 
   const reportResult = perfExecution || activePlan?.latestResult;
@@ -649,6 +679,24 @@ export default function Performance() {
               <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors">
                 <span>运行队列 (0)</span>
               </button>
+              <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[11px] font-bold text-[var(--text-primary)] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useJMeterRunner}
+                  onChange={(event) => setUseJMeterRunner(event.target.checked)}
+                  className="size-3"
+                />
+                <span>真实 JMeter</span>
+              </label>
+              <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[11px] font-bold text-[var(--text-primary)] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={generateHtmlReport}
+                  onChange={(event) => setGenerateHtmlReport(event.target.checked)}
+                  className="size-3"
+                />
+                <span>HTML 报告</span>
+              </label>
               <button 
                 onClick={() => setViewMode('plan-create')}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg glow-button-neon text-[11px] font-bold text-white cursor-pointer"
@@ -984,11 +1032,25 @@ export default function Performance() {
                 <span>{isRunning ? '压测中...' : '重新跑压测'}</span>
               </button>
               <button
-                onClick={handleExportPerfResult}
+                onClick={handleDownloadPerfScript}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors"
               >
                 <Download className="size-3.5" />
-                <span>导出结果</span>
+                <span>下载 JMX</span>
+              </button>
+              <button
+                onClick={() => handleExportPerfResult('json')}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors"
+              >
+                <Download className="size-3.5" />
+                <span>JSON</span>
+              </button>
+              <button
+                onClick={() => handleExportPerfResult('html')}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors"
+              >
+                <Download className="size-3.5" />
+                <span>HTML</span>
               </button>
               <button className="px-3 py-1.5 rounded-lg border border-red-500/30 hover:bg-red-500/10 text-red-500 text-[11px] font-bold cursor-pointer transition-colors bg-[var(--bg-card)]">
                 停止执行

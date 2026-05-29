@@ -69,6 +69,7 @@ from aitest_platform.services.api_scenario_runner import (
 from aitest_platform.services.auto_runner import AutoCaseFileInput, run_auto_project
 from aitest_platform.services.exporting import (
     ExportPayloadError,
+    build_auto_execution_artifacts_zip,
     build_auto_project_zip,
     export_defects,
     export_perf_result,
@@ -1925,11 +1926,58 @@ def list_auto_candidates(autoProjectId: str):
         return r2_page(session, "auto_candidate_screen", parent_id=autoProjectId)
 
 
+def _auto_framework_files(project: AutoProject) -> dict[str, str]:
+    framework = str(project.framework or "").lower()
+    language = str(project.language or "").lower()
+    if "playwright" in framework:
+        extension = "ts" if language in {"ts", "typescript"} else "js"
+        return {
+            "README.md": f"# {project.name}\n\nGenerated Playwright automation project.\n",
+            "package.json": json.dumps(
+                {
+                    "scripts": {"test": "playwright test"},
+                    "devDependencies": {"@playwright/test": "^1.44.0"},
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            f"tests/generated.spec.{extension}": _playwright_case_content(extension),
+            "playwright.config.js": "module.exports = { testDir: './tests', timeout: 30000 };\n",
+        }
+    return {"README.md": f"# {project.name}\n", "tests/test_generated.py": "def test_generated_placeholder():\n    assert True\n"}
+
+
+def _auto_case_file_payload(project: AutoProject) -> dict[str, Any]:
+    framework = str(project.framework or "").lower()
+    language = str(project.language or "").lower()
+    if "playwright" in framework:
+        extension = "ts" if language in {"ts", "typescript"} else "js"
+        return {
+            "file_name": f"generated.spec.{extension}",
+            "file_path": f"tests/generated.spec.{extension}",
+            "content": _playwright_case_content(extension),
+            "automation_dsl": {"runner": "playwright", "steps": [{"action": "page_goto"}, {"action": "expect_visible"}]},
+        }
+    return {
+        "file_name": "test_generated.py",
+        "file_path": "tests/test_generated.py",
+        "content": "def test_generated_placeholder():\n    assert True\n",
+        "automation_dsl": {"runner": "pytest", "steps": [{"action": "placeholder_assert"}]},
+    }
+
+
+def _playwright_case_content(extension: str) -> str:
+    if extension == "ts":
+        return "import { test, expect } from '@playwright/test';\n\ntest('generated smoke', async ({ page }) => {\n  await page.goto('about:blank');\n  await expect(page.locator('body')).toBeVisible();\n});\n"
+    return "const { test, expect } = require('@playwright/test');\n\ntest('generated smoke', async ({ page }) => {\n  await page.goto('about:blank');\n  await expect(page.locator('body')).toBeVisible();\n});\n"
+
+
 @router.post("/auto-projects/{autoProjectId}/generate-framework")
 def generate_auto_framework(autoProjectId: str):
     with session_scope() as session:
         project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
-        files = {"README.md": "# Automation Project\n", "tests/test_placeholder.py": "def test_placeholder():\n    assert True\n"}
+        files = _auto_framework_files(project)
         project.framework_files = files
         project.readme = files["README.md"]
         job = create_db_job(session, project.project_id, "generate_auto_framework", {"auto_project_id": project.id}, {"files": list(files)})
@@ -1941,13 +1989,14 @@ def generate_auto_framework(autoProjectId: str):
 def generate_auto_cases(autoProjectId: str):
     with session_scope() as session:
         project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
+        payload = _auto_case_file_payload(project)
         case_file = AutoCaseFile(
             auto_project_id=project.id,
-            file_name="test_placeholder.py",
-            file_path="tests/test_placeholder.py",
-            content="def test_placeholder():\n    assert True\n",
+            file_name=payload["file_name"],
+            file_path=payload["file_path"],
+            content=payload["content"],
             case_count=1,
-            automation_dsl={"steps": [{"action": "placeholder_assert"}]},
+            automation_dsl=payload["automation_dsl"],
         )
         session.add(case_file)
         session.flush()
@@ -1971,6 +2020,19 @@ def execute_auto_project(autoProjectId: str, payload: WritePayload | None = None
             else:
                 stmt = stmt.where(AutoCaseFile.id.in_([]))
         files = list(session.scalars(stmt.order_by(AutoCaseFile.id)))
+        if str(data.get("mode") or "").lower() == "placeholder":
+            execution = AutoExecution(
+                auto_project_id=project.id,
+                status="completed",
+                summary={"total": len(files), "passed": len(files), "failed": 0, "errors": 0},
+                artifacts={"report": f"/api/v2/auto-projects/{project.id}/download", "runner": {"mode": "placeholder"}, "return_code": 0, "files": []},
+                log_excerpt="Automation execution used explicit placeholder mode.",
+                duration_ms=20,
+            )
+            session.add(execution)
+            session.flush()
+            r2_log(session, "auto_execution", "execute", execution.id, {"auto_project_id": project.id, "runner": {"mode": "placeholder"}})
+            return model_dict(execution)
         if has_file_filter and total_available > 0 and not files:
             execution = AutoExecution(
                 auto_project_id=project.id,
@@ -2044,6 +2106,15 @@ def auto_execution_events(executionId: str):
         if session.get(AutoExecution, to_int(executionId, "executionId")) is None:
             raise HTTPException(status_code=404, detail=f"AutoExecution({executionId}) not found")
     return StreamingResponse(iter([f"data: {json.dumps({'execution_id': executionId, 'status': 'completed'})}\n\n"]), media_type="text/event-stream")
+
+
+@router.get("/auto-executions/{executionId}/artifacts/download")
+def download_auto_execution_artifacts(executionId: str):
+    with session_scope() as session:
+        try:
+            return build_auto_execution_artifacts_zip(session, execution_id=to_int(executionId, "executionId"))
+        except ExportPayloadError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/auto-projects/{autoProjectId}/download")

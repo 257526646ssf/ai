@@ -6,6 +6,7 @@ import Toast from './components/Toast';
 import GlobalModal from './components/GlobalModal';
 import InteractiveBackground from './components/InteractiveBackground';
 import { Bot } from 'lucide-react';
+import { ProjectProvider } from './lib/projectContext';
 
 // 导入子页面
 import Dashboard from './pages/Dashboard';
@@ -91,6 +92,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
+      <ProjectProvider>
       <div 
         className="min-h-screen flex font-sans transition-colors duration-300 relative grid-bg overflow-hidden"
         style={{
@@ -151,7 +153,7 @@ export default function App() {
         </div>
       )}
       </div>
+      </ProjectProvider>
     </ErrorBoundary>
   );
 }
-

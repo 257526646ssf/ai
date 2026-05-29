@@ -21,6 +21,7 @@ import {
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
 import { apiGet, apiPost, formatDateTime, pickList } from '../lib/api';
+import { useProjectContext } from '../lib/projectContext';
 
 const PROJECT_SCAN_LIMIT = 80;
 
@@ -60,6 +61,7 @@ const mapBackendLib = (lib, apis = [], cases = []) => {
 };
 
 export default function ApiTesting() {
+  const { selectedProject } = useProjectContext();
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'workbench' or 'env-scenario'
   const [selectedLibIdx, setSelectedLibIdx] = useState(0); // 列表页选中联动索引
   const [isSending, setIsSending] = useState(false);
@@ -71,6 +73,11 @@ export default function ApiTesting() {
   const [apiStatus, setApiStatus] = useState({ loading: true, message: '正在同步后端接口库...', usingBackend: false });
   const [isSyncingSwagger, setIsSyncingSwagger] = useState(false);
   const [isRunningAssertions, setIsRunningAssertions] = useState(false);
+  const [remoteEnvConfigs, setRemoteEnvConfigs] = useState([]);
+  const [remoteScenarioSteps, setRemoteScenarioSteps] = useState([]);
+  const [remoteSchedules, setRemoteSchedules] = useState([]);
+  const [scenarioRunResult, setScenarioRunResult] = useState(null);
+  const [isRunningScenarioChain, setIsRunningScenarioChain] = useState(false);
 
   // 15-页指标
   const apiStats = [
@@ -157,13 +164,52 @@ export default function ApiTesting() {
     return mapBackendLib(lib, apis, cases);
   }, []);
 
+  const loadApiRuntimeData = React.useCallback(async (lib) => {
+    if (!lib?.backendId) {
+      setRemoteEnvConfigs([]);
+      setRemoteScenarioSteps([]);
+      setRemoteSchedules([]);
+      return;
+    }
+
+    const [envPayload, scenarioPayload, schedulePayload] = await Promise.all([
+      apiGet(`/api-test-libs/${lib.backendId}/environments`, { params: { page: 1, pageSize: 20 } }).catch(() => null),
+      apiGet(`/api-test-libs/${lib.backendId}/scenarios`, { params: { page: 1, pageSize: 20 } }).catch(() => null),
+      apiGet(`/api-test-libs/${lib.backendId}/schedules`, { params: { page: 1, pageSize: 20 } }).catch(() => null)
+    ]);
+    const envs = pickList(envPayload);
+    const scenarios = pickList(scenarioPayload);
+    const schedules = pickList(schedulePayload);
+    const endpointById = new Map((lib.rawApis || []).map((api) => [String(api.id), api]));
+    const caseById = new Map((lib.rawCases || []).map((item) => [String(item.id), item]));
+    const primaryScenario = scenarios[0];
+    const steps = (primaryScenario?.nodes || []).map((node, index) => {
+      const testCase = caseById.get(String(node.case_id));
+      const endpoint = endpointById.get(String(testCase?.endpoint_id));
+      return {
+        id: node.id || `Step ${index + 1}`,
+        name: testCase?.name || node.name || `Backend case #${node.case_id || index + 1}`,
+        method: endpoint?.method || 'CASE',
+        url: endpoint?.path || `case:${node.case_id || index + 1}`,
+        desc: primaryScenario?.description || 'Backend scenario node',
+        extracts: Object.keys(node.extract || {}).join(', ') || 'backend runner',
+        delay: `${testCase?.expected_status || 200}`
+      };
+    });
+
+    setRemoteEnvConfigs(envs);
+    setRemoteScenarioSteps(steps);
+    setRemoteSchedules(schedules);
+  }, []);
+
   const loadApiTestingData = React.useCallback(async ({ silent = false } = {}) => {
     if (!silent) {
       setApiStatus({ loading: true, message: '正在同步后端接口库...', usingBackend: false });
     }
     try {
-      const projectsPayload = await apiGet('/projects', { params: { page: 1, pageSize: PROJECT_SCAN_LIMIT } });
-      const projects = pickList(projectsPayload);
+      const projects = selectedProject?.id
+        ? [selectedProject]
+        : pickList(await apiGet('/projects', { params: { page: 1, pageSize: PROJECT_SCAN_LIMIT } }));
       let selected = null;
 
       for (const project of projects) {
@@ -196,11 +242,17 @@ export default function ApiTesting() {
       setRemoteLibs([]);
       setApiStatus({ loading: false, message: error?.message || '后端暂不可用，显示演示接口库', usingBackend: false });
     }
-  }, [fetchApiLibDetail]);
+  }, [fetchApiLibDetail, selectedProject]);
 
   React.useEffect(() => {
     loadApiTestingData();
   }, [loadApiTestingData]);
+
+  const activeBackendLib = remoteLibs[selectedLibIdx] || remoteLibs[0];
+
+  React.useEffect(() => {
+    loadApiRuntimeData(activeBackendLib);
+  }, [loadApiRuntimeData, activeBackendLib?.backendId]);
 
   const handleSyncSwagger = async () => {
     if (!projectContext?.id) {
@@ -302,7 +354,92 @@ export default function ApiTesting() {
   };
 
   // 渲染：环境配置与场景链路编排
+  const handlePublishAndRunScenario = async () => {
+    const activeLib = remoteLibs[selectedLibIdx] || remoteLibs[0];
+    const caseIds = (activeLib?.rawCases || []).map((item) => item.id).filter(Boolean).slice(0, 3);
+    if (!activeLib?.backendId || caseIds.length === 0) {
+      showToast('当前接口库还没有可编排的后端用例，请先同步 Swagger。', 'info');
+      return;
+    }
+
+    setIsRunningScenarioChain(true);
+    try {
+      let environment = remoteEnvConfigs.find((item) => item.is_active || item.isActive) || remoteEnvConfigs[0];
+      if (!environment?.id) {
+        environment = await apiPost(`/api-test-libs/${activeLib.backendId}/environments`, {
+          name: 'Local Backend',
+          base_url: 'http://127.0.0.1:8000',
+          variables: { project_id: projectContext?.id },
+          is_active: true
+        });
+      }
+
+      const scenario = await apiPost(`/api-test-libs/${activeLib.backendId}/scenarios`, {
+        name: `Scenario ${new Date().toLocaleString('zh-CN', { hour12: false })}`,
+        description: 'Frontend-created API scenario chain',
+        nodes: caseIds.map((caseId, index) => ({
+          id: `case-${caseId}`,
+          type: 'case',
+          case_id: caseId,
+          order: index + 1
+        })),
+        edges: caseIds.slice(1).map((caseId, index) => ({
+          source: `case-${caseIds[index]}`,
+          target: `case-${caseId}`
+        })),
+        data_mappings: {}
+      });
+
+      const scenarioResult = await apiPost(`/api-scenarios/${scenario.id}/execute`, {
+        environment_id: environment.id,
+        base_url: environment.base_url || 'http://127.0.0.1:8000',
+        stop_on_failure: false
+      }, { timeoutMs: 15000 });
+
+      let schedule = remoteSchedules[0];
+      if (!schedule?.id) {
+        schedule = await apiPost(`/api-test-libs/${activeLib.backendId}/schedules`, {
+          name: 'Manual scenario smoke',
+          cron_expression: '* * * * *',
+          target_type: 'scenario',
+          target_ids: [scenario.id],
+          is_enabled: true
+        });
+      }
+      const scheduleResult = await apiPost(`/api-schedules/${schedule.id}/run`, {
+        force: true,
+        environment_id: environment.id,
+        base_url: environment.base_url || 'http://127.0.0.1:8000'
+      }, { timeoutMs: 15000 });
+
+      setScenarioRunResult({ scenarioResult, scheduleResult });
+      setResponseBody(JSON.stringify({ scenarioResult, scheduleResult }, null, 2));
+      await loadApiRuntimeData(activeLib);
+      showToast(`场景链路已执行：${scenarioResult?.summary?.status || scenarioResult?.status || 'done'}，计划任务已回写。`, 'success');
+    } catch (error) {
+      showToast(error?.message || '场景链路执行失败，请检查后端服务。', 'error');
+    } finally {
+      setIsRunningScenarioChain(false);
+    }
+  };
+
   const renderEnvScenario = () => {
+    const displayEnvConfigs = remoteEnvConfigs.length
+      ? remoteEnvConfigs.flatMap((env) => Object.entries(env.variables || {}).map(([key, value]) => ({
+        id: `${env.id}-${key}`,
+        key,
+        value: String(value),
+        desc: `${env.name || 'Backend env'} / ${env.base_url || '--'}`
+      }))).concat(remoteEnvConfigs.map((env) => ({
+        id: `${env.id}-base-url`,
+        key: 'base_url',
+        value: env.base_url || '--',
+        desc: env.is_active || env.isActive ? 'active backend environment' : 'backend environment'
+      })))
+      : envConfigs;
+    const displayScenarioSteps = remoteScenarioSteps.length ? remoteScenarioSteps : scenarioSteps;
+    const latestSchedule = remoteSchedules[0];
+    const scenarioSummary = scenarioRunResult?.scenarioResult?.summary || latestSchedule?.last_result || latestSchedule?.lastResult;
     return (
       <div className="space-y-4 text-left animate-[fadeIn_0.2s_ease-out] w-full">
         {/* 流光连线动画样式注入 */}
@@ -335,10 +472,11 @@ export default function ApiTesting() {
             </div>
           </div>
           <button 
-            onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '环境配置已发布！场景链路编排已拉起并发演练。', type: 'success' } }))}
+            onClick={handlePublishAndRunScenario}
+            disabled={isRunningScenarioChain}
             className="px-4 py-2 text-[11.5px] accent-btn"
           >
-            发布配置并执行链路
+            {isRunningScenarioChain ? '后端链路执行中...' : '发布配置并执行链路'}
           </button>
         </div>
 
@@ -349,11 +487,13 @@ export default function ApiTesting() {
               <span className="px-2 py-0.5 bg-[rgba(59,130,246,0.12)] text-blue-500 rounded text-[9.5px] font-bold">场景: 登录支付下单链路</span>
               <h2 className="font-bold text-xs text-[var(--text-primary)]">核心业务流程自动化链路测试</h2>
             </div>
-            <p className="text-[10px] text-[var(--text-secondary)] mt-1.5 leading-none">目标环境: TEST 环境 | 链路覆盖率: 87.5% | 动态流控节点: 4个</p>
+            <p className="text-[10px] text-[var(--text-secondary)] mt-1.5 leading-none">
+              后端环境: {remoteEnvConfigs[0]?.base_url || '待创建'} | 场景节点: {displayScenarioSteps.length} | 计划任务: {latestSchedule?.id ? `#${latestSchedule.id}` : '待创建'}
+            </p>
           </div>
           <div className="flex gap-2">
-            <div className="px-3 py-1.5 border border-[var(--border-color)] bg-[var(--bg-app)] rounded-lg text-[10px] text-[var(--text-primary)] font-bold">并发用户: 50</div>
-            <div className="px-3 py-1.5 border border-[var(--border-color)] bg-[var(--bg-app)] rounded-lg text-[10px] text-[var(--text-primary)] font-bold">持续时间: 5m</div>
+            <div className="px-3 py-1.5 border border-[var(--border-color)] bg-[var(--bg-app)] rounded-lg text-[10px] text-[var(--text-primary)] font-bold">场景状态: {scenarioSummary?.status || '未执行'}</div>
+            <div className="px-3 py-1.5 border border-[var(--border-color)] bg-[var(--bg-app)] rounded-lg text-[10px] text-[var(--text-primary)] font-bold">最近执行: {latestSchedule?.last_run_at ? formatDateTime(latestSchedule.last_run_at) : '--'}</div>
           </div>
         </div>
 
@@ -388,7 +528,7 @@ export default function ApiTesting() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[var(--border-color)]/50 text-[var(--text-primary)] font-mono">
-                    {envConfigs.map((cfg) => (
+                    {displayEnvConfigs.map((cfg) => (
                       <tr key={cfg.id} className="hover:bg-[var(--border-color)]/30">
                         <td className="py-2.5 px-1 font-bold text-[var(--text-primary)]">{cfg.key}</td>
                         <td className="py-2.5 px-1 text-[var(--accent-color)] truncate max-w-[140px]" title={cfg.value}>{cfg.value}</td>
@@ -424,12 +564,12 @@ export default function ApiTesting() {
             <div className="grid grid-cols-12 gap-4">
               {/* 步骤列表 */}
               <div className="col-span-7 space-y-4 max-h-[460px] overflow-y-auto pr-1">
-                {scenarioSteps.map((step, idx) => {
+                {displayScenarioSteps.map((step, idx) => {
                   const isSelected = selectedStepIdx === idx;
                   return (
                     <div key={idx} className="relative flex items-start gap-3">
                       {/* SVG 呼吸跑马灯流光连线 */}
-                      {idx < scenarioSteps.length - 1 && (
+                      {idx < displayScenarioSteps.length - 1 && (
                         <div className="absolute left-[15px] top-8 bottom-0 w-[2px] -z-10" style={{ height: 'calc(100% + 16px)' }}>
                           <svg className="w-full h-full" preserveAspectRatio="none">
                             <line 
@@ -503,7 +643,7 @@ export default function ApiTesting() {
                     <Sparkles className="size-3.5 text-[var(--accent-color)]" />
                     <span>步骤 {selectedStepIdx + 1} 遥测与 AI 断言</span>
                   </h4>
-                  <p className="text-[8px] text-[var(--text-secondary)] mt-1">当前请求：<span className="font-mono font-semibold">{scenarioSteps[selectedStepIdx].method} {scenarioSteps[selectedStepIdx].url}</span></p>
+                  <p className="text-[8px] text-[var(--text-secondary)] mt-1">当前请求：<span className="font-mono font-semibold">{displayScenarioSteps[selectedStepIdx]?.method} {displayScenarioSteps[selectedStepIdx]?.url}</span></p>
                 </div>
 
                 <div className="space-y-3">
@@ -511,7 +651,7 @@ export default function ApiTesting() {
                     <div className="font-bold text-[var(--text-primary)]">性能预期遥测</div>
                     <div className="flex justify-between text-[9px] text-[var(--text-secondary)]">
                       <span>预估延迟:</span>
-                      <span className="font-mono text-[var(--text-primary)] font-bold">{scenarioSteps[selectedStepIdx].delay}</span>
+                      <span className="font-mono text-[var(--text-primary)] font-bold">{displayScenarioSteps[selectedStepIdx]?.delay}</span>
                     </div>
                     <div className="flex justify-between text-[9px] text-[var(--text-secondary)]">
                       <span>网络开销:</span>

@@ -6,6 +6,7 @@ import io
 import json
 import zipfile
 from datetime import datetime, timezone
+from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Iterable
 
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from aitest_platform.models import (
     AutoCaseFile,
+    AutoExecution,
     AutoProject,
     Defect,
     PerfPlan,
@@ -122,6 +124,47 @@ def build_auto_project_zip(session: Session, *, auto_project_id: int) -> dict[st
     }
 
 
+def build_auto_execution_artifacts_zip(session: Session, *, execution_id: int) -> dict[str, Any]:
+    execution = session.get(AutoExecution, execution_id)
+    if execution is None:
+        raise ExportPayloadError(f"AutoExecution({execution_id}) not found")
+
+    artifacts = sanitize_export_payload(execution.artifacts or {})
+    artifact_dir = artifacts.get("artifact_dir") if isinstance(artifacts, dict) else None
+    root = Path(str(artifact_dir)).resolve() if artifact_dir else None
+    manifest = {
+        "execution_id": execution.id,
+        "status": execution.status,
+        "summary": sanitize_export_payload(execution.summary or {}),
+        "duration_ms": execution.duration_ms,
+        "artifacts": artifacts,
+    }
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        for item in _artifact_entries(artifacts):
+            path_value = item.get("path")
+            if not path_value:
+                continue
+            source = Path(str(path_value)).resolve()
+            if root is not None and not _path_is_relative_to(source, root):
+                continue
+            if not source.exists() or not source.is_file():
+                continue
+            archive_name = _safe_zip_path(item.get("relative_path") or source.name)
+            archive.writestr(f"artifacts/{archive_name}", source.read_bytes())
+
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return {
+        "execution_id": execution.id,
+        "filename": f"auto-execution-{execution.id}-artifacts.zip",
+        "mime_type": "application/zip",
+        "content_base64": encoded,
+        "file_count": len(_artifact_entries(artifacts)) + 1,
+    }
+
+
 def export_perf_script(session: Session, *, plan_id: int) -> dict[str, Any]:
     plan = _require_active(session, PerfPlan, plan_id, "PerfPlan")
     content = sanitize_export_payload(plan.jmx_script or "")
@@ -136,7 +179,7 @@ def export_perf_script(session: Session, *, plan_id: int) -> dict[str, Any]:
 
 
 def export_perf_result(session: Session, *, plan_id: int, result_id: int | None = None, output_format: str = "json") -> dict[str, Any]:
-    fmt = _normalize_format(output_format, {"json"})
+    fmt = _normalize_format(output_format, {"json", "html"})
     plan = _require_active(session, PerfPlan, plan_id, "PerfPlan")
     stmt = select(PerfResult).where(PerfResult.plan_id == plan.id)
     if result_id is not None:
@@ -155,6 +198,18 @@ def export_perf_result(session: Session, *, plan_id: int, result_id: int | None 
             },
         }
     )
+    if fmt == "html":
+        content = _render_perf_result_html(payload)
+        return {
+            "plan_id": plan.id,
+            "result_id": result.id,
+            "filename": f"perf-result-{result.id}.html",
+            "content": content,
+            "mime_type": "text/html; charset=utf-8",
+            "format": fmt,
+            "raw_data_path": payload["raw_data"]["path"],
+            "raw_file_available": payload["raw_data"]["available"],
+        }
     return {
         "plan_id": plan.id,
         "result_id": result.id,
@@ -295,6 +350,81 @@ def _perf_result_row(result: PerfResult) -> dict[str, Any]:
     }
 
 
+def _artifact_entries(artifacts: Any) -> list[dict[str, Any]]:
+    if not isinstance(artifacts, dict):
+        return []
+    entries: list[dict[str, Any]] = []
+    for key in ("evidence", "files"):
+        value = artifacts.get(key)
+        if isinstance(value, list):
+            entries.extend(item for item in value if isinstance(item, dict))
+    runner_log = artifacts.get("runner_log")
+    if runner_log:
+        entries.append({"kind": "log", "path": runner_log, "relative_path": "runner.log"})
+    unique: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        path = entry.get("path")
+        if path:
+            unique[str(path)] = entry
+    return list(unique.values())
+
+
+def _render_perf_result_html(payload: dict[str, Any]) -> str:
+    plan = payload.get("plan") or {}
+    result = payload.get("result") or {}
+    summary = result.get("summary_data") or {}
+    timeline = result.get("timeline_data") or []
+    errors = result.get("error_details") or []
+    rows = "\n".join(
+        f"<tr><td>{_html_escape(item.get('second'))}</td><td>{_html_escape(item.get('samples'))}</td><td>{_html_escape(item.get('avg_ms'))}</td><td>{_html_escape(item.get('failed'))}</td></tr>"
+        for item in timeline[:200]
+        if isinstance(item, dict)
+    )
+    error_items = "".join(f"<li>{_html_escape(json.dumps(item, ensure_ascii=False, default=str))}</li>" for item in errors[:20])
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>Performance Result {result.get('id')}</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 32px; color: #0f172a; background: #f8fafc; }}
+    h1 {{ font-size: 22px; }}
+    .grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 20px 0; }}
+    .card {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; }}
+    .label {{ color: #64748b; font-size: 12px; }}
+    .value {{ font-size: 20px; font-weight: 700; margin-top: 4px; }}
+    table {{ width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e2e8f0; }}
+    th, td {{ text-align: left; padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; }}
+    th {{ background: #f1f5f9; }}
+    code {{ background: #e2e8f0; padding: 2px 5px; border-radius: 4px; }}
+  </style>
+</head>
+<body>
+  <h1>{_html_escape(plan.get('name') or 'Performance Result')}</h1>
+  <p>Result #{_html_escape(result.get('id'))} · Status: <code>{_html_escape(result.get('status'))}</code></p>
+  <section class="grid">
+    <div class="card"><div class="label">Samples</div><div class="value">{_html_escape(summary.get('total'))}</div></div>
+    <div class="card"><div class="label">Average RT</div><div class="value">{_html_escape(summary.get('avg_ms'))}ms</div></div>
+    <div class="card"><div class="label">P95 RT</div><div class="value">{_html_escape(summary.get('p95_ms'))}ms</div></div>
+    <div class="card"><div class="label">Error Rate</div><div class="value">{_html_escape(summary.get('error_rate'))}</div></div>
+  </section>
+  <h2>Timeline</h2>
+  <table>
+    <thead><tr><th>Second</th><th>Samples</th><th>Avg RT</th><th>Failed</th></tr></thead>
+    <tbody>{rows or '<tr><td colspan="4">No timeline data</td></tr>'}</tbody>
+  </table>
+  <h2>Errors</h2>
+  <ul>{error_items or '<li>No errors</li>'}</ul>
+</body>
+</html>"""
+
+
+def _html_escape(value: Any) -> str:
+    return (
+        "" if value is None else str(sanitize_export_payload(value))
+    ).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
 def _normalize_format(value: str | None, allowed: set[str]) -> str:
     fmt = (value or "markdown").lower()
     if fmt not in allowed:
@@ -355,6 +485,14 @@ def _safe_zip_path(value: str) -> str:
     clean = "/".join(parts).lstrip("/")
     clean = clean.replace("placeholder", "generated").replace("Placeholder", "Generated").replace("PLACEHOLDER", "GENERATED")
     return clean or "file.txt"
+
+
+def _path_is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def _is_sensitive_key(key: str) -> bool:

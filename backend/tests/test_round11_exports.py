@@ -154,6 +154,8 @@ def test_auto_project_download_returns_decodable_zip_without_placeholder_or_secr
     auto_context = create_auto_context(client, context["project_id"])
 
     download = data_of(client.get(f"{API_PREFIX}/auto-projects/{auto_context['auto_project_id']}/download"))
+    execution = post_json(client, f"{API_PREFIX}/auto-projects/{auto_context['auto_project_id']}/execute", {"mode": "placeholder"})
+    artifact_download = data_of(client.get(f"{API_PREFIX}/auto-executions/{object_id(execution)}/artifacts/download"))
 
     assert download["filename"].endswith(".zip"), download
     assert download["mime_type"] == "application/zip", download
@@ -164,8 +166,12 @@ def test_auto_project_download_returns_decodable_zip_without_placeholder_or_secr
         assert "README.md" in names, names
         assert "pytest.ini" in names, names
         assert any(name.startswith("tests/") and name.endswith(".py") for name in names), names
+    artifact_zip = base64.b64decode(artifact_download["content_base64"])
+    with zipfile.ZipFile(io.BytesIO(artifact_zip)) as archive:
+        assert "manifest.json" in set(archive.namelist()), archive.namelist()
     assert "placeholder" not in payload_text(download).lower(), download
     assert_no_sensitive(download)
+    assert_no_sensitive(artifact_download)
 
 
 def test_perf_plan_script_and_result_download_are_structured_and_redacted(client):
@@ -174,6 +180,7 @@ def test_perf_plan_script_and_result_download_are_structured_and_redacted(client
 
     script = data_of(client.get(f"{API_PREFIX}/perf-plans/{perf_context['perf_plan_id']}/download-script"))
     result = data_of(client.get(f"{API_PREFIX}/perf-plans/{perf_context['perf_plan_id']}/results/{perf_context['perf_result_id']}/download"))
+    html_result = data_of(client.get(f"{API_PREFIX}/perf-plans/{perf_context['perf_plan_id']}/results/{perf_context['perf_result_id']}/download", params={"format": "html"}))
 
     assert script["format"] == "jmx", script
     assert script["filename"].endswith(".jmx"), script
@@ -182,5 +189,9 @@ def test_perf_plan_script_and_result_download_are_structured_and_redacted(client
     assert result["filename"].endswith(".json"), result
     assert str(perf_context["perf_result_id"]) in result["content"], result
     assert "raw_file_available" in result, result
+    assert html_result["format"] == "html", html_result
+    assert html_result["filename"].endswith(".html"), html_result
+    assert "<html" in html_result["content"].lower(), html_result
     assert_no_sensitive(script)
     assert_no_sensitive(result)
+    assert_no_sensitive(html_result)

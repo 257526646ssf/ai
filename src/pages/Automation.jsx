@@ -23,7 +23,8 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, formatDateTime, pickList } from '../lib/api';
+import { apiGet, apiPost, downloadBase64File, formatDateTime, pickList } from '../lib/api';
+import { useProjectContext } from '../lib/projectContext';
 
 const PROJECT_SCAN_LIMIT = 80;
 
@@ -62,6 +63,7 @@ const mapBackendAutoProject = (project) => {
 };
 
 export default function Automation() {
+  const { selectedProject } = useProjectContext();
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'wizard'
   const [wizardStep, setWizardStep] = useState(1); // 1, 2, 3, 4
   const [selectedProjIdx, setSelectedProjIdx] = useState(0);
@@ -73,6 +75,7 @@ export default function Automation() {
   const [isRunningAutomation, setIsRunningAutomation] = useState(false);
   const [isSyncingRepo, setIsSyncingRepo] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
+  const [autoRunnerMode, setAutoRunnerMode] = useState('auto');
 
   // 17-页数据
   const autoStats = [
@@ -101,8 +104,9 @@ export default function Automation() {
   const loadAutomationData = React.useCallback(async ({ silent = false } = {}) => {
     if (!silent) setAutoStatus(prev => ({ ...prev, loading: true }));
     try {
-      const projectsPayload = await apiGet('/projects', { params: { page: 1, pageSize: PROJECT_SCAN_LIMIT } });
-      const projects = pickList(projectsPayload);
+      const projects = selectedProject?.id
+        ? [selectedProject]
+        : pickList(await apiGet('/projects', { params: { page: 1, pageSize: PROJECT_SCAN_LIMIT } }));
       if (!projects.length) {
         setAutoStatus({ loading: false, usingBackend: false, message: '后端暂无项目，列表使用内置样例。' });
         return;
@@ -132,7 +136,7 @@ export default function Automation() {
       setAutoStatus({ loading: false, usingBackend: false, message: `自动化项目加载失败：${error.message || error}` });
       showToast(`自动化项目加载失败：${error.message || error}`, 'error');
     }
-  }, []);
+  }, [selectedProject]);
 
   React.useEffect(() => {
     loadAutomationData();
@@ -212,7 +216,10 @@ export default function Automation() {
       ]);
       await apiPost(`/auto-projects/${target.backendId}/generate-framework`, {});
       await apiPost(`/auto-projects/${target.backendId}/generate-cases`, {});
-      const execution = await apiPost(`/auto-projects/${target.backendId}/execute`, { mode: 'auto', timeout_ms: 10000 });
+      const requestedMode = autoRunnerMode === 'playwright' && !String(target.stack || '').toLowerCase().includes('playwright')
+        ? 'auto'
+        : autoRunnerMode;
+      const execution = await apiPost(`/auto-projects/${target.backendId}/execute`, { mode: requestedMode, timeout_ms: 10000 });
       setAutoExecution(execution);
       setViewMode('run-result');
       await loadAutomationData({ silent: true });
@@ -260,6 +267,41 @@ export default function Automation() {
     }
   };
 
+  const handleDownloadAutoProject = async () => {
+    if (!activeProj?.backendId) {
+      showToast('当前没有可下载的后端自动化项目。', 'info');
+      return;
+    }
+    try {
+      const payload = await apiGet(`/auto-projects/${activeProj.backendId}/download`, { timeoutMs: 15000 });
+      downloadBase64File({
+        filename: payload.filename,
+        contentBase64: payload.content_base64 || payload.contentBase64,
+        mimeType: payload.mime_type || payload.mimeType
+      });
+    } catch (error) {
+      showToast(`自动化项目下载失败：${error.message || error}`, 'error');
+    }
+  };
+
+  const handleDownloadAutoArtifacts = async () => {
+    const executionId = autoExecution?.id;
+    if (!executionId) {
+      showToast('请先运行一次后端自动化执行，再下载 artifacts。', 'info');
+      return;
+    }
+    try {
+      const payload = await apiGet(`/auto-executions/${executionId}/artifacts/download`, { timeoutMs: 15000 });
+      downloadBase64File({
+        filename: payload.filename,
+        contentBase64: payload.content_base64 || payload.contentBase64,
+        mimeType: payload.mime_type || payload.mimeType
+      });
+    } catch (error) {
+      showToast(`Artifacts 下载失败：${error.message || error}`, 'error');
+    }
+  };
+
   const fileTree = [
     { name: 'tests/', isFolder: true, children: [
       { name: 'auth/', isFolder: true, children: [
@@ -287,7 +329,7 @@ export default function Automation() {
         {/* 面包屑 */}
         <div className="flex justify-between items-center">
           <div className="flex items-center gap-3">
-            <button 
+            <button
               onClick={() => setViewMode('list')}
               className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[10px] text-[var(--text-primary)] hover:bg-[var(--border-color)]/50 hover:scale-[1.03] transition-all shadow-sm cursor-pointer"
             >
@@ -301,7 +343,13 @@ export default function Automation() {
             </div>
           </div>
           <div className="flex gap-2">
-            <button 
+            <button
+              onClick={handleDownloadAutoProject}
+              className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer"
+            >
+              下载工程 ZIP
+            </button>
+            <button
               onClick={() => handleRunAutomation(activeProj)}
               disabled={isRunningAutomation}
               className="px-3 py-1.5 text-[11px] accent-btn flex items-center gap-1"
@@ -485,6 +533,8 @@ export default function Automation() {
     const isSuccess = !autoExecution || ['completed', 'passed', 'success'].includes(String(autoExecution.status || '').toLowerCase());
     const durationText = autoExecution?.duration_ms ? `${Math.max(1, Math.round(autoExecution.duration_ms / 1000))}s` : '1m 24s';
     const logLines = autoExecution?.log_excerpt ? String(autoExecution.log_excerpt).split('\n').filter(Boolean) : [];
+    const runnerMode = autoExecution?.artifacts?.runner?.mode || autoExecution?.artifacts?.runner?.name || 'placeholder';
+    const artifactEvidence = autoExecution?.artifacts?.evidence || [];
     return (
       <div className="space-y-4 text-left animate-[fadeIn_0.2s_ease-out] w-full">
         {/* 面包屑 */}
@@ -505,15 +555,23 @@ export default function Automation() {
               <span className="text-[var(--text-primary)]">构建执行结果 {autoExecution?.id ? `(Execution #${autoExecution.id})` : '(Build #84)'}</span>
             </div>
           </div>
-          <button 
-            onClick={() => {
-              handleRunAutomation(activeProj);
-            }}
-            className="px-3 py-1.5 rounded-lg accent-btn text-[11px] font-bold text-white cursor-pointer shadow-sm flex items-center gap-1"
-          >
-            <Sparkles className="size-3.5" />
-            <span>智能用例自愈 & 重跑</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleDownloadAutoArtifacts}
+              className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer"
+            >
+              下载 artifacts
+            </button>
+            <button
+              onClick={() => {
+                handleRunAutomation(activeProj);
+              }}
+              className="px-3 py-1.5 rounded-lg accent-btn text-[11px] font-bold text-white cursor-pointer shadow-sm flex items-center gap-1"
+            >
+              <Sparkles className="size-3.5" />
+              <span>智能用例自愈 & 重跑</span>
+            </button>
+          </div>
         </div>
 
         {/* 顶部运行状态看板 */}
@@ -536,6 +594,25 @@ export default function Automation() {
           <div className="theme-card rounded-xl p-4 shadow-soft">
             <span className="text-[10px] text-slate-400 font-semibold">通过情况统计</span>
             <div className="text-base font-bold mt-1 text-slate-700">通过: {summary.passed || 0} | 失败: {summary.failed || 0} | 错误: {summary.errors || 0}</div>
+          </div>
+        </div>
+
+        <div className="theme-card rounded-xl p-4 shadow-soft flex items-center justify-between">
+          <div>
+            <div className="text-[10px] text-slate-400 font-semibold">Runner 模式</div>
+            <div className="text-sm font-bold text-slate-800 mt-1">{runnerMode}</div>
+          </div>
+          <div className="flex-1 ml-6">
+            <div className="text-[10px] text-slate-400 font-semibold mb-2">Artifacts</div>
+            <div className="flex flex-wrap gap-2">
+              {artifactEvidence.length ? artifactEvidence.slice(0, 6).map((item, idx) => (
+                <span key={`${item.kind}-${idx}`} className="px-2 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-app)] text-[9px] font-mono text-[var(--text-primary)]">
+                  {item.kind}:{item.relative_path || item.source || idx + 1}
+                </span>
+              )) : (
+                <span className="text-[10px] text-slate-400">暂无 runner artifacts</span>
+              )}
+            </div>
           </div>
         </div>
 
@@ -656,6 +733,15 @@ export default function Automation() {
                 {isSyncingRepo && <Activity className="size-3 animate-spin" />}
                 <span>{isSyncingRepo ? '同步中...' : '同步代码库'}</span>
               </button>
+              <select
+                value={autoRunnerMode}
+                onChange={(event) => setAutoRunnerMode(event.target.value)}
+                className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[11px] font-bold text-[var(--text-primary)] cursor-pointer"
+              >
+                <option value="auto">真实本地 runner</option>
+                <option value="playwright">Playwright runner</option>
+                <option value="placeholder">占位 runner</option>
+              </select>
               <button 
                 onClick={() => { setViewMode('wizard'); setWizardStep(1); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg accent-btn text-[11px] font-bold text-white cursor-pointer"
