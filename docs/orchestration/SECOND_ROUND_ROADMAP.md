@@ -80,10 +80,10 @@
 
 ## 当前下一步
 
-立即进入 R26：自动化中心增强。
-- 补候选筛选、在线文件编辑、代码保存。
-- 增强 Playwright 模板、执行日志/截图/trace 展示。
-- 推进 Artifacts 预览，继续保持脱敏、本地优先和结构化失败约束。
+立即进入 R27：性能测试增强。
+- 补中止执行接口、阈值判定、历史对比。
+- 增强 JMeter 模板参数编辑、性能趋势聚合、报告风险建议。
+- 继续保持脱敏、本地优先和结构化失败约束。
 
 ## 当前进展
 
@@ -128,3 +128,12 @@
 - R25 冒烟事实：临时 SQLite 已删除；OpenAPI YAML import imported=1 path `/r25/smoke/users` expected status 206；HAR import imported=1 path `/r25/smoke/orders` expected status 202；Mock create/list/dispatch matched=true status 207；debug save_as_case status 200 saved_case_id=3；浏览器进入 `http://127.0.0.1:3000/` 的 ApiTesting/workbench，OpenAPI YAML、HAR、环境变量、本次运行覆盖、Mock 服务 5 个关键词可见，console.error=0，pageerror=0；进程和临时 DB 已清理，8000/3000 无监听。
 - R25 残余风险：YAML 为轻量解析非完整 YAML 规范；脚本为 allowlist DSL 非任意代码；Mock 服务为本地平台基础 mock 非完整代理网关；Vite 仍有 chunk > 500 kB warning；浏览器只做轻量加载/可见性/console smoke，深层 UI 写操作主要由 API 冒烟覆盖。
 - 下一步进入 R26：自动化中心增强。
+
+## 当前进展补充：R26
+- R26 已完成文档收口：自动化中心增强已落地。
+- 后端完成候选筛选/选择、文件 CRUD、执行详情、artifact 列表与预览路由；`generate-cases` 支持候选选择；Playwright 模板增强；新增 `backend/aitest_platform/services/auto_center.py`；`backend/aitest_platform/services/exporting.py` 对文本类 artifact ZIP 内容脱敏。
+- 前端 `src/pages/Automation.jsx` 已新增候选筛选、case file 在线编辑/dirty/save/reset、Playwright 模板配置、按 `case_file_ids` 执行、执行详情日志/evidence、artifact preview。
+- R26 验收证据见 `docs/orchestration/ROUND26_REPORT.md`：`cd backend; python -m compileall aitest_platform` passed，exit code 0；R26 组合回归 40 passed，仅 FastAPI deprecation warning；full backend `python -m pytest -q` passed，exit code 0，仅 FastAPI deprecation warning；`npm run build` passed，仅 Vite chunk >500k warning。
+- R26 冒烟事实：API smoke passed，候选筛选/过滤、文件保存、artifact preview 均返回合理结果；浏览器最终复验 Automation 页面打开，console.error=0，pageerror=0，`/case-files` 请求数 0，`/case-files` 404 为 0，`/auto-projects/693/files?page=1&pageSize=200` 返回 200，R26 DOM 可见关键词 8/8：候选筛选、在线文件、保存、Playwright、trace、Artifacts、预览、执行日志；8000/3000 已停止并复查无监听。
+- R26 残余风险：Vite chunk warning；Playwright 真实执行依赖本机环境；trace/zip 预览不展开执行；浏览器深层写操作主要由 API smoke 和后端契约测试覆盖。
+- 下一步进入 R27：性能测试增强。

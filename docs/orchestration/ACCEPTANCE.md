@@ -490,3 +490,30 @@
 - Browser smoke: `http://127.0.0.1:3000/` entered ApiTesting/workbench; 5 R25 UI keywords were visible: OpenAPI YAML, HAR, 环境变量, 本次运行覆盖, Mock 服务; console.error=0 and pageerror=0.
 - Cleanup: temporary processes and DB were cleaned; ports 8000/3000 had no listeners.
 - Residual risks: Vite chunk > 500 kB warning remains; browser coverage is limited to light load/visibility/console smoke, and deeper UI writes are mainly covered by API smoke.
+
+## 第二十六轮验收
+- [x] R26 名称为自动化中心增强。
+- [x] 后端支持候选筛选/选择。
+- [x] 后端支持自动化文件 CRUD。
+- [x] 后端支持执行详情、artifact 列表与预览路由。
+- [x] `generate-cases` 支持候选选择。
+- [x] Playwright 模板已增强。
+- [x] 新增后端服务 `backend/aitest_platform/services/auto_center.py`。
+- [x] `backend/aitest_platform/services/exporting.py` 对文本类 artifact ZIP 内容脱敏。
+- [x] `src/pages/Automation.jsx` 新增候选筛选、case file 在线编辑/dirty/save/reset、Playwright 模板配置、按 `case_file_ids` 执行、执行详情日志/evidence、artifact preview。
+- [x] R26 定向测试覆盖候选筛选/过滤、候选选择影响生成、Playwright 模板增强、在线文件查看/保存/非法路径、按文件执行与详情、artifact 列表/预览、artifact ZIP 回归安全。
+- [x] 最终完整后端回归、API 冒烟、浏览器最终复验均已由 QA worker 回填通过。
+
+## Round 26 Evidence
+- Added `backend/tests/test_round26_automation_center.py`.
+- Added backend service `backend/aitest_platform/services/auto_center.py`.
+- Enhanced `backend/aitest_platform/api/router.py`, `backend/aitest_platform/services/exporting.py`, and `src/pages/Automation.jsx`.
+- `python -m pytest backend/tests/test_round26_automation_center.py -q`: 7 passed.
+- `cd backend; python -m compileall aitest_platform`: passed, exit code 0.
+- R26 combination regression: `python -m pytest tests/test_round6_execution_runners.py tests/test_round8_artifacts.py tests/test_round11_exports.py tests/test_round13_frontend_integration.py tests/test_round25_api_testing_enhancement.py tests/test_round26_automation_center.py -q`: 40 passed, with only FastAPI deprecation warning.
+- Full backend `python -m pytest -q`: passed, exit code 0, with only FastAPI deprecation warning.
+- Root `npm run build`: passed, with only Vite chunk >500k warning.
+- API smoke: passed; candidate filter/filtering, file save, and artifact preview returned reasonable results.
+- Browser final smoke: Automation page opened; console.error=0; pageerror=0; `/case-files` request count 0; `/case-files` 404 count 0; `/auto-projects/693/files?page=1&pageSize=200` returned 200; R26 DOM visible keywords 8/8: 候选筛选、在线文件、保存、Playwright、trace、Artifacts、预览、执行日志.
+- Cleanup: ports 8000/3000 were stopped and rechecked with no listeners.
+- Residual risks: Vite chunk warning; Playwright 真实执行依赖本机环境；trace/zip 预览不展开执行；浏览器深层写操作主要由 API smoke 和后端契约测试覆盖。

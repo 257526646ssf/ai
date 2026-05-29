@@ -70,6 +70,24 @@ from aitest_platform.services.api_scenario_runner import (
     sanitize_scenario_mapping_definition,
     sanitize_scenario_nodes,
 )
+from aitest_platform.services.auto_center import (
+    AutoCenterNotFoundError,
+    AutoCenterValidationError,
+    auto_execution_artifacts_payload,
+    auto_execution_detail,
+    auto_file_public_dict,
+    build_case_file_create_fields,
+    build_case_file_patch_fields,
+    build_case_file_payloads,
+    fallback_case_file_payload,
+    is_playwright_project,
+    list_project_candidates,
+    playwright_framework_files,
+    preview_auto_execution_artifact,
+    screen_auto_candidates as screen_auto_candidates_payload,
+    selected_generation_candidates,
+    update_candidate_selection,
+)
 from aitest_platform.services.auto_runner import AutoCaseFileInput, inspect_auto_runner_dependencies, run_auto_project
 from aitest_platform.services.exporting import (
     ExportPayloadError,
@@ -2996,62 +3014,53 @@ def delete_auto_project(autoProjectId: str):
 def screen_auto_candidates(payload: WritePayload):
     data = sanitize_payload(payload_dict(payload))
     with session_scope() as session:
+        auto_project = None
         parent_id = data.get("auto_project_id") or data.get("autoProjectId")
-        return r2_create(
-            session,
-            "auto_candidate_screen",
-            {"criteria": data, "candidates": [], "summary": "Automation candidate screening placeholder result."},
-            parent_type="auto_project_id" if parent_id is not None else None,
-            parent_id=parent_id,
-        )
+        if parent_id is not None:
+            auto_project = require_db_item(session, AutoProject, parent_id, "autoProjectId")
+        result = screen_auto_candidates_payload(session, payload=data, auto_project=auto_project)
+        if auto_project is not None:
+            session.flush()
+            r2_log(session, "auto_candidate", "screen", auto_project.id, {"total": result.get("total", 0)})
+        return result
 
 
 @router.get("/auto-projects/{autoProjectId}/candidates")
-def list_auto_candidates(autoProjectId: str):
+def list_auto_candidates(autoProjectId: str, recommendation: str | None = Query(None)):
     with session_scope() as session:
-        require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
-        return r2_page(session, "auto_candidate_screen", parent_id=autoProjectId)
+        project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
+        result = list_project_candidates(session, project)
+        if recommendation:
+            candidates = [
+                item
+                for item in result.get("candidates", [])
+                if isinstance(item, dict) and str(item.get("automation_recommendation")) == str(recommendation)
+            ]
+            result["candidates"] = candidates
+            result["total"] = len(candidates)
+        session.flush()
+        return result
+
+
+@router.post("/auto-projects/{autoProjectId}/candidates/selection")
+def select_auto_candidates(autoProjectId: str, payload: WritePayload):
+    data = sanitize_payload(payload_dict(payload))
+    with session_scope() as session:
+        project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
+        result = update_candidate_selection(session, project, data)
+        session.flush()
+        r2_log(session, "auto_candidate", "select", project.id, {"selection": result.get("selection")})
+        return result
 
 
 def _auto_framework_files(project: AutoProject) -> dict[str, str]:
-    framework = str(project.framework or "").lower()
-    language = str(project.language or "").lower()
-    if "playwright" in framework:
-        extension = "ts" if language in {"ts", "typescript"} else "js"
-        return {
-            "README.md": f"# {project.name}\n\nGenerated Playwright automation project.\n",
-            "package.json": json.dumps(
-                {
-                    "scripts": {"test": "playwright test"},
-                    "devDependencies": {"@playwright/test": "^1.44.0"},
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n",
-            f"tests/generated.spec.{extension}": _playwright_case_content(extension),
-            "playwright.config.js": "module.exports = { testDir: './tests', timeout: 30000 };\n",
-        }
+    if is_playwright_project(project):
+        return playwright_framework_files(project)
     return {"README.md": f"# {project.name}\n", "tests/test_generated.py": "def test_generated_placeholder():\n    assert True\n"}
 
 
 def _auto_case_file_payload(project: AutoProject) -> dict[str, Any]:
-    framework = str(project.framework or "").lower()
-    language = str(project.language or "").lower()
-    if "playwright" in framework:
-        extension = "ts" if language in {"ts", "typescript"} else "js"
-        return {
-            "file_name": f"generated.spec.{extension}",
-            "file_path": f"tests/generated.spec.{extension}",
-            "content": _playwright_case_content(extension),
-            "automation_dsl": {"runner": "playwright", "steps": [{"action": "page_goto"}, {"action": "expect_visible"}]},
-        }
-    return {
-        "file_name": "test_generated.py",
-        "file_path": "tests/test_generated.py",
-        "content": "def test_generated_placeholder():\n    assert True\n",
-        "automation_dsl": {"runner": "pytest", "steps": [{"action": "placeholder_assert"}]},
-    }
+    return fallback_case_file_payload(project)
 
 
 def _playwright_case_content(extension: str) -> str:
@@ -3073,22 +3082,127 @@ def generate_auto_framework(autoProjectId: str):
 
 
 @router.post("/auto-projects/{autoProjectId}/generate-cases")
-def generate_auto_cases(autoProjectId: str):
+def generate_auto_cases(autoProjectId: str, payload: WritePayload | None = None):
+    data = sanitize_payload(payload_dict(payload))
     with session_scope() as session:
         project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
-        payload = _auto_case_file_payload(project)
-        case_file = AutoCaseFile(
-            auto_project_id=project.id,
-            file_name=payload["file_name"],
-            file_path=payload["file_path"],
-            content=payload["content"],
-            case_count=1,
-            automation_dsl=payload["automation_dsl"],
-        )
-        session.add(case_file)
+        selected_candidates = selected_generation_candidates(session, project, data)
+        generated_payloads = build_case_file_payloads(session, project, selected_candidates) if selected_candidates is not None else [_auto_case_file_payload(project)]
+        case_files: list[AutoCaseFile] = []
+        for item in generated_payloads:
+            case_file = AutoCaseFile(
+                auto_project_id=project.id,
+                source_case_id=item.get("source_case_id"),
+                source_api_case_id=item.get("source_api_case_id"),
+                file_name=item["file_name"],
+                file_path=item["file_path"],
+                content=item["content"],
+                case_count=int(item.get("case_count") or 1),
+                automation_dsl=item.get("automation_dsl"),
+            )
+            session.add(case_file)
+            case_files.append(case_file)
         session.flush()
-        job = create_db_job(session, project.project_id, "generate_auto_cases", {"auto_project_id": project.id}, {"auto_case_file_ids": [case_file.id]})
-        return {"job": model_dict(job), "cases": [model_dict(case_file)]}
+        job = create_db_job(
+            session,
+            project.project_id,
+            "generate_auto_cases",
+            {"auto_project_id": project.id, **data},
+            {"auto_case_file_ids": [case_file.id for case_file in case_files]},
+        )
+        public_cases = [auto_file_public_dict(case_file) for case_file in case_files]
+        return {"job": model_dict(job), "cases": public_cases, "files": public_cases}
+
+
+@router.get("/auto-projects/{autoProjectId}/files")
+def list_auto_project_files(autoProjectId: str):
+    with session_scope() as session:
+        project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
+        files = list(
+            session.scalars(
+                select(AutoCaseFile)
+                .where(AutoCaseFile.auto_project_id == project.id, AutoCaseFile.is_deleted.is_(False))
+                .order_by(AutoCaseFile.id)
+            )
+        )
+        items = [auto_file_public_dict(item) for item in files]
+        return {"auto_project_id": project.id, "list": items, "items": items, "files": items, "total": len(items)}
+
+
+@router.post("/auto-projects/{autoProjectId}/files")
+def save_auto_project_file(autoProjectId: str, payload: WritePayload):
+    data = sanitize_payload(payload_dict(payload))
+    try:
+        with session_scope() as session:
+            project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
+            case_file_id = data.get("id") or data.get("case_file_id") or data.get("caseFileId")
+            if case_file_id is not None:
+                case_file = require_db_item(session, AutoCaseFile, case_file_id, "caseFileId")
+                if case_file.auto_project_id != project.id:
+                    raise HTTPException(status_code=404, detail=f"AutoCaseFile({case_file_id}) not found")
+                fields = build_case_file_patch_fields(case_file, data)
+                for key, value in fields.items():
+                    setattr(case_file, key, value)
+                session.flush()
+                r2_log(session, "auto_case_file", "update", case_file.id, {"auto_project_id": project.id, "file_path": case_file.file_path})
+                return {"created": False, "file": auto_file_public_dict(case_file), **auto_file_public_dict(case_file)}
+
+            fields = build_case_file_create_fields(project, data)
+            existing = session.scalar(
+                select(AutoCaseFile).where(
+                    AutoCaseFile.auto_project_id == project.id,
+                    AutoCaseFile.file_path == fields["file_path"],
+                    AutoCaseFile.is_deleted.is_(False),
+                )
+            )
+            if existing is not None:
+                for key, value in fields.items():
+                    if key != "auto_project_id":
+                        setattr(existing, key, value)
+                session.flush()
+                r2_log(session, "auto_case_file", "update", existing.id, {"auto_project_id": project.id, "file_path": existing.file_path})
+                return {"created": False, "file": auto_file_public_dict(existing), **auto_file_public_dict(existing)}
+
+            case_file = AutoCaseFile(**fields)
+            session.add(case_file)
+            session.flush()
+            r2_log(session, "auto_case_file", "create", case_file.id, {"auto_project_id": project.id, "file_path": case_file.file_path})
+            return {"created": True, "file": auto_file_public_dict(case_file), **auto_file_public_dict(case_file)}
+    except AutoCenterValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/auto-case-files/{caseFileId}")
+def get_auto_case_file(caseFileId: str):
+    with session_scope() as session:
+        case_file = require_db_item(session, AutoCaseFile, caseFileId, "caseFileId")
+        return auto_file_public_dict(case_file)
+
+
+@router.patch("/auto-case-files/{caseFileId}")
+def update_auto_case_file(caseFileId: str, payload: WritePayload):
+    data = sanitize_payload(payload_dict(payload))
+    try:
+        with session_scope() as session:
+            case_file = require_db_item(session, AutoCaseFile, caseFileId, "caseFileId")
+            fields = build_case_file_patch_fields(case_file, data)
+            for key, value in fields.items():
+                setattr(case_file, key, value)
+            session.flush()
+            r2_log(session, "auto_case_file", "update", case_file.id, {"file_path": case_file.file_path})
+            return auto_file_public_dict(case_file)
+    except AutoCenterValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/auto-case-files/{caseFileId}")
+def delete_auto_case_file(caseFileId: str):
+    with session_scope() as session:
+        case_file = require_db_item(session, AutoCaseFile, caseFileId, "caseFileId")
+        case_file.is_deleted = True
+        session.flush()
+        r2_log(session, "auto_case_file", "delete", case_file.id, {"auto_project_id": case_file.auto_project_id})
+        return {"deleted": True, "id": case_file.id}
 
 
 @router.post("/auto-projects/{autoProjectId}/execute")
@@ -3098,7 +3212,7 @@ def execute_auto_project(autoProjectId: str, payload: WritePayload | None = None
         project = require_db_item(session, AutoProject, autoProjectId, "autoProjectId")
         total_available = session.scalar(select(func.count()).select_from(AutoCaseFile).where(AutoCaseFile.auto_project_id == project.id, AutoCaseFile.is_deleted.is_(False))) or 0
         stmt = select(AutoCaseFile).where(AutoCaseFile.auto_project_id == project.id, AutoCaseFile.is_deleted.is_(False))
-        requested_file_ids = data.get("case_file_ids")
+        requested_file_ids = data.get("case_file_ids") if "case_file_ids" in data else data.get("caseFileIds")
         has_file_filter = isinstance(requested_file_ids, list)
         if has_file_filter:
             file_ids = [int(item) for item in requested_file_ids if str(item).isdigit()]
@@ -3118,6 +3232,15 @@ def execute_auto_project(autoProjectId: str, payload: WritePayload | None = None
             )
             session.add(execution)
             session.flush()
+            file_result = {
+                "execution_id": execution.id,
+                "status": execution.status,
+                "summary": execution.summary,
+                "return_code": (execution.artifacts or {}).get("return_code"),
+                "runner": (execution.artifacts or {}).get("runner"),
+            }
+            for file in files:
+                file.last_result = file_result
             r2_log(session, "auto_execution", "execute", execution.id, {"auto_project_id": project.id, "runner": {"mode": "placeholder"}})
             return model_dict(execution)
         if has_file_filter and total_available > 0 and not files:
@@ -3185,6 +3308,38 @@ def execute_auto_project(autoProjectId: str, payload: WritePayload | None = None
         session.flush()
         r2_log(session, "auto_execution", "execute", execution.id, {"auto_project_id": project.id})
         return model_dict(execution)
+
+
+@router.get("/auto-executions/{executionId}")
+def get_auto_execution(executionId: str):
+    with session_scope() as session:
+        execution = session.get(AutoExecution, to_int(executionId, "executionId"))
+        if execution is None:
+            raise HTTPException(status_code=404, detail=f"AutoExecution({executionId}) not found")
+        return auto_execution_detail(execution)
+
+
+@router.get("/auto-executions/{executionId}/artifacts")
+def list_auto_execution_artifacts(executionId: str):
+    with session_scope() as session:
+        execution = session.get(AutoExecution, to_int(executionId, "executionId"))
+        if execution is None:
+            raise HTTPException(status_code=404, detail=f"AutoExecution({executionId}) not found")
+        return auto_execution_artifacts_payload(execution)
+
+
+@router.get("/auto-executions/{executionId}/artifacts/preview")
+def preview_auto_execution_artifact_route(executionId: str, relativePath: str = Query(...)):
+    with session_scope() as session:
+        execution = session.get(AutoExecution, to_int(executionId, "executionId"))
+        if execution is None:
+            raise HTTPException(status_code=404, detail=f"AutoExecution({executionId}) not found")
+        try:
+            return preview_auto_execution_artifact(execution, relativePath)
+        except AutoCenterValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except AutoCenterNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/auto-executions/{executionId}/events")

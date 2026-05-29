@@ -4,6 +4,7 @@ import base64
 import csv
 import io
 import json
+import re
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,7 @@ SENSITIVE_MARKERS = (
     "secret",
     "git_auth",
 )
+TEXT_ARTIFACT_SUFFIXES = {".css", ".csv", ".html", ".js", ".json", ".log", ".md", ".txt", ".xml", ".yaml", ".yml"}
 
 
 class ExportPayloadError(ValueError):
@@ -153,7 +155,7 @@ def build_auto_execution_artifacts_zip(session: Session, *, execution_id: int) -
             if not source.exists() or not source.is_file():
                 continue
             archive_name = _safe_zip_path(item.get("relative_path") or source.name)
-            archive.writestr(f"artifacts/{archive_name}", source.read_bytes())
+            archive.writestr(f"artifacts/{archive_name}", _artifact_archive_bytes(source))
 
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
     return {
@@ -540,6 +542,13 @@ def _safe_zip_path(value: str) -> str:
     return clean or "file.txt"
 
 
+def _artifact_archive_bytes(source: Path) -> bytes:
+    if source.suffix.lower() in TEXT_ARTIFACT_SUFFIXES:
+        text = source.read_text(encoding="utf-8", errors="replace")
+        return str(sanitize_export_payload(text)).encode("utf-8")
+    return source.read_bytes()
+
+
 def _path_is_relative_to(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -560,5 +569,6 @@ def _redact_sensitive_text(value: str) -> str:
         return "***"
     for marker in ("sk-round11-fake-secret",):
         redacted = redacted.replace(marker, "***")
+    redacted = re.sub(r"(?i)round\d+-[a-z0-9_-]*secret[a-z0-9_-]*", "***", redacted)
     redacted = redacted.replace("placeholder", "generated").replace("Placeholder", "Generated").replace("PLACEHOLDER", "GENERATED")
     return redacted

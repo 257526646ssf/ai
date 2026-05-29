@@ -421,3 +421,19 @@
 - R26 名称：自动化中心增强。
 - 建议优先围绕候选筛选、在线文件编辑、代码保存、Playwright 模板增强、执行日志/截图/trace 展示、Artifacts 预览继续拆分 worker。
 - 继续保持本地优先、结构化失败、敏感信息脱敏和不静默新增生产依赖的约束。
+
+## R26 完成交接
+- R26 名称：自动化中心增强。
+- 后端完成候选筛选/选择、文件 CRUD、执行详情、artifact 列表与预览路由；`generate-cases` 支持候选选择；Playwright 模板增强；新增 `backend/aitest_platform/services/auto_center.py`；`backend/aitest_platform/services/exporting.py` 对文本类 artifact ZIP 内容脱敏。
+- 前端 `src/pages/Automation.jsx` 已新增候选筛选、case file 在线编辑/dirty/save/reset、Playwright 模板配置、按 `case_file_ids` 执行、执行详情日志/evidence、artifact preview。
+- R26 验收证据见 `docs/orchestration/ROUND26_REPORT.md`；定向测试 `backend/tests/test_round26_automation_center.py` 覆盖候选筛选/过滤、候选选择影响生成、Playwright 模板增强、在线文件查看/保存/非法路径、按文件执行与详情、artifact 列表/预览、artifact ZIP 回归安全。
+- 最终 QA 回填：`cd backend; python -m compileall aitest_platform` passed，exit code 0；R26 组合回归 `python -m pytest tests/test_round6_execution_runners.py tests/test_round8_artifacts.py tests/test_round11_exports.py tests/test_round13_frontend_integration.py tests/test_round25_api_testing_enhancement.py tests/test_round26_automation_center.py -q` passed，40 passed，仅 FastAPI deprecation warning；full backend `python -m pytest -q` passed，exit code 0，仅 FastAPI deprecation warning；`npm run build` passed，仅 Vite chunk >500k warning。
+- API smoke passed：候选筛选/过滤、文件保存、artifact preview 均返回合理结果。
+- 浏览器最终复验 passed：Automation 页面打开；console.error=0；pageerror=0；`/case-files` 请求数 0；`/case-files` 404 为 0；`/auto-projects/693/files?page=1&pageSize=200` 返回 200；R26 DOM 可见关键词 8/8：候选筛选、在线文件、保存、Playwright、trace、Artifacts、预览、执行日志。
+- 进程清理：8000/3000 已停止并复查无监听。
+- R26 残余风险：Vite chunk warning；Playwright 真实执行依赖本机环境；trace/zip 预览不展开执行；浏览器深层写操作主要由 API smoke 和后端契约测试覆盖。
+
+## R27 预备交接
+- 下一步进入 R27：性能测试增强。
+- 建议优先围绕中止执行接口、阈值判定、历史对比、JMeter 模板参数编辑、性能趋势聚合、报告风险建议继续拆分 worker。
+- 继续保持本地优先、结构化失败、敏感信息脱敏和不静默新增生产依赖的约束。

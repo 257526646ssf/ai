@@ -15,15 +15,13 @@ import {
   Folder,
   FileText,
   Terminal,
-  Check,
   ExternalLink,
   XCircle,
-  AlertTriangle,
   Activity
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, downloadBase64File, formatDateTime, pickList } from '../lib/api';
+import { apiGet, apiPost, apiRequest, downloadBase64File, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
 const showToast = (message, type = 'success') => {
@@ -40,23 +38,210 @@ const frameworkName = (framework = '', language = '') => {
 };
 
 const mapBackendAutoProject = (project) => {
-  const extra = project.extra_config || project.extraConfig || {};
+  const item = project && typeof project === 'object' && !Array.isArray(project) ? project : {};
+  const extra = item.extra_config || item.extraConfig || {};
   const caseCount = Number(extra.case_count || extra.caseCount || 0);
-  const buildCount = Number(extra.build_count || extra.buildCount || project.id || 0);
+  const buildCount = Number(extra.build_count || extra.buildCount || item.id || 0);
   const successRate = extra.success_rate || extra.successRate || (caseCount ? '100.0%' : '待执行');
   return {
-    backendId: project.id,
-    name: project.name || 'Automation Project',
-    desc: extra.description || project.type || '后端自动化项目',
-    stack: frameworkName(project.framework, project.language),
-    framework: project.framework || 'pytest',
-    language: project.language || 'python',
+    backendId: item.id,
+    name: item.name || 'Automation Project',
+    desc: extra.description || item.type || '后端自动化项目',
+    stack: frameworkName(item.framework, item.language),
+    framework: item.framework || 'pytest',
+    language: item.language || 'python',
     cases: caseCount,
     rate: successRate,
     build: buildCount,
-    time: formatDateTime(project.updated_at || project.created_at),
+    time: formatDateTime(item.updated_at || item.created_at),
     owner: extra.owner || '系统',
-    raw: project
+    raw: item
+  };
+};
+
+const DEFAULT_PLAYWRIGHT_OPTIONS = {
+  baseURL: 'http://localhost:3000',
+  headless: true,
+  browser: 'chromium',
+  retries: 1,
+  workers: 1,
+  trace: 'on-first-retry',
+  video: 'retain-on-failure',
+  screenshot: 'only-on-failure',
+  reporter: 'html,list'
+};
+
+const R26_VISIBLE_KEYWORDS = ['候选筛选', '在线文件', '保存', 'Playwright', 'trace', 'Artifacts', '预览', '执行日志'];
+
+const asObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
+
+const asArray = (value) => {
+  if (Array.isArray(value)) return value;
+  const picked = pickList(value);
+  if (picked.length) return picked;
+  const obj = asObject(value);
+  if (Array.isArray(obj.data)) return obj.data;
+  if (Array.isArray(obj.files)) return obj.files;
+  if (Array.isArray(obj.case_files)) return obj.case_files;
+  if (Array.isArray(obj.caseFiles)) return obj.caseFiles;
+  if (Array.isArray(obj.evidence)) return obj.evidence;
+  return [];
+};
+
+const textOf = (value, fallback = '') => {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return fallback;
+};
+
+const numberOf = (value, fallback = 0) => {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : fallback;
+};
+
+const boolOf = (value, fallback = false) => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const normalized = String(value ?? '').toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+};
+
+const lastPathSegment = (path) => {
+  const parts = String(path || '').split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || String(path || 'untitled');
+};
+
+const normalizeCandidate = (item, index = 0) => {
+  const obj = asObject(item);
+  const rawId = obj.id ?? obj.candidate_id ?? obj.candidateId ?? obj.case_id ?? obj.caseId ?? obj.requirement_id ?? obj.requirementId ?? obj.key;
+  const score = numberOf(obj.score ?? obj.rank_score ?? obj.match_score ?? obj.confidence, 0);
+  const recommended = boolOf(obj.recommended ?? obj.is_recommended ?? obj.isRecommended, score >= 0.75);
+  return {
+    id: String(rawId ?? `candidate-${index}`),
+    title: textOf(obj.title ?? obj.name ?? obj.case_name ?? obj.caseName ?? obj.requirement_title, `候选用例 #${index + 1}`),
+    module: textOf(obj.module ?? obj.feature ?? obj.group ?? obj.category, '未分组'),
+    priority: textOf(obj.priority ?? obj.level ?? obj.severity, 'P2'),
+    score,
+    recommended,
+    reason: textOf(obj.reason ?? obj.recommend_reason ?? obj.description ?? obj.summary, '后端未返回推荐说明'),
+    source: textOf(obj.source ?? obj.requirement_code ?? obj.requirementCode ?? obj.path, '--'),
+    raw: obj
+  };
+};
+
+const normalizeCandidates = (payload) => asArray(payload).map(normalizeCandidate);
+
+const normalizeCaseFile = (item, index = 0) => {
+  const obj = typeof item === 'string' ? { path: item, content: '' } : asObject(item);
+  const path = textOf(obj.path ?? obj.relative_path ?? obj.relativePath ?? obj.file_path ?? obj.filePath ?? obj.name, `case-file-${index + 1}.spec.js`);
+  const id = obj.id ?? obj.case_file_id ?? obj.caseFileId ?? obj.file_id ?? obj.fileId ?? obj.uuid ?? path;
+  const content = obj.content ?? obj.text ?? obj.body ?? obj.source ?? obj.code ?? '';
+  return {
+    id: String(id),
+    path,
+    name: textOf(obj.name, lastPathSegment(path)),
+    content: textOf(content, ''),
+    size: numberOf(obj.size ?? obj.bytes, 0),
+    mimeType: textOf(obj.mime_type ?? obj.mimeType ?? obj.content_type ?? obj.contentType, ''),
+    updatedAt: formatDateTime(obj.updated_at ?? obj.updatedAt ?? obj.modified_at ?? obj.modifiedAt),
+    status: textOf(obj.status ?? obj.result, 'ready'),
+    raw: obj
+  };
+};
+
+const normalizeCaseFiles = (payload) => {
+  const obj = asObject(payload);
+  const list = asArray(payload).length ? asArray(payload) : asArray(obj.files ?? obj.case_files ?? obj.caseFiles);
+  return list.map(normalizeCaseFile);
+};
+
+const normalizeSummary = (value) => {
+  const obj = asObject(value);
+  return {
+    total: numberOf(obj.total ?? obj.count ?? obj.tests ?? obj.collected, 0),
+    passed: numberOf(obj.passed ?? obj.pass ?? obj.success, 0),
+    failed: numberOf(obj.failed ?? obj.failures ?? obj.failure, 0),
+    errors: numberOf(obj.errors ?? obj.error, 0),
+    skipped: numberOf(obj.skipped ?? obj.skip, 0)
+  };
+};
+
+const splitLogLines = (value) => {
+  if (Array.isArray(value)) return value.map(line => textOf(line)).filter(Boolean);
+  return textOf(value).split('\n').map(line => line.trimEnd()).filter(Boolean);
+};
+
+const normalizeArtifact = (item, index = 0, group = '') => {
+  const obj = typeof item === 'string' ? { path: item } : asObject(item);
+  const path = textOf(obj.relative_path ?? obj.relativePath ?? obj.path ?? obj.file_path ?? obj.filePath ?? obj.source ?? obj.url, '');
+  const kind = textOf(obj.kind ?? obj.type ?? group ?? obj.category, lastPathSegment(path).split('.').pop() || 'artifact');
+  return {
+    id: String(obj.id ?? obj.artifact_id ?? obj.artifactId ?? path ?? `artifact-${index}`),
+    kind,
+    path,
+    name: textOf(obj.name ?? obj.filename ?? obj.file_name, lastPathSegment(path) || `${kind}-${index + 1}`),
+    mimeType: textOf(obj.mime_type ?? obj.mimeType ?? obj.content_type ?? obj.contentType, ''),
+    size: numberOf(obj.size ?? obj.bytes, 0),
+    previewable: obj.previewable !== false,
+    raw: obj
+  };
+};
+
+const normalizeArtifacts = (payload) => {
+  if (Array.isArray(payload)) return payload.map((item, index) => normalizeArtifact(item, index));
+  const obj = asObject(payload);
+  const groups = ['evidence', 'screenshots', 'traces', 'logs', 'html', 'junit', 'files', 'artifacts'];
+  const items = [];
+  groups.forEach((group) => {
+    asArray(obj[group]).forEach((item) => items.push({ item, group }));
+  });
+  return items.map(({ item, group }, index) => normalizeArtifact(item, index, group));
+};
+
+const normalizeExecution = (payload, fallback = {}) => {
+  const obj = asObject(payload);
+  const source = asObject(obj.execution || obj.detail || obj.result || obj);
+  const artifactsSource = source.artifacts ?? source.artifact_list ?? source.artifactList ?? source.evidence ?? obj.artifacts ?? obj.evidence;
+  const logSource = source.log_excerpt ?? source.logExcerpt ?? source.log ?? source.logs ?? source.stdout ?? source.stderr ?? obj.log;
+  return {
+    ...fallback,
+    ...source,
+    id: source.id ?? source.execution_id ?? source.executionId ?? fallback.id,
+    status: textOf(source.status ?? fallback.status, 'unknown'),
+    duration_ms: numberOf(source.duration_ms ?? source.durationMs ?? source.duration ?? fallback.duration_ms, 0),
+    summary: normalizeSummary(source.summary ?? source.stats ?? source.result_summary ?? fallback.summary),
+    logLines: splitLogLines(logSource).length ? splitLogLines(logSource) : splitLogLines(fallback.logLines),
+    artifactsList: normalizeArtifacts(artifactsSource),
+    artifacts: artifactsSource ?? fallback.artifacts
+  };
+};
+
+const normalizeGenerationSummary = (payload) => {
+  const obj = asObject(payload);
+  const files = asArray(obj.files ?? obj.generated_files ?? obj.generatedFiles ?? obj.case_files ?? obj.caseFiles).map(normalizeCaseFile);
+  const config = asObject(obj.config ?? obj.playwright_config ?? obj.playwrightConfig ?? obj.template_options ?? obj.templateOptions);
+  return {
+    message: textOf(obj.message ?? obj.summary ?? obj.reason, '后端已返回生成结果'),
+    files,
+    config,
+    raw: obj
+  };
+};
+
+const normalizePreview = (payload, artifact) => {
+  const obj = typeof payload === 'string' ? { content: payload } : asObject(payload);
+  return {
+    artifact,
+    kind: textOf(obj.kind ?? obj.type ?? artifact?.kind, ''),
+    mimeType: textOf(obj.mime_type ?? obj.mimeType ?? artifact?.mimeType, ''),
+    filename: textOf(obj.filename ?? obj.name ?? artifact?.name, artifact?.name || 'artifact'),
+    content: textOf(obj.redacted_content ?? obj.redactedContent ?? obj.content ?? obj.text ?? obj.preview, ''),
+    contentBase64: textOf(obj.content_base64 ?? obj.contentBase64 ?? obj.base64 ?? obj.image_base64 ?? obj.imageBase64, ''),
+    downloadUrl: textOf(obj.download_url ?? obj.downloadUrl ?? obj.url, ''),
+    raw: obj
   };
 };
 
@@ -176,10 +361,356 @@ export default function Automation() {
 
   // Wizard 表单状态
   const [projName, setProjName] = useState('智能客服 E2E 自动化');
+  const [projDesc, setProjDesc] = useState('由前端自动化中心创建');
   const [projStack, setProjStack] = useState('playwright');
   const [projLang, setProjLang] = useState('js');
+  const [playwrightOptions, setPlaywrightOptions] = useState(DEFAULT_PLAYWRIGHT_OPTIONS);
+  const [generationSummary, setGenerationSummary] = useState(null);
 
   const [selectedFile, setSelectedFile] = useState('tests/auth/login.spec.js');
+  const [caseFiles, setCaseFiles] = useState([]);
+  const [caseFilesLoading, setCaseFilesLoading] = useState(false);
+  const [caseFilesError, setCaseFilesError] = useState('');
+  const [selectedFileMeta, setSelectedFileMeta] = useState(null);
+  const [filePathDraft, setFilePathDraft] = useState('');
+  const [fileContentDraft, setFileContentDraft] = useState('');
+  const [fileOriginal, setFileOriginal] = useState({ path: '', content: '' });
+  const [fileLoading, setFileLoading] = useState(false);
+  const [isSavingFile, setIsSavingFile] = useState(false);
+  const [fileSaveError, setFileSaveError] = useState('');
+  const [zipFreshHint, setZipFreshHint] = useState('');
+  const [selectedCaseFileIds, setSelectedCaseFileIds] = useState([]);
+  const [candidateFilters, setCandidateFilters] = useState({ keyword: '', module: '', priority: '' });
+  const [recommendedOnly, setRecommendedOnly] = useState(true);
+  const [candidates, setCandidates] = useState([]);
+  const [candidateLoading, setCandidateLoading] = useState(false);
+  const [candidateError, setCandidateError] = useState('');
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState([]);
+  const [excludedCandidateIds, setExcludedCandidateIds] = useState([]);
+  const [isGeneratingSelectedCases, setIsGeneratingSelectedCases] = useState(false);
+  const [artifactPreview, setArtifactPreview] = useState(null);
+  const [artifactPreviewLoading, setArtifactPreviewLoading] = useState(false);
+  const [artifactPreviewError, setArtifactPreviewError] = useState('');
+
+  const selectedCandidateSet = React.useMemo(() => new Set(selectedCandidateIds.map(String)), [selectedCandidateIds]);
+  const excludedCandidateSet = React.useMemo(() => new Set(excludedCandidateIds.map(String)), [excludedCandidateIds]);
+  const selectedCaseFileSet = React.useMemo(() => new Set(selectedCaseFileIds.map(String)), [selectedCaseFileIds]);
+  const visibleCandidates = React.useMemo(() => {
+    const source = Array.isArray(candidates) ? candidates : [];
+    return source.filter((candidate) => {
+      if (recommendedOnly && !candidate.recommended) return false;
+      const keyword = candidateFilters.keyword.trim().toLowerCase();
+      if (!keyword) return true;
+      return [candidate.title, candidate.module, candidate.priority, candidate.reason, candidate.source]
+        .some((value) => String(value || '').toLowerCase().includes(keyword));
+    });
+  }, [candidateFilters.keyword, candidates, recommendedOnly]);
+  const selectedCandidatesForGenerate = React.useMemo(
+    () => selectedCandidateIds.map(String).filter((id) => !excludedCandidateSet.has(id)),
+    [excludedCandidateSet, selectedCandidateIds]
+  );
+  const isFileDirty = Boolean(selectedFileMeta) && (filePathDraft !== fileOriginal.path || fileContentDraft !== fileOriginal.content);
+
+  const updatePlaywrightOption = (key, value) => {
+    setPlaywrightOptions(prev => ({ ...prev, [key]: value }));
+  };
+
+  const buildTemplatePayload = React.useCallback(() => {
+    const options = {
+      ...playwrightOptions,
+      retries: Math.max(0, numberOf(playwrightOptions.retries, 0)),
+      workers: Math.max(1, numberOf(playwrightOptions.workers, 1)),
+      headless: boolOf(playwrightOptions.headless, true)
+    };
+    return {
+      template_options: { playwright: options },
+      playwright_options: options,
+      framework_options: { playwright: options }
+    };
+  }, [playwrightOptions]);
+
+  const rememberGenerationSummary = (stage, payload) => {
+    setGenerationSummary(prev => ({
+      ...(prev || {}),
+      [stage]: normalizeGenerationSummary(payload)
+    }));
+  };
+
+  const resetFileEditor = React.useCallback(() => {
+    setSelectedFileMeta(null);
+    setSelectedFile('');
+    setFilePathDraft('');
+    setFileContentDraft('');
+    setFileOriginal({ path: '', content: '' });
+    setFileSaveError('');
+  }, []);
+
+  const canTryNextEndpoint = (error) => [404, 405].includes(Number(error?.status));
+
+  const runApiFallbacks = async (calls) => {
+    let lastError;
+    for (const call of calls) {
+      try {
+        return await call();
+      } catch (error) {
+        lastError = error;
+        if (!canTryNextEndpoint(error)) throw error;
+      }
+    }
+    throw lastError || new Error('后端接口未返回有效响应');
+  };
+
+  const loadCaseFileContent = React.useCallback(async (file, projectIdArg = activeProj?.backendId) => {
+    const normalized = normalizeCaseFile(file);
+    if (!normalized.id) return;
+    const hasInlineContent = ['content', 'text', 'body', 'source', 'code'].some(key => Object.prototype.hasOwnProperty.call(normalized.raw || {}, key));
+    setFileLoading(true);
+    setFileSaveError('');
+    try {
+      let detail = normalized.raw;
+      if (!hasInlineContent && projectIdArg) {
+        const encodedId = encodeURIComponent(normalized.id);
+        detail = await runApiFallbacks([
+          () => apiGet(`/auto-case-files/${encodedId}`),
+          () => apiGet(`/auto-projects/${projectIdArg}/case-files/${encodedId}`),
+          () => apiGet(`/auto-projects/${projectIdArg}/case-files/content`, { params: { path: normalized.path } })
+        ]);
+      }
+      const detailObject = typeof detail === 'string' ? { content: detail } : asObject(detail);
+      const merged = normalizeCaseFile({
+        ...normalized.raw,
+        ...detailObject,
+        id: detailObject.id ?? detailObject.file_id ?? detailObject.case_file_id ?? normalized.id,
+        path: detailObject.path ?? detailObject.relative_path ?? detailObject.relativePath ?? normalized.path,
+        content: detailObject.content ?? detailObject.text ?? detailObject.body ?? detailObject.source ?? detailObject.code ?? normalized.content
+      });
+      setSelectedFileMeta(merged);
+      setSelectedFile(merged.path);
+      setFilePathDraft(merged.path);
+      setFileContentDraft(merged.content);
+      setFileOriginal({ path: merged.path, content: merged.content });
+    } catch (error) {
+      setFileSaveError(`文件内容加载失败：${error.message || error}`);
+      showToast(`文件内容加载失败：${error.message || error}`, 'error');
+    } finally {
+      setFileLoading(false);
+    }
+  }, [activeProj?.backendId]);
+
+  const loadCaseFiles = React.useCallback(async (projectIdArg = activeProj?.backendId, { selectFirst = false } = {}) => {
+    if (!projectIdArg) {
+      setCaseFiles([]);
+      setCaseFilesError('');
+      setSelectedCaseFileIds([]);
+      resetFileEditor();
+      return;
+    }
+    setCaseFilesLoading(true);
+    setCaseFilesError('');
+    try {
+      const payload = await runApiFallbacks([
+        () => apiGet(`/auto-projects/${projectIdArg}/files`, { params: { page: 1, pageSize: 200 } }),
+        () => apiGet(`/auto-projects/${projectIdArg}/case-files`, { params: { page: 1, pageSize: 200 } })
+      ]);
+      const files = normalizeCaseFiles(payload);
+      setCaseFiles(files);
+      setSelectedCaseFileIds(prev => prev.map(String).filter(id => files.some(file => String(file.id) === id)));
+      const stillSelected = files.find(file => String(file.id) === String(selectedFileMeta?.id));
+      if ((selectFirst || !stillSelected) && files[0]) {
+        await loadCaseFileContent(files[0], projectIdArg);
+      }
+      if (!files.length) resetFileEditor();
+    } catch (error) {
+      setCaseFiles([]);
+      setCaseFilesError(error.message || String(error));
+      resetFileEditor();
+    } finally {
+      setCaseFilesLoading(false);
+    }
+  }, [activeProj?.backendId, loadCaseFileContent, resetFileEditor, selectedFileMeta?.id]);
+
+  const loadProjectCandidates = React.useCallback(async (projectIdArg = activeProj?.backendId) => {
+    if (!projectIdArg) {
+      setCandidates([]);
+      setCandidateError('');
+      return;
+    }
+    setCandidateLoading(true);
+    setCandidateError('');
+    try {
+      const payload = await apiGet(`/auto-projects/${projectIdArg}/candidates`, { params: { page: 1, pageSize: 100 } });
+      const nextCandidates = normalizeCandidates(payload);
+      setCandidates(nextCandidates);
+      setSelectedCandidateIds(prev => prev.map(String).filter(id => nextCandidates.some(candidate => candidate.id === id)));
+      setExcludedCandidateIds(prev => prev.map(String).filter(id => nextCandidates.some(candidate => candidate.id === id)));
+    } catch (error) {
+      setCandidateError(error.message || String(error));
+      setCandidates([]);
+    } finally {
+      setCandidateLoading(false);
+    }
+  }, [activeProj?.backendId]);
+
+  React.useEffect(() => {
+    setZipFreshHint('');
+    setGenerationSummary(null);
+    setArtifactPreview(null);
+    setArtifactPreviewError('');
+    if (activeProj?.backendId) {
+      loadCaseFiles(activeProj.backendId, { selectFirst: true });
+      loadProjectCandidates(activeProj.backendId);
+    } else {
+      setCaseFiles([]);
+      setCandidates([]);
+      setSelectedCaseFileIds([]);
+      setSelectedCandidateIds([]);
+      setExcludedCandidateIds([]);
+      resetFileEditor();
+    }
+  }, [activeProj?.backendId, loadCaseFiles, loadProjectCandidates, resetFileEditor]);
+
+  const handleResetFileDraft = () => {
+    setFilePathDraft(fileOriginal.path);
+    setFileContentDraft(fileOriginal.content);
+    setFileSaveError('');
+  };
+
+  const handleSaveFile = async () => {
+    if (!activeProj?.backendId || !selectedFileMeta?.id) {
+      showToast('请先选择一个后端自动化项目和 case file。', 'info');
+      return;
+    }
+    const nextPath = filePathDraft.trim();
+    if (!nextPath) {
+      setFileSaveError('文件路径不能为空。');
+      return;
+    }
+    setIsSavingFile(true);
+    setFileSaveError('');
+    try {
+      const encodedId = encodeURIComponent(selectedFileMeta.id);
+      const payload = {
+        id: selectedFileMeta.id,
+        path: nextPath,
+        relative_path: nextPath,
+        content: fileContentDraft
+      };
+      const saved = await runApiFallbacks([
+        () => apiRequest(`/auto-case-files/${encodedId}`, { method: 'PATCH', body: payload, timeoutMs: 12000 }),
+        () => apiRequest(`/auto-case-files/${encodedId}`, { method: 'PUT', body: payload, timeoutMs: 12000 }),
+        () => apiPost(`/auto-case-files/${encodedId}/save`, payload, { timeoutMs: 12000 }),
+        () => apiPost(`/auto-projects/${activeProj.backendId}/case-files/${encodedId}/save`, payload, { timeoutMs: 12000 }),
+        () => apiRequest(`/auto-projects/${activeProj.backendId}/case-files/${encodedId}`, { method: 'PUT', body: payload, timeoutMs: 12000 })
+      ]);
+      const savedObject = typeof saved === 'string' ? { content: saved } : asObject(saved);
+      const merged = normalizeCaseFile({
+        ...selectedFileMeta.raw,
+        ...savedObject,
+        id: savedObject.id ?? selectedFileMeta.id,
+        path: savedObject.path ?? savedObject.relative_path ?? savedObject.relativePath ?? nextPath,
+        content: savedObject.content ?? savedObject.text ?? savedObject.body ?? fileContentDraft
+      });
+      setSelectedFileMeta(merged);
+      setSelectedFile(merged.path);
+      setFilePathDraft(merged.path);
+      setFileContentDraft(merged.content);
+      setFileOriginal({ path: merged.path, content: merged.content });
+      setZipFreshHint('已保存，刷新后的工程 ZIP 将包含最新 case file 内容。');
+      await loadCaseFiles(activeProj.backendId);
+      showToast('case file 已保存，工程 ZIP 将包含最新内容。');
+    } catch (error) {
+      setFileSaveError(error.message || String(error));
+      showToast(`case file 保存失败：${error.message || error}`, 'error');
+    } finally {
+      setIsSavingFile(false);
+    }
+  };
+
+  const toggleCaseFileSelection = (fileId) => {
+    const id = String(fileId);
+    setSelectedCaseFileIds(prev => (
+      prev.map(String).includes(id)
+        ? prev.map(String).filter(item => item !== id)
+        : [...prev.map(String), id]
+    ));
+  };
+
+  const handleScreenCandidates = async () => {
+    if (!activeProj?.backendId) {
+      showToast('请先选择或创建一个后端自动化项目。', 'info');
+      return;
+    }
+    setCandidateLoading(true);
+    setCandidateError('');
+    try {
+      const payload = await apiPost('/auto-candidates/screen', {
+        project_id: projectContext?.id,
+        auto_project_id: activeProj.backendId,
+        condition: candidateFilters.keyword,
+        filters: {
+          keyword: candidateFilters.keyword,
+          module: candidateFilters.module,
+          priority: candidateFilters.priority,
+          recommended_only: recommendedOnly
+        }
+      }, { timeoutMs: 15000 });
+      const screened = normalizeCandidates(payload);
+      setCandidates(screened);
+      setSelectedCandidateIds(screened.filter(item => item.recommended).map(item => item.id));
+      setExcludedCandidateIds([]);
+      showToast(`候选筛选完成，返回 ${screened.length} 条候选。`, screened.length ? 'success' : 'info');
+    } catch (error) {
+      setCandidateError(error.message || String(error));
+      showToast(`候选筛选失败：${error.message || error}`, 'error');
+    } finally {
+      setCandidateLoading(false);
+    }
+  };
+
+  const toggleCandidateSelection = (candidateId) => {
+    const id = String(candidateId);
+    setSelectedCandidateIds(prev => {
+      const values = prev.map(String);
+      return values.includes(id) ? values.filter(item => item !== id) : [...values, id];
+    });
+    setExcludedCandidateIds(prev => prev.map(String).filter(item => item !== id));
+  };
+
+  const toggleCandidateExcluded = (candidateId) => {
+    const id = String(candidateId);
+    setExcludedCandidateIds(prev => {
+      const values = prev.map(String);
+      return values.includes(id) ? values.filter(item => item !== id) : [...values, id];
+    });
+    setSelectedCandidateIds(prev => prev.map(String).filter(item => item !== id));
+  };
+
+  const handleGenerateSelectedCases = async () => {
+    if (!activeProj?.backendId) {
+      showToast('请先选择或创建一个后端自动化项目。', 'info');
+      return;
+    }
+    if (!selectedCandidatesForGenerate.length) {
+      showToast('请至少勾选一个未排除的候选用例。', 'info');
+      return;
+    }
+    setIsGeneratingSelectedCases(true);
+    try {
+      const payload = await apiPost(`/auto-projects/${activeProj.backendId}/selection/generate-cases`, {
+        candidate_ids: selectedCandidatesForGenerate,
+        excluded_candidate_ids: excludedCandidateIds,
+        ...buildTemplatePayload()
+      }, { timeoutMs: 20000 });
+      rememberGenerationSummary('cases', payload);
+      await loadCaseFiles(activeProj.backendId, { selectFirst: true });
+      await loadAutomationData({ silent: true });
+      showToast(`已按所选候选生成 ${selectedCandidatesForGenerate.length} 条自动化用例。`);
+    } catch (error) {
+      showToast(`生成所选用例失败：${error.message || error}`, 'error');
+    } finally {
+      setIsGeneratingSelectedCases(false);
+    }
+  };
 
   const createAutoProjectFromForm = async (source = {}) => {
     if (!projectContext?.id) {
@@ -191,11 +722,12 @@ export default function Automation() {
       language: source.language || projLang || 'js',
       framework: source.framework || projStack || 'playwright',
       extra_config: {
-        description: source.desc || '由前端自动化中心创建',
+        description: source.desc || projDesc || '由前端自动化中心创建',
         owner: '系统',
         case_count: 0,
         build_count: 0,
-        success_rate: '待执行'
+        success_rate: '待执行',
+        ...buildTemplatePayload()
       }
     });
   };
@@ -211,18 +743,41 @@ export default function Automation() {
     return mapBackendAutoProject(created);
   };
 
+  const loadExecutionDetail = React.useCallback(async (executionId, { silent = false } = {}) => {
+    if (!executionId) return null;
+    try {
+      const payload = await apiGet(`/auto-executions/${executionId}`, { timeoutMs: 12000 });
+      const detail = normalizeExecution(payload, { id: executionId });
+      setAutoExecution(detail);
+      return detail;
+    } catch (error) {
+      if (!silent) showToast(`执行详情加载失败：${error.message || error}`, 'error');
+      return null;
+    }
+  }, []);
+
   const handleRunAutomation = async (project = activeProj) => {
     if (isRunningAutomation) return;
     setIsRunningAutomation(true);
     try {
       const target = await ensureBackendAutoProject(project);
+      const isRunningActiveProject = String(target.backendId || '') === String(activeProj?.backendId || '');
+      const runCaseFileIds = isRunningActiveProject ? selectedCaseFileIds.map(String) : [];
+      const shouldGenerateBeforeRun = !isRunningActiveProject || !caseFiles.length;
       setCliLogs([
-        `[RUN] POST /auto-projects/${target.backendId}/generate-framework`,
-        `[RUN] POST /auto-projects/${target.backendId}/generate-cases`,
+        ...(shouldGenerateBeforeRun ? [
+          `[RUN] POST /auto-projects/${target.backendId}/generate-framework`,
+          `[RUN] POST /auto-projects/${target.backendId}/generate-cases`
+        ] : [`[RUN] using saved case files (${runCaseFileIds.length || 'default'} selected)`]),
         `[RUN] POST /auto-projects/${target.backendId}/execute`
       ]);
-      await apiPost(`/auto-projects/${target.backendId}/generate-framework`, {});
-      await apiPost(`/auto-projects/${target.backendId}/generate-cases`, {});
+      if (shouldGenerateBeforeRun) {
+        const frameworkResult = await apiPost(`/auto-projects/${target.backendId}/generate-framework`, buildTemplatePayload(), { timeoutMs: 20000 });
+        rememberGenerationSummary('framework', frameworkResult);
+        const caseResult = await apiPost(`/auto-projects/${target.backendId}/generate-cases`, buildTemplatePayload(), { timeoutMs: 20000 });
+        rememberGenerationSummary('cases', caseResult);
+        await loadCaseFiles(target.backendId, { selectFirst: true });
+      }
       const requestedMode = autoRunnerMode === 'playwright' && !String(target.stack || '').toLowerCase().includes('playwright')
         ? 'auto'
         : autoRunnerMode;
@@ -231,9 +786,17 @@ export default function Automation() {
         showToast('Playwright runner 依赖未就绪：未检测到 Node.js/npx，请先安装依赖或切换为占位 runner。', 'error');
         return;
       }
-      const execution = await apiPost(`/auto-projects/${target.backendId}/execute`, { mode: requestedMode, timeout_ms: 10000 });
-      setAutoExecution(execution);
+      const execution = await apiPost(`/auto-projects/${target.backendId}/execute`, {
+        mode: requestedMode,
+        timeout_ms: 10000,
+        case_file_ids: runCaseFileIds.length ? runCaseFileIds : undefined,
+        ...buildTemplatePayload()
+      }, { timeoutMs: 20000 });
+      const normalizedExecution = normalizeExecution(execution);
+      setAutoExecution(normalizedExecution);
+      if (normalizedExecution.id) await loadExecutionDetail(normalizedExecution.id, { silent: true });
       setViewMode('run-result');
+      await loadCaseFiles(target.backendId);
       await loadAutomationData({ silent: true });
       showToast(`自动化项目「${target.name}」已完成后端执行。`);
     } catch (error) {
@@ -249,9 +812,12 @@ export default function Automation() {
     setIsCreatingProject(true);
     try {
       const created = await createAutoProjectFromForm();
-      await apiPost(`/auto-projects/${created.id}/generate-framework`, {});
-      await apiPost(`/auto-projects/${created.id}/generate-cases`, {});
+      const frameworkResult = await apiPost(`/auto-projects/${created.id}/generate-framework`, buildTemplatePayload(), { timeoutMs: 20000 });
+      rememberGenerationSummary('framework', frameworkResult);
+      const caseResult = await apiPost(`/auto-projects/${created.id}/generate-cases`, buildTemplatePayload(), { timeoutMs: 20000 });
+      rememberGenerationSummary('cases', caseResult);
       await loadAutomationData({ silent: true });
+      await loadCaseFiles(created.id, { selectFirst: true });
       setViewMode('project-detail');
       setSelectedProjIdx(0);
       showToast(`自动化项目「${created.name}」已创建并生成初始脚手架。`);
@@ -314,26 +880,265 @@ export default function Automation() {
     }
   };
 
-  const fileTree = [
-    { name: 'tests/', isFolder: true, children: [
-      { name: 'auth/', isFolder: true, children: [
-        { name: 'login.spec.js', isFolder: false, status: 'pass' },
-        { name: 'register.spec.js', isFolder: false, status: 'pass' }
-      ]},
-      { name: 'checkout/', isFolder: true, children: [
-        { name: 'cart.spec.js', isFolder: false, status: 'fail' },
-        { name: 'payment.spec.js', isFolder: false, status: 'pass' }
-      ]},
-      { name: 'profile.spec.js', isFolder: false, status: 'pass' }
-    ]}
-  ];
+  const handlePreviewArtifact = async (artifact) => {
+    const executionId = autoExecution?.id;
+    if (!executionId) {
+      showToast('缺少 execution id，无法预览 artifact。', 'error');
+      return;
+    }
+    setArtifactPreviewLoading(true);
+    setArtifactPreviewError('');
+    setArtifactPreview(null);
+    try {
+      const payload = await apiGet(`/auto-executions/${executionId}/artifacts/preview`, {
+        params: {
+          artifact_id: artifact.id,
+          path: artifact.path,
+          kind: artifact.kind
+        },
+        timeoutMs: 12000
+      });
+      setArtifactPreview(normalizePreview(payload, artifact));
+    } catch (error) {
+      setArtifactPreviewError(error.message || String(error));
+      showToast(`Artifact 预览失败：${error.message || error}`, 'error');
+    } finally {
+      setArtifactPreviewLoading(false);
+    }
+  };
 
-  const buildHistory = [
-    { id: 'Build #84', time: '今天 10:25', trigger: 'Git Push', status: '失败', statusColor: 'text-red-500 bg-red-50 border-red-100', duration: '1m 24s' },
-    { id: 'Build #83', time: '昨天 18:40', trigger: '定时任务', status: '成功', statusColor: 'text-emerald-500 bg-emerald-50 border-emerald-100', duration: '1m 18s' },
-    { id: 'Build #82', time: '2025-05-18 10:15', trigger: '手动触发', status: '成功', statusColor: 'text-emerald-500 bg-emerald-50 border-emerald-100', duration: '1m 20s' },
-    { id: 'Build #81', time: '2025-05-17 14:12', trigger: 'Git Push', status: '成功', statusColor: 'text-emerald-500 bg-emerald-50 border-emerald-100', duration: '1m 19s' }
-  ];
+  const handleDownloadPreview = () => {
+    if (!artifactPreview) return;
+    if (artifactPreview.contentBase64) {
+      downloadBase64File({
+        filename: artifactPreview.filename,
+        contentBase64: artifactPreview.contentBase64,
+        mimeType: artifactPreview.mimeType || 'application/octet-stream'
+      });
+      return;
+    }
+    if (artifactPreview.downloadUrl) {
+      window.open(artifactPreview.downloadUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    showToast('当前 artifact 只返回了预览内容，未提供可下载文件。', 'info');
+  };
+
+  const renderPlaywrightOptionsPanel = ({ compact = false } = {}) => (
+    <div className={`border border-[var(--border-color)] bg-[var(--bg-app)]/30 rounded-xl ${compact ? 'p-3' : 'p-4'} space-y-3`}>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-[var(--text-primary)] font-bold text-[11px]">
+          <Settings className="size-3.5 text-[var(--accent-color)]" />
+          <span>Playwright 模板选项</span>
+        </div>
+        <span className="text-[8px] text-[var(--text-secondary)]">创建、生成、执行共用</span>
+      </div>
+      <div className={`grid ${compact ? 'grid-cols-2' : 'grid-cols-4'} gap-2 text-[10px]`}>
+        <label className="space-y-1">
+          <span className="text-[var(--text-secondary)] font-semibold">baseURL</span>
+          <input
+            value={playwrightOptions.baseURL}
+            onChange={(event) => updatePlaywrightOption('baseURL', event.target.value)}
+            className="premium-input w-full px-2 py-1.5 font-mono"
+            placeholder="http://localhost:3000"
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-[var(--text-secondary)] font-semibold">browser</span>
+          <select
+            value={playwrightOptions.browser}
+            onChange={(event) => updatePlaywrightOption('browser', event.target.value)}
+            className="premium-input w-full px-2 py-1.5"
+          >
+            <option value="chromium">chromium</option>
+            <option value="firefox">firefox</option>
+            <option value="webkit">webkit</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-[var(--text-secondary)] font-semibold">retries</span>
+          <input
+            type="number"
+            min="0"
+            value={playwrightOptions.retries}
+            onChange={(event) => updatePlaywrightOption('retries', event.target.value)}
+            className="premium-input w-full px-2 py-1.5"
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-[var(--text-secondary)] font-semibold">workers</span>
+          <input
+            type="number"
+            min="1"
+            value={playwrightOptions.workers}
+            onChange={(event) => updatePlaywrightOption('workers', event.target.value)}
+            className="premium-input w-full px-2 py-1.5"
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-[var(--text-secondary)] font-semibold">trace</span>
+          <select value={playwrightOptions.trace} onChange={(event) => updatePlaywrightOption('trace', event.target.value)} className="premium-input w-full px-2 py-1.5">
+            <option value="on">on</option>
+            <option value="off">off</option>
+            <option value="retain-on-failure">retain-on-failure</option>
+            <option value="on-first-retry">on-first-retry</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-[var(--text-secondary)] font-semibold">video</span>
+          <select value={playwrightOptions.video} onChange={(event) => updatePlaywrightOption('video', event.target.value)} className="premium-input w-full px-2 py-1.5">
+            <option value="off">off</option>
+            <option value="on">on</option>
+            <option value="retain-on-failure">retain-on-failure</option>
+            <option value="on-first-retry">on-first-retry</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-[var(--text-secondary)] font-semibold">screenshot</span>
+          <select value={playwrightOptions.screenshot} onChange={(event) => updatePlaywrightOption('screenshot', event.target.value)} className="premium-input w-full px-2 py-1.5">
+            <option value="off">off</option>
+            <option value="on">on</option>
+            <option value="only-on-failure">only-on-failure</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-[var(--text-secondary)] font-semibold">reporter</span>
+          <input
+            value={playwrightOptions.reporter}
+            onChange={(event) => updatePlaywrightOption('reporter', event.target.value)}
+            className="premium-input w-full px-2 py-1.5 font-mono"
+            placeholder="html,list"
+          />
+        </label>
+      </div>
+      <label className="inline-flex items-center gap-2 text-[10px] font-bold text-[var(--text-primary)] cursor-pointer">
+        <input
+          type="checkbox"
+          checked={Boolean(playwrightOptions.headless)}
+          onChange={(event) => updatePlaywrightOption('headless', event.target.checked)}
+          style={{ accentColor: 'var(--accent-color)' }}
+        />
+        <span>headless 执行</span>
+      </label>
+    </div>
+  );
+
+  const renderGenerationSummaryPanel = () => {
+    const framework = generationSummary?.framework;
+    const cases = generationSummary?.cases;
+    const files = [
+      ...(Array.isArray(framework?.files) ? framework.files : []),
+      ...(Array.isArray(cases?.files) ? cases.files : [])
+    ];
+    return (
+      <div className="border border-[var(--border-color)] bg-[var(--bg-app)]/30 rounded-xl p-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-[11px] font-bold text-[var(--text-primary)] flex items-center gap-1.5">
+            <CheckCircle className="size-3.5 text-emerald-500" />
+            <span>后端生成摘要</span>
+          </div>
+          <span className="text-[8px] text-[var(--text-secondary)]">{files.length ? `${files.length} 个文件` : '等待生成结果'}</span>
+        </div>
+        <div className="text-[9px] text-[var(--text-secondary)] space-y-1">
+          <p>{framework?.message || '框架生成结果将在创建或执行后显示。'}</p>
+          <p>{cases?.message || '用例生成结果将在生成所选用例或执行后显示。'}</p>
+        </div>
+        {files.length > 0 && (
+          <div className="max-h-24 overflow-y-auto border-t border-[var(--border-color)] pt-2 space-y-1">
+            {files.slice(0, 8).map((file) => (
+              <div key={`${file.id}-${file.path}`} className="flex items-center gap-1.5 text-[9px] font-mono text-[var(--text-primary)]">
+                <FileText className="size-3 text-slate-400" />
+                <span className="truncate">{file.path}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderR26KeywordStrip = () => {
+    const execution = normalizeExecution(autoExecution || {});
+    const artifactCount = Array.isArray(execution.artifactsList) ? execution.artifactsList.length : 0;
+    const openProjectDetail = () => {
+      if (activeProj) setViewMode('project-detail');
+    };
+    const openRunResult = () => {
+      if (autoExecution?.id || autoExecution?.status) {
+        setViewMode('run-result');
+        return;
+      }
+      openProjectDetail();
+    };
+    const capabilityState = {
+      候选筛选: {
+        icon: Search,
+        value: candidateLoading ? '筛选中' : (candidates.length ? `${visibleCandidates.length}/${candidates.length}` : '待筛选'),
+        action: openProjectDetail
+      },
+      在线文件: {
+        icon: FileText,
+        value: caseFilesLoading ? '同步中' : (caseFiles.length ? `${caseFiles.length} files` : '待加载'),
+        action: openProjectDetail
+      },
+      保存: {
+        icon: CheckCircle,
+        value: isSavingFile ? '保存中' : (isFileDirty ? '待保存' : '已保存'),
+        action: openProjectDetail
+      },
+      Playwright: {
+        icon: Play,
+        value: runtimeDeps?.auto_runner?.playwright?.status || 'unknown',
+        action: openProjectDetail
+      },
+      trace: {
+        icon: Settings,
+        value: playwrightOptions.trace,
+        action: openProjectDetail
+      },
+      Artifacts: {
+        icon: Folder,
+        value: artifactCount ? `${artifactCount} 个` : '待生成',
+        action: openRunResult
+      },
+      预览: {
+        icon: ExternalLink,
+        value: artifactPreview ? '已打开' : '待选择',
+        action: openRunResult
+      },
+      执行日志: {
+        icon: Terminal,
+        value: execution.status || '待执行',
+        action: openRunResult
+      }
+    };
+
+    return (
+      <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)]/75 px-3 py-2 shadow-soft">
+        <div role="toolbar" aria-label="R26 自动化能力入口" className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
+          {R26_VISIBLE_KEYWORDS.map((keyword) => {
+            const item = capabilityState[keyword];
+            const Icon = item.icon;
+            return (
+              <button
+                key={keyword}
+                type="button"
+                onClick={item.action}
+                disabled={!activeProj}
+                className="h-8 min-w-0 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/50 px-2 text-[9px] font-bold text-[var(--text-primary)] flex items-center justify-between gap-1.5 hover:border-[var(--accent-color)] hover:bg-[var(--accent-glow)]/25 disabled:opacity-70 disabled:hover:border-[var(--border-color)] disabled:cursor-default transition-colors"
+              >
+                <span className="min-w-0 flex items-center gap-1.5">
+                  <Icon className="size-3 shrink-0 text-[var(--accent-color)]" />
+                  <span className="truncate">{keyword}</span>
+                </span>
+                <span className="shrink-0 max-w-[72px] truncate text-[8px] text-[var(--text-secondary)]">{item.value}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   const renderProjectDetail = () => {
     return (
@@ -372,6 +1177,8 @@ export default function Automation() {
           </div>
         </div>
 
+        {renderR26KeywordStrip()}
+
         {/* 顶部指标 */}
         <div className="grid grid-cols-4 gap-4">
           <div className="theme-card rounded-xl p-4 shadow-soft">
@@ -396,142 +1203,302 @@ export default function Automation() {
           </div>
         </div>
 
-        {/* 双栏布局 */}
+        {zipFreshHint && (
+          <div className="theme-card rounded-xl px-4 py-2 text-[10px] font-bold text-emerald-600 border border-emerald-500/20 bg-emerald-500/10">
+            {zipFreshHint}
+          </div>
+        )}
+
         <div className="grid grid-cols-12 gap-4">
-          {/* 左侧：脚本文件目录树 */}
-          <div className="col-span-4 theme-card rounded-xl p-4 shadow-soft">
-            <h3 className="text-xs font-bold mb-3 border-b border-[var(--border-color)] pb-2">自动化测试脚本目录树</h3>
-            <div className="space-y-2 font-mono text-[10px]">
-              {fileTree.map((node, i) => (
-                <div key={i} className="space-y-1">
-                  <div className="flex items-center gap-1.5 text-slate-700 font-bold">
-                    <Folder className="size-3.5 text-amber-500" />
-                    <span>{node.name}</span>
-                  </div>
-                  <div className="pl-4 space-y-1 border-l border-slate-100/50">
-                    {node.children.map((child, j) => (
-                      <div key={j} className="space-y-1">
-                        {child.isFolder ? (
-                          <>
-                            <div className="flex items-center gap-1.5 text-slate-600 font-bold mt-1">
-                              <Folder className="size-3.5 text-amber-400" />
-                              <span>{child.name}</span>
-                            </div>
-                            <div className="pl-4 space-y-1 border-l border-slate-100/50">
-                              {child.children.map((subChild, k) => (
-                                <div 
-                                  key={k} 
-                                  onClick={() => setSelectedFile(`tests/${child.name}${subChild.name}`)}
-                                  className={`flex items-center justify-between p-1.5 rounded cursor-pointer transition-colors ${
-                                    selectedFile === `tests/${child.name}${subChild.name}` ? 'bg-indigo-50/50 text-indigo-700 font-bold' : 'hover:bg-slate-50'
-                                  }`}
-                                >
-                                  <div className="flex items-center gap-1.5">
-                                    <FileText className="size-3.5 text-slate-400" />
-                                    <span>{subChild.name}</span>
-                                  </div>
-                                  <span className={`size-1.5 rounded-full ${subChild.status === 'pass' ? 'bg-emerald-500' : 'bg-red-500 animate-pulse'}`}></span>
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        ) : (
-                          <div 
-                            onClick={() => setSelectedFile(`tests/${child.name}`)}
-                            className={`flex items-center justify-between p-1.5 rounded cursor-pointer transition-colors ${
-                              selectedFile === `tests/${child.name}` ? 'bg-indigo-50/50 text-indigo-700 font-bold' : 'hover:bg-slate-50'
-                            }`}
-                          >
-                            <div className="flex items-center gap-1.5">
-                              <FileText className="size-3.5 text-slate-400" />
-                              <span>{child.name}</span>
-                            </div>
-                            <span className={`size-1.5 rounded-full ${child.status === 'pass' ? 'bg-emerald-500' : 'bg-red-500 animate-pulse'}`}></span>
+          <div className="col-span-12 lg:col-span-7 theme-card rounded-xl p-4 shadow-soft space-y-3">
+            <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-2">
+              <h3 className="text-xs font-bold text-[var(--text-primary)] flex items-center gap-1.5">
+                <Search className="size-4 text-[var(--accent-color)]" />
+                <span>候选筛选与用例生成</span>
+              </h3>
+              <span className="text-[8px] text-[var(--text-secondary)]">
+                {selectedCandidatesForGenerate.length} 个待生成 / {excludedCandidateIds.length} 个已排除
+              </span>
+            </div>
+
+            <div className="grid grid-cols-12 gap-2 text-[10px]">
+              <input
+                value={candidateFilters.keyword}
+                onChange={(event) => setCandidateFilters(prev => ({ ...prev, keyword: event.target.value }))}
+                placeholder="条件输入：需求关键词、页面、接口、标签"
+                className="col-span-12 lg:col-span-6 premium-input px-3 py-2"
+              />
+              <input
+                value={candidateFilters.module}
+                onChange={(event) => setCandidateFilters(prev => ({ ...prev, module: event.target.value }))}
+                placeholder="模块"
+                className="col-span-6 lg:col-span-2 premium-input px-3 py-2"
+              />
+              <input
+                value={candidateFilters.priority}
+                onChange={(event) => setCandidateFilters(prev => ({ ...prev, priority: event.target.value }))}
+                placeholder="优先级"
+                className="col-span-6 lg:col-span-2 premium-input px-3 py-2"
+              />
+              <button
+                onClick={handleScreenCandidates}
+                disabled={candidateLoading || !activeProj?.backendId}
+                className="col-span-12 lg:col-span-2 accent-btn rounded-lg text-[10px] disabled:opacity-60 flex items-center justify-center gap-1"
+              >
+                {candidateLoading && <Activity className="size-3 animate-spin" />}
+                <span>执行筛选</span>
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between text-[10px]">
+              <label className="inline-flex items-center gap-2 font-bold text-[var(--text-primary)] cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={recommendedOnly}
+                  onChange={(event) => setRecommendedOnly(event.target.checked)}
+                  style={{ accentColor: 'var(--accent-color)' }}
+                />
+                <span>只看推荐候选</span>
+              </label>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => loadProjectCandidates(activeProj?.backendId)}
+                  disabled={candidateLoading || !activeProj?.backendId}
+                  className="px-2.5 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] font-bold disabled:opacity-60"
+                >
+                  刷新候选
+                </button>
+                <button
+                  onClick={handleGenerateSelectedCases}
+                  disabled={isGeneratingSelectedCases || !selectedCandidatesForGenerate.length}
+                  className="px-3 py-1 rounded accent-btn font-bold disabled:opacity-60"
+                >
+                  {isGeneratingSelectedCases ? '生成中...' : '生成所选用例'}
+                </button>
+              </div>
+            </div>
+
+            {candidateError && (
+              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[10px] text-red-600 font-bold">
+                {candidateError}
+              </div>
+            )}
+
+            <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
+              {candidateLoading ? (
+                <div className="py-8 text-center text-[10px] text-[var(--text-secondary)] font-bold">候选加载中...</div>
+              ) : visibleCandidates.length ? visibleCandidates.map((candidate) => {
+                const selected = selectedCandidateSet.has(candidate.id);
+                const excluded = excludedCandidateSet.has(candidate.id);
+                return (
+                  <div
+                    key={candidate.id}
+                    className={`p-3 rounded-lg border text-left transition-all ${
+                      excluded
+                        ? 'border-red-500/20 bg-red-500/5 opacity-70'
+                        : selected
+                          ? 'border-[var(--accent-color)] bg-[var(--accent-glow)]/40'
+                          : 'border-[var(--border-color)] bg-[var(--bg-app)]/30'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <label className="flex items-start gap-2 min-w-0 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          disabled={excluded}
+                          onChange={() => toggleCandidateSelection(candidate.id)}
+                          className="mt-0.5"
+                          style={{ accentColor: 'var(--accent-color)' }}
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-[11px] text-[var(--text-primary)] truncate">{candidate.title}</span>
+                            {candidate.recommended && <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 text-[8px] font-bold">推荐</span>}
                           </div>
-                        )}
+                          <div className="text-[9px] text-[var(--text-secondary)] mt-1 line-clamp-2">{candidate.reason}</div>
+                          <div className="flex gap-2 text-[8px] text-slate-400 mt-1 font-mono">
+                            <span>{candidate.module}</span>
+                            <span>{candidate.priority}</span>
+                            <span>{candidate.source}</span>
+                          </div>
+                        </div>
+                      </label>
+                      <div className="shrink-0 text-right space-y-2">
+                        <div className="text-[9px] font-mono text-[var(--accent-color)]">{Math.round(candidate.score * 100)}%</div>
+                        <button
+                          onClick={() => toggleCandidateExcluded(candidate.id)}
+                          className={`px-2 py-0.5 rounded border text-[8px] font-bold ${
+                            excluded
+                              ? 'border-emerald-500/20 text-emerald-600 bg-emerald-500/10'
+                              : 'border-red-500/20 text-red-600 bg-red-500/10'
+                          }`}
+                        >
+                          {excluded ? '取消排除' : '排除'}
+                        </button>
                       </div>
-                    ))}
+                    </div>
                   </div>
+                );
+              }) : (
+                <div className="py-8 text-center text-[10px] text-[var(--text-secondary)] font-bold">
+                  暂无候选，输入条件后点击执行筛选，或等待后端候选列表返回。
                 </div>
-              ))}
+              )}
             </div>
           </div>
 
-          {/* 右侧：统计图表与构建历史 */}
-          <div className="col-span-8 space-y-4">
-            {/* 折线走势 */}
-            <div className="theme-card rounded-xl p-4 shadow-soft">
-              <h3 className="text-xs font-bold mb-3">当前脚本: <span className="font-mono" style={{ color: 'var(--accent-color)' }}>{selectedFile}</span> 执行成功率波形图</h3>
-              <div className="h-24 w-full relative">
-                <svg className="w-full h-full" viewBox="0 0 500 80" preserveAspectRatio="none">
-                  <path d="M 10 70 Q 100 10, 200 40 T 400 20 T 490 10" fill="none" stroke="var(--accent-color)" strokeWidth="2" strokeLinecap="round" className="path-drawn" />
-                  <path d="M 10 70 Q 100 10, 200 40 T 400 20 T 490 10 L 490 80 L 10 80 Z" fill="url(#grad_proj)" opacity="0.1" />
-                  <defs>
-                    <linearGradient id="grad_proj" x1="0%" y1="0%" x2="0%" y2="100%">
-                      <stop offset="0%" stopColor="var(--accent-color)" />
-                      <stop offset="100%" stopColor="var(--accent-color)" stopOpacity="0" />
-                    </linearGradient>
-                  </defs>
-                  <circle cx="10" cy="70" r="3" fill="var(--accent-color)" />
-                  <circle cx="100" cy="25" r="3" fill="var(--accent-color)" />
-                  <circle cx="200" cy="40" r="3" fill="var(--accent-color)" />
-                  <circle cx="300" cy="27" r="3" fill="var(--accent-color)" />
-                  <circle cx="400" cy="20" r="3" fill="var(--accent-color)" />
-                  <circle cx="490" cy="10" r="3" fill="var(--accent-color)" />
-                </svg>
+          <div className="col-span-12 lg:col-span-5 space-y-4">
+            {renderPlaywrightOptionsPanel({ compact: true })}
+            {renderGenerationSummaryPanel()}
+            <div className="theme-card rounded-xl p-4 shadow-soft space-y-2">
+              <div className="flex items-center justify-between text-[10px]">
+                <span className="font-bold text-[var(--text-primary)]">Runner 模式</span>
+                <select
+                  value={autoRunnerMode}
+                  onChange={(event) => setAutoRunnerMode(event.target.value)}
+                  className="px-2 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] text-[10px] font-bold text-[var(--text-primary)]"
+                >
+                  <option value="auto">真实本地 runner</option>
+                  <option value="playwright">Playwright runner</option>
+                  <option value="placeholder">占位 runner</option>
+                </select>
               </div>
-              <div className="flex justify-between text-[8px] text-slate-400 mt-1.5 font-mono">
-                <span>05-15</span>
-                <span>05-16</span>
-                <span>05-17</span>
-                <span>05-18</span>
-                <span>05-19</span>
-                <span>今天 10:25</span>
+              <div className={`px-2.5 py-1.5 rounded-lg border text-[9px] font-bold ${
+                runtimeDeps?.auto_runner?.playwright?.available
+                  ? 'border-emerald-500/20 text-emerald-600 bg-emerald-500/10'
+                  : 'border-amber-500/20 text-amber-600 bg-amber-500/10'
+              }`}>
+                Playwright 依赖：{runtimeDeps?.auto_runner?.playwright?.status || 'unknown'}
+              </div>
+              <div className="text-[9px] text-[var(--text-secondary)]">
+                {selectedCaseFileIds.length ? `本次执行将传入 ${selectedCaseFileIds.length} 个 case_file_ids。` : '未勾选文件时，后端按默认范围执行。'}
               </div>
             </div>
+          </div>
+        </div>
 
-            {/* 构建历史表格 */}
-            <div className="theme-card rounded-xl p-4 shadow-soft">
-              <h3 className="text-xs font-bold mb-3 border-b border-[var(--border-color)] pb-2 flex justify-between items-center">
-                <span>流水线构建历史记录</span>
-                <span className="text-[8px] text-slate-400 font-normal">默认显示近4次</span>
+        <div className="grid grid-cols-12 gap-4">
+          <div className="col-span-12 lg:col-span-4 theme-card rounded-xl p-4 shadow-soft">
+            <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-2 mb-3">
+              <h3 className="text-xs font-bold flex items-center gap-1.5">
+                <Folder className="size-4 text-amber-500" />
+                <span>后端 case files</span>
               </h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-[10px] text-left border-collapse">
-                  <thead>
-                    <tr className="text-slate-400 font-bold border-b border-slate-50">
-                      <th className="py-2 px-1">构建编号</th>
-                      <th className="py-2 px-1">触发时间</th>
-                      <th className="py-2 px-1">触发类型</th>
-                      <th className="py-2 px-1 text-center">构建状态</th>
-                      <th className="py-2 px-1">运行时长</th>
-                      <th className="py-2 px-1 text-center">日志详情</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50/50 text-slate-600 font-medium">
-                    {buildHistory.map((b) => (
-                      <tr key={b.id} className="hover:bg-slate-50/30 transition-colors">
-                        <td className="py-2.5 px-1 font-bold text-slate-800 font-mono">{b.id}</td>
-                        <td className="py-2.5 px-1 text-slate-500">{b.time}</td>
-                        <td className="py-2.5 px-1 text-slate-600">{b.trigger}</td>
-                        <td className="py-2.5 px-1 text-center">
-                          <span className={`px-1.5 py-0.5 rounded border text-[8px] font-bold ${b.statusColor}`}>
-                            {b.status}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-1 font-mono text-slate-400">{b.duration}</td>
-                        <td className="py-2.5 px-1 text-center">
-                          <button 
-                            onClick={() => setViewMode('run-result')}
-                            className="px-1.5 py-0.5 border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[var(--accent-color)] text-[8px] rounded font-bold cursor-pointer transition-colors"
-                          >
-                            控制台日志
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <button
+                onClick={() => loadCaseFiles(activeProj?.backendId, { selectFirst: true })}
+                disabled={caseFilesLoading || !activeProj?.backendId}
+                className="px-2 py-1 rounded border border-[var(--border-color)] text-[8px] font-bold text-[var(--text-primary)] bg-[var(--bg-card)] disabled:opacity-60"
+              >
+                刷新
+              </button>
+            </div>
+            {caseFilesError && (
+              <div className="mb-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[10px] text-red-600 font-bold">
+                {caseFilesError}
+              </div>
+            )}
+            <div className="space-y-1.5 max-h-[520px] overflow-y-auto pr-1 font-mono text-[10px]">
+              {caseFilesLoading ? (
+                <div className="py-8 text-center text-[var(--text-secondary)] font-bold">case files 加载中...</div>
+              ) : caseFiles.length ? caseFiles.map((file) => {
+                const selected = String(selectedFileMeta?.id) === String(file.id);
+                return (
+                  <div
+                    key={`${file.id}-${file.path}`}
+                    onClick={() => loadCaseFileContent(file, activeProj?.backendId)}
+                    className={`p-2 rounded-lg border cursor-pointer transition-colors ${
+                      selected
+                        ? 'border-[var(--accent-color)] bg-[var(--accent-glow)]/40 text-[var(--accent-color)] font-bold'
+                        : 'border-[var(--border-color)] hover:bg-[var(--bg-app)]/40 text-[var(--text-primary)]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <input
+                        type="checkbox"
+                        checked={selectedCaseFileSet.has(String(file.id))}
+                        onChange={(event) => {
+                          event.stopPropagation();
+                          toggleCaseFileSelection(file.id);
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                        style={{ accentColor: 'var(--accent-color)' }}
+                      />
+                      <FileText className="size-3.5 text-slate-400 shrink-0" />
+                      <span className="truncate">{file.path}</span>
+                    </div>
+                    <div className="pl-8 mt-1 text-[8px] text-[var(--text-secondary)] flex justify-between">
+                      <span>{file.status}</span>
+                      <span>{file.updatedAt}</span>
+                    </div>
+                  </div>
+                );
+              }) : (
+                <div className="py-8 text-center text-[10px] text-[var(--text-secondary)] font-bold">
+                  暂无后端 case files。可先筛选候选并生成所选用例。
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="col-span-12 lg:col-span-8 theme-card rounded-xl p-4 shadow-soft space-y-3">
+            <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-2">
+              <h3 className="text-xs font-bold text-[var(--text-primary)] flex items-center gap-1.5">
+                <Code className="size-4 text-[var(--accent-color)]" />
+                <span>在线文件编辑</span>
+              </h3>
+              <span className={`px-2 py-0.5 rounded text-[8px] font-bold ${
+                isFileDirty ? 'bg-amber-500/10 text-amber-600 border border-amber-500/20' : 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20'
+              }`}>
+                {isFileDirty ? 'dirty' : 'saved'}
+              </span>
+            </div>
+
+            <label className="block space-y-1 text-[10px] font-bold text-[var(--text-secondary)]">
+              <span>文件路径</span>
+              <input
+                value={filePathDraft}
+                onChange={(event) => setFilePathDraft(event.target.value)}
+                disabled={!selectedFileMeta || fileLoading}
+                className="premium-input w-full px-3 py-2 font-mono"
+                placeholder="tests/example.spec.ts"
+              />
+            </label>
+
+            <textarea
+              value={fileContentDraft}
+              onChange={(event) => setFileContentDraft(event.target.value)}
+              disabled={!selectedFileMeta || fileLoading}
+              className="w-full min-h-[360px] rounded-xl border border-[var(--border-color)] bg-[#0b0f19] text-slate-200 px-4 py-3 text-[10px] leading-relaxed font-mono focus:outline-none focus:border-[var(--accent-color)]"
+              spellCheck={false}
+              placeholder={fileLoading ? '文件内容加载中...' : '选择左侧后端 case file 后编辑内容'}
+            />
+
+            {fileSaveError && (
+              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[10px] text-red-600 font-bold">
+                {fileSaveError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between">
+              <div className="text-[9px] text-[var(--text-secondary)] font-mono truncate">
+                当前脚本: {selectedFile || '--'}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleResetFileDraft}
+                  disabled={!isFileDirty || isSavingFile}
+                  className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[10px] font-bold text-[var(--text-primary)] disabled:opacity-50"
+                >
+                  重置
+                </button>
+                <button
+                  onClick={handleSaveFile}
+                  disabled={!selectedFileMeta || !isFileDirty || isSavingFile}
+                  className="px-3 py-1.5 rounded-lg accent-btn text-[10px] font-bold disabled:opacity-60"
+                >
+                  {isSavingFile ? '保存中...' : '保存文件'}
+                </button>
               </div>
             </div>
           </div>
@@ -541,12 +1508,33 @@ export default function Automation() {
   };
 
   const renderRunResult = () => {
-    const summary = autoExecution?.summary || { total: activeProj.cases || 24, passed: 23, failed: 1, errors: 0 };
-    const isSuccess = !autoExecution || ['completed', 'passed', 'success'].includes(String(autoExecution.status || '').toLowerCase());
-    const durationText = autoExecution?.duration_ms ? `${Math.max(1, Math.round(autoExecution.duration_ms / 1000))}s` : '1m 24s';
-    const logLines = autoExecution?.log_excerpt ? String(autoExecution.log_excerpt).split('\n').filter(Boolean) : [];
-    const runnerMode = autoExecution?.artifacts?.runner?.mode || autoExecution?.artifacts?.runner?.name || 'placeholder';
-    const artifactEvidence = autoExecution?.artifacts?.evidence || [];
+    const execution = normalizeExecution(autoExecution || {});
+    const summary = execution.summary || normalizeSummary({});
+    const status = String(execution.status || 'unknown').toLowerCase();
+    const isSuccess = ['completed', 'passed', 'success', 'succeeded'].includes(status);
+    const isFailed = ['failed', 'error', 'errored', 'timeout'].includes(status);
+    const durationText = execution.duration_ms ? `${Math.max(1, Math.round(execution.duration_ms / 1000))}s` : '--';
+    const logLines = Array.isArray(execution.logLines) ? execution.logLines : [];
+    const runnerInfo = asObject(asObject(execution.artifacts).runner);
+    const runnerMode = runnerInfo.mode || runnerInfo.name || autoRunnerMode;
+    const artifactEvidence = Array.isArray(execution.artifactsList) ? execution.artifactsList : [];
+    const previewKind = String(artifactPreview?.kind || artifactPreview?.mimeType || artifactPreview?.filename || '').toLowerCase();
+    const isPreviewImage = Boolean(artifactPreview?.contentBase64) && (
+      String(artifactPreview?.mimeType || '').startsWith('image/')
+      || previewKind.includes('screenshot')
+      || previewKind.includes('png')
+      || previewKind.includes('jpg')
+      || previewKind.includes('jpeg')
+      || previewKind.includes('webp')
+    );
+    let previewTextFromBase64 = '';
+    if (artifactPreview?.contentBase64 && !isPreviewImage) {
+      try {
+        previewTextFromBase64 = window.atob(artifactPreview.contentBase64);
+      } catch {
+        previewTextFromBase64 = '';
+      }
+    }
     return (
       <div className="space-y-4 text-left animate-[fadeIn_0.2s_ease-out] w-full">
         {/* 面包屑 */}
@@ -564,10 +1552,17 @@ export default function Automation() {
               <span>/</span>
               <span>{activeProj.name}</span>
               <span>/</span>
-              <span className="text-[var(--text-primary)]">构建执行结果 {autoExecution?.id ? `(Execution #${autoExecution.id})` : '(Build #84)'}</span>
+              <span className="text-[var(--text-primary)]">构建执行结果 {execution.id ? `(Execution #${execution.id})` : '(暂无后端执行)'}</span>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => loadExecutionDetail(execution.id)}
+              disabled={!execution.id}
+              className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer disabled:opacity-50"
+            >
+              刷新详情
+            </button>
             <button
               onClick={handleDownloadAutoArtifacts}
               className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer"
@@ -598,9 +1593,9 @@ export default function Automation() {
           </div>
           <div className="theme-card rounded-xl p-4 shadow-soft">
             <span className="text-[10px] text-slate-400 font-semibold">运行状态</span>
-            <div className={`text-base font-bold mt-1 flex items-center gap-1 ${isSuccess ? 'text-emerald-500' : 'text-red-500'}`}>
+            <div className={`text-base font-bold mt-1 flex items-center gap-1 ${isFailed ? 'text-red-500' : isSuccess ? 'text-emerald-500' : 'text-amber-500'}`}>
               {isSuccess ? <CheckCircle className="size-4 shrink-0" /> : <XCircle className="size-4 shrink-0" />}
-              <span>{isSuccess ? '执行完成' : '执行失败'}</span>
+              <span>{isSuccess ? '执行完成' : isFailed ? '执行失败' : execution.status || 'unknown'}</span>
             </div>
           </div>
           <div className="theme-card rounded-xl p-4 shadow-soft">
@@ -609,33 +1604,38 @@ export default function Automation() {
           </div>
         </div>
 
-        <div className="theme-card rounded-xl p-4 shadow-soft flex items-center justify-between">
-          <div>
+        <div className="theme-card rounded-xl p-4 shadow-soft flex items-start justify-between gap-6">
+          <div className="shrink-0">
             <div className="text-[10px] text-slate-400 font-semibold">Runner 模式</div>
             <div className="text-sm font-bold text-slate-800 mt-1">{runnerMode}</div>
+            <div className="text-[8px] text-slate-400 mt-1">case_file_ids: {selectedCaseFileIds.length ? selectedCaseFileIds.length : '默认范围'}</div>
           </div>
-          <div className="flex-1 ml-6">
-            <div className="text-[10px] text-slate-400 font-semibold mb-2">Artifacts</div>
+          <div className="flex-1">
+            <div className="text-[10px] text-slate-400 font-semibold mb-2">Artifacts evidence</div>
             <div className="flex flex-wrap gap-2">
-              {artifactEvidence.length ? artifactEvidence.slice(0, 6).map((item, idx) => (
-                <span key={`${item.kind}-${idx}`} className="px-2 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-app)] text-[9px] font-mono text-[var(--text-primary)]">
-                  {item.kind}:{item.relative_path || item.source || idx + 1}
-                </span>
+              {artifactEvidence.length ? artifactEvidence.slice(0, 12).map((item, idx) => (
+                <button
+                  key={`${item.id}-${idx}`}
+                  onClick={() => handlePreviewArtifact(item)}
+                  className="px-2 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-app)] hover:border-[var(--accent-color)] text-[9px] font-mono text-[var(--text-primary)] cursor-pointer max-w-[220px] truncate"
+                  title={item.path || item.name}
+                >
+                  {item.kind}:{item.name || idx + 1}
+                </button>
               )) : (
-                <span className="text-[10px] text-slate-400">暂无 runner artifacts</span>
+                <span className="text-[10px] text-slate-400">后端未返回 artifacts list</span>
               )}
             </div>
           </div>
         </div>
 
-        {/* 核心区：高保真终端控制台 & 失败步骤诊断 */}
+        {/* 核心区：后端执行日志 & Artifact 预览 */}
         <div className="grid grid-cols-12 gap-4">
-          {/* 左侧：高拟真终端控制台 */}
           <div className="col-span-7 mac-terminal p-4 flex flex-col font-mono text-[9px] text-left relative overflow-hidden cyber-matrix-console bg-[#0d0208]">
             <div className="flex justify-between items-center border-b border-white/10 pb-2 mb-3 shrink-0 relative z-10">
               <div className="flex items-center gap-2">
                 <Terminal className="size-4 text-[#8be9fd]" />
-                <span className="font-bold text-[#8be9fd]">Playwright Test Log Console</span>
+                <span className="font-bold text-[#8be9fd]">Execution Log Console</span>
               </div>
               <div className="flex gap-1">
                 <span className="size-2 rounded-full bg-[#ff5555]"></span>
@@ -650,64 +1650,63 @@ export default function Automation() {
                   {line}
                 </p>
               )) : (
-                <>
-                  <p className="text-slate-500">[10:25:01] INFO  Initializing playwright runner on host "node-executor-04"...</p>
-                  <p className="text-slate-500">[10:25:03] INFO  Scanning 24 files under /workspace/tests...</p>
-                  <p className="text-[#50fa7b]">[10:25:04] SUCCESS  tests/auth/login.spec.js passed (3.4s) | 12 cases</p>
-                  <p className="text-[#ff5555] font-bold">[10:25:18] ERROR  tests/checkout/cart.spec.js failed (8.2s) | 1 case failed</p>
-                  <p className="text-[#8be9fd]">[10:25:21] INFO  Step snapshot generated. Saving stack trace info...</p>
-                  <p className="text-slate-500">[10:25:25] INFO  Playwright test run complete. 23 passed, 1 failed.</p>
-                </>
+                <p className="text-slate-500">后端暂未返回执行日志。请先运行或点击刷新详情。</p>
               )}
             </div>
           </div>
 
-          {/* 右侧：用例失败诊断 & AI 自愈分析 */}
           <div className="col-span-5 space-y-4">
-            {/* 失败截图看板 (带毛玻璃模糊遮罩) */}
-            <div className="theme-card rounded-xl p-4 shadow-soft text-left relative overflow-hidden">
-              <h3 className="text-xs font-bold mb-2">测试失败截图证据</h3>
-              <div className="relative border border-slate-100 rounded-lg overflow-hidden bg-slate-100 h-28 flex items-center justify-center">
-                {/* 模拟页面背景 */}
-                <div className="absolute inset-0 bg-[#e2e8f0]/40 flex flex-col justify-between p-3 scale-95 select-none opacity-40">
-                  <div className="h-4 bg-slate-300 w-1/4 rounded"></div>
-                  <div className="space-y-1">
-                    <div className="h-2 bg-slate-300 w-full rounded"></div>
-                    <div className="h-2 bg-slate-300 w-5/6 rounded"></div>
+            <div className="theme-card rounded-xl p-4 shadow-soft text-left space-y-3">
+              <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-2">
+                <h3 className="text-xs font-bold text-[var(--text-primary)]">Artifact 预览</h3>
+                <button
+                  onClick={handleDownloadPreview}
+                  disabled={!artifactPreview}
+                  className="px-2 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] text-[9px] font-bold text-[var(--text-primary)] disabled:opacity-50"
+                >
+                  下载/打开
+                </button>
+              </div>
+
+              {artifactPreviewLoading && (
+                <div className="h-56 flex items-center justify-center text-[10px] text-[var(--text-secondary)] font-bold">
+                  Artifact 预览加载中...
+                </div>
+              )}
+
+              {artifactPreviewError && (
+                <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[10px] text-red-600 font-bold">
+                  {artifactPreviewError}
+                </div>
+              )}
+
+              {!artifactPreviewLoading && !artifactPreviewError && artifactPreview && (
+                <div className="space-y-2">
+                  <div className="text-[9px] text-[var(--text-secondary)] font-mono truncate">
+                    {artifactPreview.filename} · {artifactPreview.mimeType || artifactPreview.kind || 'artifact'}
                   </div>
-                  <div className="h-8 bg-blue-600 w-1/3 rounded self-end flex items-center justify-center text-[8px] text-white">确认订单</div>
+                  {isPreviewImage ? (
+                    <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/40 p-2 max-h-[360px] overflow-auto">
+                      <img
+                        src={artifactPreview.contentBase64.startsWith('data:') ? artifactPreview.contentBase64 : `data:${artifactPreview.mimeType || 'image/png'};base64,${artifactPreview.contentBase64}`}
+                        alt={artifactPreview.filename}
+                        className="max-w-full rounded"
+                      />
+                    </div>
+                  ) : (
+                    <pre className="rounded-lg border border-[var(--border-color)] bg-[#0b0f19] text-slate-200 p-3 text-[9px] leading-relaxed max-h-[360px] overflow-auto whitespace-pre-wrap">
+                      {artifactPreview.content || previewTextFromBase64 || '后端未返回可直接显示的脱敏文本。trace/html/junit/log 可点击下载查看原始文件。'}
+                    </pre>
+                  )}
                 </div>
+              )}
 
-                {/* 毛玻璃遮罩 */}
-                <div className="absolute inset-0 backdrop-blur-[2.5px] bg-slate-900/40 flex flex-col items-center justify-center text-white">
-                  <AlertTriangle className="size-8 text-[#ff5555] drop-shadow-md animate-bounce mb-1" />
-                  <span className="text-[10px] font-bold drop-shadow">运行时定位超时异常发生点</span>
-                  <span className="text-[8px] opacity-75 mt-0.5 font-mono">Snapshot: error_step_14.png</span>
+              {!artifactPreviewLoading && !artifactPreviewError && !artifactPreview && (
+                <div className="h-56 flex flex-col items-center justify-center text-center text-[10px] text-[var(--text-secondary)] font-bold border border-dashed border-[var(--border-color)] rounded-lg">
+                  <ExternalLink className="size-5 mb-2 text-slate-400" />
+                  <span>点击上方 evidence artifact 查看脱敏文本、截图、trace、html、junit 或 log 预览。</span>
                 </div>
-              </div>
-            </div>
-
-            {/* AI 自愈建议 */}
-            <div className="p-4 border border-purple-100 bg-purple-50/20 rounded-xl space-y-2.5 text-left ai-laser-healing-grid">
-              <div className="flex items-center gap-1.5 text-purple-700 font-bold relative z-10">
-                <Sparkles className="size-4 animate-pulse text-purple-600" />
-                <span className="text-xs">AI 自动化自愈诊断</span>
-              </div>
-              <div className="space-y-1.5 text-[9.5px] leading-relaxed text-slate-600 font-semibold font-sans relative z-10">
-                <p>
-                  <strong>原因诊断</strong>：元素选择器 <code className="bg-black/5 dark:bg-white/10 px-1 py-0.5 rounded font-mono text-[8px]">button.submit-order</code> 未能在超时时间 5000ms 内成功绘制。原因是系统结算接口发生了约 4.2 秒的偶发性抖动网络阻塞。
-                </p>
-                <p className="text-purple-600 font-bold">
-                  <strong>自愈建议</strong>：将点击前的等待延迟自愈改写为显式等待，或者改用更健壮的文案匹配定位器：
-                </p>
-                <div className="bg-purple-950 text-[#f8f8f2] p-2 rounded-lg font-mono text-[8px] leading-normal font-bold">
-                  {`// 替换旧定位器并重试\\nawait page.locator('text=确认订单').click({ timeout: 10000 });`}
-                </div>
-              </div>
-              <div className="flex justify-between items-center text-[8px] text-purple-400 pt-2 border-t border-purple-100/50 relative z-10">
-                <span>智能诊断置信度: 95%</span>
-                <span className="underline cursor-pointer">反馈偏差</span>
-              </div>
+              )}
             </div>
           </div>
         </div>
@@ -770,6 +1769,8 @@ export default function Automation() {
               </button>
             </div>
           </div>
+
+          {renderR26KeywordStrip()}
 
           {/* 指标面板 */}
           <div className="grid grid-cols-4 gap-3.5">
@@ -863,7 +1864,7 @@ export default function Automation() {
                           <div className="flex items-center gap-4">
                             <div>用例数: <span className="font-bold text-[var(--text-primary)]">{proj.cases}</span></div>
                             <div>构建数: <span className="font-bold text-[var(--text-primary)]">{proj.build}</span></div>
-                            <div>最近构建: <span className="text-[var(--text-secondary)] font-mono">{proj.time.split(' ')[0]}</span></div>
+                            <div>最近构建: <span className="text-[var(--text-secondary)] font-mono">{String(proj.time || '--').split(' ')[0]}</span></div>
                           </div>
                           <div className="flex items-center gap-1.5">
                             <span className="text-[var(--text-secondary)]">负责人:</span>
@@ -930,7 +1931,7 @@ export default function Automation() {
                       <span className="text-slate-400 block text-[9px] mb-1">选定项目及框架</span>
                       <div className="p-2 bg-[var(--bg-app)]/50 border border-[var(--border-color)] rounded-lg flex items-center justify-between">
                         <span className="font-bold text-[var(--text-primary)] truncate max-w-[180px]">{activeProj.name}</span>
-                        <span className="px-1.5 py-0.5 bg-[var(--accent-color)] text-[var(--accent-text)] text-[8px] font-extrabold rounded uppercase">{activeProj.stack.split(' / ')[1] || activeProj.stack}</span>
+                        <span className="px-1.5 py-0.5 bg-[var(--accent-color)] text-[var(--accent-text)] text-[8px] font-extrabold rounded uppercase">{String(activeProj.stack || '').split(' / ')[1] || activeProj.stack}</span>
                       </div>
                     </div>
 
@@ -938,7 +1939,7 @@ export default function Automation() {
                     <div className="space-y-1 text-left">
                       <span className="text-slate-400 block text-[9px] mb-1">AI 推荐的工程目录架构：</span>
                       <div className="p-3 border border-[var(--border-color)] bg-[var(--bg-app)]/30 rounded-lg text-slate-500 space-y-1">
-                        {activeProj.stack.toLowerCase().includes('playwright') && (
+                        {String(activeProj.stack || '').toLowerCase().includes('playwright') && (
                           <>
                             <div className="flex items-center gap-1"><Folder className="size-3 text-amber-500" /> tests/</div>
                             <div className="pl-3.5 flex items-center gap-1 text-emerald-500 font-bold"><FileText className="size-3 text-slate-400" /> login.spec.ts <span className="opacity-50 font-normal text-[8px]">(AI 生成)</span></div>
@@ -946,7 +1947,7 @@ export default function Automation() {
                             <div className="flex items-center gap-1 text-cyan-500 font-bold"><FileText className="size-3" /> playwright.config.ts</div>
                           </>
                         )}
-                        {activeProj.stack.toLowerCase().includes('appium') && (
+                        {String(activeProj.stack || '').toLowerCase().includes('appium') && (
                           <>
                             <div className="flex items-center gap-1"><Folder className="size-3 text-amber-500" /> tests/specs/</div>
                             <div className="pl-3.5 flex items-center gap-1 text-emerald-500 font-bold"><FileText className="size-3 text-slate-400" /> mobile_login.spec.js <span className="opacity-50 font-normal text-[8px]">(AI 生成)</span></div>
@@ -954,7 +1955,7 @@ export default function Automation() {
                             <div className="flex items-center gap-1 text-cyan-500 font-bold"><FileText className="size-3" /> wdio.conf.js</div>
                           </>
                         )}
-                        {activeProj.stack.toLowerCase().includes('pytest') && (
+                        {String(activeProj.stack || '').toLowerCase().includes('pytest') && (
                           <>
                             <div className="flex items-center gap-1"><Folder className="size-3 text-amber-500" /> tests/api/</div>
                             <div className="pl-3.5 flex items-center gap-1 text-emerald-500 font-bold"><FileText className="size-3 text-slate-400" /> test_users.py <span className="opacity-50 font-normal text-[8px]">(AI 生成)</span></div>
@@ -962,7 +1963,7 @@ export default function Automation() {
                             <div className="flex items-center gap-1 text-cyan-500 font-bold"><FileText className="size-3" /> pytest.ini</div>
                           </>
                         )}
-                        {activeProj.stack.toLowerCase().includes('supertest') && (
+                        {String(activeProj.stack || '').toLowerCase().includes('supertest') && (
                           <>
                             <div className="flex items-center gap-1"><Folder className="size-3 text-amber-500" /> tests/health/</div>
                             <div className="pl-3.5 flex items-center gap-1 text-emerald-500 font-bold"><FileText className="size-3 text-slate-400" /> check.test.js <span className="opacity-50 font-normal text-[8px]">(AI 生成)</span></div>
@@ -1097,6 +2098,8 @@ export default function Automation() {
                         <div className="space-y-1.5">
                           <label className="block text-[var(--text-primary)]">项目描述 (可选)</label>
                           <textarea 
+                            value={projDesc}
+                            onChange={(e) => setProjDesc(e.target.value)}
                             placeholder="简要介绍该自动套件的范围与主链任务"
                             className="premium-input w-full px-3 py-2 text-[11px] h-20"
                           />
@@ -1127,6 +2130,7 @@ export default function Automation() {
                             ))}
                           </div>
                         </div>
+                        {projStack === 'playwright' && renderPlaywrightOptionsPanel({ compact: true })}
                       </div>
                     )}
 
@@ -1174,7 +2178,7 @@ export default function Automation() {
                           已成功配置项目「<strong style={{ color: 'var(--accent-color)' }}>{projName}</strong>」，选用 <strong style={{ color: 'var(--accent-color)' }}>{projStack.toUpperCase()}</strong> 测试骨架。AI 大脑将自动关联现有的 12 个核心 PRD 需求，并智能生成第一批健全的页面执行脚本。
                         </p>
                         <div className="text-[9px] text-[var(--text-secondary)]/80 font-medium pt-2 border-t border-[var(--border-color)]">
-                          点击下方「完成」按钮，系统将在后台自动拉取 Git 仓库并执行脚手架注入。
+                          点击下方「完成」按钮，系统将携带当前 Playwright 轻量选项生成工程文件与初始用例。
                         </div>
                       </div>
                     )}
@@ -1237,6 +2241,8 @@ export default function Automation() {
                     <div className="p-2.5 bg-[#0b0f19] border border-[#223049] rounded-lg text-slate-400 space-y-1" style={{ transform: 'translateZ(10px)' }}>
                       <div><span className="text-purple-400">PROJECT_NAME:</span> "{projName || 'Untitled'}"</div>
                       <div><span className="text-purple-400">TARGET_STACK:</span> "{projStack.toUpperCase()}"</div>
+                      <div><span className="text-purple-400">BASE_URL:</span> "{playwrightOptions.baseURL}"</div>
+                      <div><span className="text-purple-400">BROWSER:</span> "{playwrightOptions.browser}" / headless={String(playwrightOptions.headless)}</div>
                       <div><span className="text-purple-400">ENGINE_VERSION:</span> "v2.5.0"</div>
                     </div>
 
@@ -1294,6 +2300,7 @@ export default function Automation() {
                         </div>
                       )}
                     </div>
+                    {renderGenerationSummaryPanel()}
                   </div>
                 </div>
 
