@@ -117,6 +117,7 @@ export default function App() {
           activeTab={activeTab} 
           theme={dashboardTheme} 
           setTheme={setDashboardTheme} 
+          setActiveTab={setActiveTab}
         />
 
         {/* 页面主工作区 */}

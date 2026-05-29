@@ -344,3 +344,22 @@
 - `npm run build`: passed, with only Vite chunk size warning.
 - `cd backend; python -m pytest -q`: passed, with 2 FastAPI dependency warnings.
 - Browser smoke: Vite returned HTTP 200, Headless Edge rendered React DOM and the AI assistant backend-link status.
+
+## 第二十轮验收
+- [x] `/projects/{projectId}/dashboard` 返回最近 14 天 `execution_trend`，按日统计 passed / failed / blocked / other / total / pass_rate。
+- [x] `/projects/{projectId}/dashboard` 返回 `requirement_coverage`，基于 RequirementItem / TestPoint / TestCase 统计 covered / partial / uncovered。
+- [x] `/projects/{projectId}/dashboard` 返回 `module_heatmap`，按模块聚合需求、用例、执行、缺陷。
+- [x] `/system/llm-status` 返回 LLM 配置、运行时开关、模型名和 usage 统计，不调用外部 provider。
+- [x] `/system/llm-status` 不返回 `api_key`、`api_key_ref` 或真实密钥值。
+- [x] Dashboard 执行趋势、需求覆盖率、模块热力图均使用后端字段，空数据时稳定渲染。
+- [x] Topbar LLM 状态从后端读取，默认真实 LLM 关闭时显示“未启用”，点击可跳转 LLM 配置页。
+- [x] 浏览器烟测确认 Dashboard/Topbar 实际 React DOM 渲染，无 JS error。
+
+## Round 20 Evidence
+- Added `backend/tests/test_round20_dashboard_topbar.py`.
+- Covers empty dashboard structures, fact-backed coverage/trend/heatmap, unconfigured LLM status, configured LLM status, and secret redaction.
+- `python -m compileall backend\aitest_platform`: passed.
+- `python -m pytest backend\tests\test_round20_dashboard_topbar.py -q`: passed, 4 tests, with FastAPI dependency warnings.
+- QA subagent full backend regression: `cd backend; python -m pytest -q` passed, with FastAPI dependency warnings.
+- `npm run build`: passed, with only Vite chunk size warning.
+- Headless Chrome CDP smoke: rendered `LLM 状态 / 未启用 / round20-model`, `执行趋势`, `需求覆盖率`, `模块使用热力图`; no JS console error or browser error log.

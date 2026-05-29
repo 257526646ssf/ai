@@ -483,3 +483,17 @@
 - 排期文档：`docs/orchestration/SECOND_ROUND_ROADMAP.md`。
 - 第二轮从 R20 开始，不再按零散补丁推进。
 - R20 立即开工范围：Dashboard 关键静态图表替换为后端事实统计，Topbar LLM 状态接后端配置与运行时状态。
+
+## 第二轮 R20 完成状态
+- `backend/aitest_platform/api/router.py` 已扩展 Dashboard 后端事实统计：`execution_trend`、`requirement_coverage`、`module_heatmap`。
+- `/api/v2/system/llm-status` 已新增非侵入式 LLM 状态接口，读取配置、运行时开关和 usage，且不调用 provider、不返回密钥。
+- `src/pages/Dashboard.jsx` 已把执行趋势、需求覆盖率、模块热力图从静态演示数据替换为后端字段，并保留稳定空态。
+- `src/components/Topbar.jsx` 已读取后端 LLM 状态；`src/App.jsx` 已向 Topbar 透传 `setActiveTab`，点击可进入 LLM 配置页。
+- `backend/tests/test_round20_dashboard_topbar.py` 已覆盖空项目结构、有事实数据聚合、LLM 未配置/已配置脱敏响应。
+- `docs/orchestration/ROUND20_REPORT.md` 已记录实现、验证和残余风险。
+- Round 20 主线程验收：`python -m compileall backend\aitest_platform` 通过；`python -m pytest backend\tests\test_round20_dashboard_topbar.py -q` 4 passed；QA 子线程全量后端测试通过；`npm run build` 通过；Headless Chrome CDP 烟测 Dashboard/Topbar 通过且无 JS error。
+
+## 第二轮 R20 残余风险
+- LLM 状态接口默认不探测外部 provider，真实连通性仍通过 LLM 配置页连接测试验证。
+- Topbar 目前挂载时读取一次 LLM 状态，配置变更后的自动刷新可在 R21/R后续体验优化中处理。
+- Dashboard 新聚合未做大数据量性能压测；当前本地 SQLite、契约测试和浏览器烟测均通过。

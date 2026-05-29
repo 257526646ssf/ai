@@ -1,8 +1,94 @@
 import React from 'react';
 import { Bell, HelpCircle, ChevronDown, Sparkles } from 'lucide-react';
 import { useProjectContext } from '../lib/projectContext';
+import { apiGet } from '../lib/api';
 
-export default function Topbar({ activeTab, theme, setTheme }) {
+const readStatusField = (source, keys = []) => {
+  if (!source || typeof source !== 'object') return undefined;
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+};
+
+const normalizeLlmStatus = ({ status, data, error }) => {
+  if (status === 'loading') {
+    return {
+      label: '检测中',
+      modelText: '读取后端状态',
+      title: '正在读取后端 LLM 状态',
+      dotClass: 'bg-blue-500',
+      textClass: 'text-blue-600 dark:text-blue-400',
+      pulse: true
+    };
+  }
+
+  if (status === 'error') {
+    return {
+      label: '状态异常',
+      modelText: error || '点击查看配置',
+      title: error || 'LLM 状态接口不可用',
+      dotClass: 'bg-red-500',
+      textClass: 'text-red-600 dark:text-red-400',
+      pulse: false
+    };
+  }
+
+  const config = readStatusField(data, ['config', 'default_config', 'llm_config']) || {};
+  const rawStatus = String(readStatusField(data, ['status', 'state', 'runtime_status']) || '').toLowerCase();
+  const modelText = readStatusField(data, ['model', 'model_name', 'active_model'])
+    || readStatusField(config, ['model_name', 'model', 'name'])
+    || '模型待配置';
+  const configured = data?.configured ?? data?.has_config ?? Boolean(readStatusField(data, ['model', 'model_name']) || Object.keys(config).length);
+  const enabled = data?.enabled ?? data?.is_enabled ?? config?.is_enabled;
+  const connected = Boolean(data?.connected) || ['ok', 'ready', 'online', 'connected'].includes(rawStatus);
+  const reason = readStatusField(data, ['reason', 'error', 'message', 'detail']);
+
+  if (enabled === false || rawStatus.includes('disabled')) {
+    return {
+      label: '未启用',
+      modelText,
+      title: reason || 'LLM 配置存在但未启用',
+      dotClass: 'bg-amber-500',
+      textClass: 'text-amber-600 dark:text-amber-400',
+      pulse: false
+    };
+  }
+
+  if (!configured || rawStatus.includes('missing') || rawStatus.includes('unconfigured') || rawStatus.includes('no_config')) {
+    return {
+      label: '未配置',
+      modelText: '前往配置模型',
+      title: '尚未配置可用 LLM，点击进入 LLM 配置',
+      dotClass: 'bg-amber-500',
+      textClass: 'text-amber-600 dark:text-amber-400',
+      pulse: false
+    };
+  }
+
+  if (connected) {
+    return {
+      label: '已就绪',
+      modelText,
+      title: `当前模型：${modelText}`,
+      dotClass: 'bg-emerald-500',
+      textClass: 'text-emerald-600 dark:text-emerald-400',
+      pulse: true
+    };
+  }
+
+  return {
+    label: rawStatus.includes('fallback') ? '降级中' : '不可用',
+    modelText: reason || modelText,
+    title: reason || 'LLM 运行时当前不可用',
+    dotClass: rawStatus.includes('fallback') ? 'bg-amber-500' : 'bg-red-500',
+    textClass: rawStatus.includes('fallback') ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400',
+    pulse: false
+  };
+};
+
+export default function Topbar({ activeTab, theme, setTheme, setActiveTab }) {
   const {
     projects,
     selectedProjectId,
@@ -11,6 +97,31 @@ export default function Topbar({ activeTab, theme, setTheme }) {
     loading: projectLoading,
     error: projectError
   } = useProjectContext();
+  const [llmState, setLlmState] = React.useState({ status: 'loading', data: null, error: '' });
+
+  React.useEffect(() => {
+    const controller = new AbortController();
+    setLlmState((prev) => ({ ...prev, status: 'loading', error: '' }));
+
+    apiGet('/system/llm-status', { signal: controller.signal, timeoutMs: 8000 })
+      .then((data) => {
+        setLlmState({ status: 'ready', data: data || {}, error: '' });
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setLlmState({ status: 'error', data: null, error: error?.message || 'LLM 状态读取失败' });
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  const llmStatus = normalizeLlmStatus(llmState);
+  const openLlmConfig = () => {
+    setActiveTab?.('llmconfig');
+  };
+
   // 10种首页美学风格
   const themeOptions = [
     { id: 'basic', label: '01 基础雅致版' },
@@ -109,22 +220,32 @@ export default function Topbar({ activeTab, theme, setTheme }) {
         </div>
 
         {/* LLM 状态 */}
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--border-color)]/40 text-xs font-black text-[var(--text-secondary)]">
+        <button
+          type="button"
+          onClick={openLlmConfig}
+          title={llmStatus.title}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--border-color)]/40 text-xs font-black text-[var(--text-secondary)] hover:bg-[var(--border-color)]/60 cursor-pointer transition-all shadow-sm"
+        >
           <span>LLM 状态</span>
-          <span className="flex items-center gap-1.5 font-black text-[var(--text-primary)]">
+          <span className={`flex items-center gap-1.5 font-black ${llmStatus.textClass}`}>
             <span className="relative flex size-2 shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full size-2 bg-emerald-500"></span>
+              {llmStatus.pulse && <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${llmStatus.dotClass} opacity-75`}></span>}
+              <span className={`relative inline-flex rounded-full size-2 ${llmStatus.dotClass}`}></span>
             </span>
-            已连接
+            {llmStatus.label}
           </span>
-        </div>
+        </button>
 
         {/* 模型显示 */}
-        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--border-color)]/40 text-xs font-black text-[var(--text-primary)] hover:bg-[var(--border-color)]/60 cursor-pointer transition-all shadow-sm">
-          <span>OpenAI GPT-4o</span>
+        <button
+          type="button"
+          onClick={openLlmConfig}
+          title={llmStatus.title}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--border-color)]/40 text-xs font-black text-[var(--text-primary)] hover:bg-[var(--border-color)]/60 cursor-pointer transition-all shadow-sm max-w-[210px]"
+        >
+          <span className="truncate">{llmStatus.modelText}</span>
           <ChevronDown className="size-3 text-[var(--text-secondary)] font-black" />
-        </div>
+        </button>
 
         {/* 消息与帮助 */}
         <div className="flex items-center gap-3 text-slate-400">

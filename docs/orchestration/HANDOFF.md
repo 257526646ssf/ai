@@ -343,3 +343,18 @@
 - 总排期已落地到 `docs/orchestration/SECOND_ROUND_ROADMAP.md`。
 - 第二轮工作包从 R20 到 R32，优先完成当前本地仓库可直接交付的 P0/P1 项。
 - R20 下一步：Dashboard 剩余关键静态图表接后端事实统计，Topbar LLM 状态接后端配置和运行时状态。
+
+## R20 完成交接
+- Dashboard 后端契约已新增 `execution_trend`、`requirement_coverage`、`module_heatmap`，前端已消费这些字段并保留空态。
+- Topbar 已从 `/system/llm-status` 读取 LLM 配置与运行时状态，默认真实 LLM 关闭时显示“未启用”，不会再固定显示 `OpenAI GPT-4o`。
+- `/system/llm-status` 不调用外部 provider，响应中只包含配置布尔态、脱敏文本和 usage 统计，不返回 `api_key` 或 `api_key_ref`。
+- R20 验收证据见 `docs/orchestration/ROUND20_REPORT.md`；定向测试、前端构建、后端全量测试和 Headless Chrome CDP 烟测均通过。
+
+## R21 预备交接
+- 只读探索子线程 Nietzsche 已完成 R21 预研：AI 助手已有 `/chat` 后端调用、项目上下文和本地兜底；缺口集中在常用 Prompt 保存、最近操作回溯、整条回复复制、结构化资产入口和后端契约测试。
+- 建议 R21 worker 拆分：
+  - 后端契约 worker：`backend/aitest_platform/api/router.py`、`backend/tests/test_round21_ai_prompt.py`，负责 Prompt create/delete/favorite、chat context 扩展、recent/operation 回溯契约。
+  - AI 助手 worker：`src/components/AiAssistant.jsx`，负责整条回复复制、常用 Prompt 入口、最近操作入口、结构化行动按钮。
+  - Prompt 管理 worker：`src/pages/LlmConfig.jsx`，必要时新增 `src/components/PromptTemplatePanel.jsx`，只做配置页 PromptTemplate 管理。
+  - QA/文档 worker：`docs/orchestration/ACCEPTANCE.md`、`docs/orchestration/HANDOFF.md`、`docs/orchestration/ROUND21_REPORT.md`，负责验收记录和烟测清单。
+- R21 仍不得默认启用真实 LLM，不得保存或输出真实 `.env`、API key、token、cookie、Authorization。

@@ -84,3 +84,9 @@
 - 后端增加 Dashboard 图表所需趋势、覆盖率、模块热力和 LLM 状态契约。
 - 前端替换 Dashboard 剩余关键静态图表数据。
 - Topbar LLM 状态从后端读取，不再固定显示 `已连接 / OpenAI GPT-4o`。
+
+## 当前进展
+
+- R20 已完成并验收：Dashboard 执行趋势、需求覆盖率、模块热力图已改为后端事实驱动，Topbar LLM 状态已接 `/system/llm-status`。
+- R20 验收证据：`docs/orchestration/ROUND20_REPORT.md`。
+- 下一步进入 R21：AI 助手与 Prompt 闭环，按 `HANDOFF.md` 的 R21 预备交接继续拆分子线程。

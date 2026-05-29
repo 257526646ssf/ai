@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from aitest_platform.api.compat import patch_starlette_router_for_fastapi
@@ -608,6 +609,217 @@ def _grouped_count(session: Any, column: Any, *conditions: Any) -> dict[str, int
     return counts
 
 
+DASHBOARD_SUCCESS_STATUSES = {"pass", "passed", "success", "succeeded", "ok", "completed"}
+DASHBOARD_FAIL_STATUSES = {"fail", "failed", "error", "timeout"}
+DASHBOARD_BLOCKED_STATUSES = {"blocked", "block"}
+DASHBOARD_TREND_DAYS = 14
+DASHBOARD_HEATMAP_DIMENSIONS = [
+    {"key": "requirements", "label": "需求"},
+    {"key": "test_cases", "label": "用例"},
+    {"key": "executions", "label": "执行"},
+    {"key": "defects", "label": "缺陷"},
+]
+
+
+def _percent(part: int, total: int) -> float:
+    return round(part * 100 / total, 2) if total else 0.0
+
+
+def _status_bucket(status: Any) -> str:
+    value = str(status or "").strip().lower()
+    if value in DASHBOARD_SUCCESS_STATUSES:
+        return "passed"
+    if value in DASHBOARD_FAIL_STATUSES:
+        return "failed"
+    if value in DASHBOARD_BLOCKED_STATUSES:
+        return "blocked"
+    return "other"
+
+
+def _date_key(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "date"):
+        return value.date().isoformat()
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return None
+
+
+def _execution_trend(session: Any, project_id: int) -> dict[str, Any]:
+    today = datetime.now(timezone.utc).date()
+    start_date = today - timedelta(days=DASHBOARD_TREND_DAYS - 1)
+    points_by_date: dict[str, dict[str, Any]] = {}
+    for day_offset in range(DASHBOARD_TREND_DAYS):
+        day = start_date + timedelta(days=day_offset)
+        key = day.isoformat()
+        points_by_date[key] = {
+            "date": key,
+            "passed": 0,
+            "failed": 0,
+            "blocked": 0,
+            "other": 0,
+            "total": 0,
+            "pass_rate": 0.0,
+        }
+
+    start_at = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
+    records = session.scalars(
+        select(Execution).where(Execution.project_id == project_id, Execution.executed_at >= start_at)
+    )
+    for record in records:
+        day_key = _date_key(record.executed_at)
+        point = points_by_date.get(day_key or "")
+        if point is None:
+            continue
+        bucket = _status_bucket(record.status)
+        point[bucket] += 1
+        point["total"] += 1
+
+    points = list(points_by_date.values())
+    for point in points:
+        point["pass_rate"] = _percent(point["passed"], point["total"])
+    return {"days": DASHBOARD_TREND_DAYS, "start_date": start_date.isoformat(), "end_date": today.isoformat(), "points": points}
+
+
+def _requirement_coverage(session: Any, project_id: int) -> dict[str, Any]:
+    item_ids = list(
+        session.scalars(
+            select(RequirementItem.id).where(
+                RequirementItem.project_id == project_id,
+                RequirementItem.is_deleted.is_(False),
+            )
+        )
+    )
+    total = len(item_ids)
+    if not item_ids:
+        return {
+            "total": 0,
+            "covered": 0,
+            "partial": 0,
+            "uncovered": 0,
+            "rate": 0.0,
+            "covered_rate": 0.0,
+            "partial_rate": 0.0,
+            "uncovered_rate": 0.0,
+            "test_points": 0,
+            "test_cases": 0,
+        }
+
+    point_rows = session.execute(
+        select(TestPoint.id, TestPoint.requirement_item_id).where(
+            TestPoint.requirement_item_id.in_(item_ids),
+            TestPoint.is_deleted.is_(False),
+        )
+    ).all()
+    case_rows = session.execute(
+        select(TestCase.id, TestCase.requirement_item_id, TestCase.test_point_id).where(
+            TestCase.project_id == project_id,
+            TestCase.requirement_item_id.in_(item_ids),
+            TestCase.is_deleted.is_(False),
+        )
+    ).all()
+
+    points_by_item: dict[int, set[int]] = defaultdict(set)
+    cases_by_item: dict[int, int] = defaultdict(int)
+    covered_points_by_item: dict[int, set[int]] = defaultdict(set)
+    for point_id, item_id in point_rows:
+        points_by_item[int(item_id)].add(int(point_id))
+    for _case_id, item_id, point_id in case_rows:
+        item_key = int(item_id)
+        cases_by_item[item_key] += 1
+        if point_id is not None:
+            covered_points_by_item[item_key].add(int(point_id))
+
+    covered = 0
+    partial = 0
+    uncovered = 0
+    for item_id in item_ids:
+        item_key = int(item_id)
+        point_ids = points_by_item.get(item_key, set())
+        case_count = cases_by_item.get(item_key, 0)
+        if not point_ids and case_count == 0:
+            uncovered += 1
+        elif case_count > 0 and (not point_ids or point_ids.issubset(covered_points_by_item.get(item_key, set()))):
+            covered += 1
+        else:
+            partial += 1
+
+    return {
+        "total": total,
+        "covered": covered,
+        "partial": partial,
+        "uncovered": uncovered,
+        "rate": _percent(covered, total),
+        "covered_rate": _percent(covered, total),
+        "partial_rate": _percent(partial, total),
+        "uncovered_rate": _percent(uncovered, total),
+        "test_points": len(point_rows),
+        "test_cases": len(case_rows),
+    }
+
+
+def _module_label(value: Any) -> str:
+    module = str(value or "").strip()
+    return module or "未分组"
+
+
+def _empty_heatmap_row(module: str) -> dict[str, Any]:
+    return {"module": module, "requirements": 0, "test_cases": 0, "executions": 0, "defects": 0, "total": 0}
+
+
+def _module_heatmap(session: Any, project_id: int) -> dict[str, Any]:
+    item_rows = session.execute(
+        select(RequirementItem.id, RequirementItem.module).where(
+            RequirementItem.project_id == project_id,
+            RequirementItem.is_deleted.is_(False),
+        )
+    ).all()
+    if not item_rows:
+        return {"dimensions": DASHBOARD_HEATMAP_DIMENSIONS, "rows": []}
+
+    item_modules = {int(item_id): _module_label(module) for item_id, module in item_rows}
+    rows_by_module: dict[str, dict[str, Any]] = {}
+    for module in item_modules.values():
+        row = rows_by_module.setdefault(module, _empty_heatmap_row(module))
+        row["requirements"] += 1
+
+    item_ids = list(item_modules.keys())
+    case_counts = session.execute(
+        select(TestCase.requirement_item_id, func.count()).where(
+            TestCase.project_id == project_id,
+            TestCase.requirement_item_id.in_(item_ids),
+            TestCase.is_deleted.is_(False),
+        ).group_by(TestCase.requirement_item_id)
+    ).all()
+    execution_counts = session.execute(
+        select(Execution.requirement_item_id, func.count()).where(
+            Execution.project_id == project_id,
+            Execution.requirement_item_id.in_(item_ids),
+        ).group_by(Execution.requirement_item_id)
+    ).all()
+    defect_counts = session.execute(
+        select(Defect.requirement_item_id, func.count()).where(
+            Defect.project_id == project_id,
+            Defect.requirement_item_id.in_(item_ids),
+        ).group_by(Defect.requirement_item_id)
+    ).all()
+
+    for rows, key in ((case_counts, "test_cases"), (execution_counts, "executions"), (defect_counts, "defects")):
+        for item_id, count in rows:
+            module = item_modules.get(int(item_id))
+            if module is None:
+                continue
+            rows_by_module[module][key] += int(count or 0)
+
+    for row in rows_by_module.values():
+        row["total"] = sum(int(row[dimension["key"]] or 0) for dimension in DASHBOARD_HEATMAP_DIMENSIONS)
+
+    sorted_rows = sorted(rows_by_module.values(), key=lambda row: (-int(row["total"]), str(row["module"])))
+    return {"dimensions": DASHBOARD_HEATMAP_DIMENSIONS, "rows": sorted_rows}
+
+
 @router.get("/projects/{projectId}/dashboard")
 def project_dashboard(projectId: str):
     pid = to_int(projectId, "projectId")
@@ -646,6 +858,9 @@ def project_dashboard(projectId: str):
             "defect_status_summary": defect_status_summary,
             "defect_severity_summary": defect_severity_summary,
             "test_round_summary": test_round_summary,
+            "execution_trend": _execution_trend(session, pid),
+            "requirement_coverage": _requirement_coverage(session, pid),
+            "module_heatmap": _module_heatmap(session, pid),
             "updated_at": now_iso(),
         }
 
@@ -2659,6 +2874,128 @@ def llm_usage_statistics():
             "total_cost": 0,
             "by_module": by_module,
         }
+
+
+def _llm_usage_summary(session: Any, config_id: int | None = None) -> dict[str, Any]:
+    total_stmt = select(
+        func.count(LlmUsage.id),
+        func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+        func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+    )
+    module_stmt = select(
+        LlmUsage.module,
+        func.coalesce(func.sum(LlmUsage.input_tokens), 0),
+        func.coalesce(func.sum(LlmUsage.output_tokens), 0),
+        func.count(LlmUsage.id),
+    ).group_by(LlmUsage.module)
+    if config_id is not None:
+        total_stmt = total_stmt.where(LlmUsage.config_id == config_id)
+        module_stmt = module_stmt.where(LlmUsage.config_id == config_id)
+
+    usage_count, input_tokens, output_tokens = session.execute(total_stmt).one()
+    by_module = []
+    for module, module_input_tokens, module_output_tokens, module_count in session.execute(module_stmt).all():
+        by_module.append(
+            {
+                "module": _safe_llm_status_text(module),
+                "usage_count": int(module_count or 0),
+                "input_tokens": int(module_input_tokens or 0),
+                "output_tokens": int(module_output_tokens or 0),
+                "total_tokens": int(module_input_tokens or 0) + int(module_output_tokens or 0),
+            }
+        )
+    return {
+        "usage_count": int(usage_count or 0),
+        "input_tokens": int(input_tokens or 0),
+        "output_tokens": int(output_tokens or 0),
+        "total_tokens": int(input_tokens or 0) + int(output_tokens or 0),
+        "by_module": by_module,
+    }
+
+
+def _safe_llm_status_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    return sanitize_llm_payload(str(value))
+
+
+def _llm_config_status(config: LlmConfig) -> dict[str, Any]:
+    return {
+        "id": config.id,
+        "name": _safe_llm_status_text(config.name),
+        "model_name": _safe_llm_status_text(config.model_name),
+        "is_default": bool(config.is_default),
+        "is_enabled": bool(config.is_enabled),
+        "base_url_configured": bool(config.base_url),
+        "credential_ref_configured": bool(config.api_key_ref),
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+    }
+
+
+def _llm_status_name(config: LlmConfig | None, settings: Any) -> str:
+    if not settings.enabled:
+        return "disabled"
+    if config is None and not any((settings.base_url, settings.model, settings.api_key)):
+        return "unconfigured"
+    if not settings.base_url or not settings.model or not settings.api_key:
+        return "incomplete"
+    return "ready"
+
+
+@router.get("/system/llm-status")
+def system_llm_status():
+    with session_scope() as session:
+        config = default_llm_config(session)
+        settings = resolve_llm_settings(
+            config_base_url=config.base_url if config is not None else None,
+            config_model=config.model_name if config is not None else None,
+        )
+        enabled_configs = list(
+            session.scalars(
+                select(LlmConfig)
+                .where(LlmConfig.is_enabled.is_(True))
+                .order_by(LlmConfig.sort_order.asc(), LlmConfig.id.asc())
+                .limit(20)
+            )
+        )
+        usage = _llm_usage_summary(session)
+        selected_usage = _llm_usage_summary(session, config.id) if config is not None else _llm_usage_summary(session, -1)
+        missing = []
+        if settings.enabled:
+            if not settings.base_url:
+                missing.append("base_url")
+            if not settings.model:
+                missing.append("model")
+            if not settings.api_key:
+                missing.append("credentials")
+
+        status = {
+            "status": _llm_status_name(config, settings),
+            "enabled": bool(settings.enabled),
+            "configured": bool(settings.base_url and settings.model and settings.api_key),
+            "connected": None,
+            "provider_check": "not_performed",
+            "provider_call_performed": False,
+            "model": _safe_llm_status_text(settings.model),
+            "model_name": _safe_llm_status_text(settings.model),
+            "config_name": _safe_llm_status_text(config.name) if config is not None else None,
+            "config_id": config.id if config is not None else None,
+            "config": _llm_config_status(config) if config is not None else None,
+            "enabled_config_count": len(enabled_configs),
+            "enabled_configs": [_llm_config_status(item) for item in enabled_configs],
+            "runtime": {
+                "enabled": bool(settings.enabled),
+                "base_url_configured": bool(settings.base_url),
+                "credentials_configured": bool(settings.api_key),
+                "model_configured": bool(settings.model),
+                "missing": missing,
+            },
+            "usage": usage,
+            "selected_config_usage": selected_usage,
+            "checked_at": now_iso(),
+        }
+        return status
 
 
 @router.get("/prompt-templates")

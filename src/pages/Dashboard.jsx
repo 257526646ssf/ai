@@ -50,10 +50,250 @@ const activityIconByType = (type = '') => {
   return { icon: FileText, iconStyle: 'bg-purple-500 text-white', style: 'border-blue-500/20 text-blue-500 bg-blue-500/5' };
 };
 
+const finiteNumber = (value, fallback = 0) => {
+  if (value === null || value === undefined || value === '') return fallback;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+};
+
+const clampNumber = (value, min, max) => Math.max(min, Math.min(max, value));
+
+const readField = (source, keys = []) => {
+  if (!source || typeof source !== 'object') return undefined;
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+};
+
+const readArrayField = (source, keys = []) => {
+  if (Array.isArray(source)) return source;
+  const value = readField(source, keys);
+  return Array.isArray(value) ? value : [];
+};
+
+const compactNumberText = (value) => {
+  const num = finiteNumber(value, 0);
+  if (num >= 10000) return `${(num / 10000).toFixed(num >= 100000 ? 0 : 1)}W`;
+  if (num >= 1000) return `${(num / 1000).toFixed(num >= 10000 ? 0 : 1)}K`;
+  return String(Math.round(num));
+};
+
+const percentText = (value) => `${clampNumber(finiteNumber(value, 0), 0, 100).toFixed(1)}%`;
+
+const normalizePercentValue = (value) => {
+  const num = finiteNumber(value, NaN);
+  if (!Number.isFinite(num)) return null;
+  return clampNumber(num <= 1 ? num * 100 : num, 0, 100);
+};
+
+const formatTrendLabel = (value, index) => {
+  if (value === null || value === undefined || value === '') return String(index + 1).padStart(2, '0');
+  const text = String(value);
+  const isoDate = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoDate) return `${isoDate[2]}-${isoDate[3]}`;
+  return text.length > 6 ? text.slice(-6) : text;
+};
+
+const readSeriesValue = (series, keys, index) => {
+  if (Array.isArray(series)) {
+    const matched = series.find((item) => {
+      const name = String(readField(item, ['key', 'name', 'type', 'status', 'label']) || '').toLowerCase();
+      return keys.some((key) => name.includes(key));
+    });
+    const values = readArrayField(matched, ['data', 'values', 'points']);
+    return finiteNumber(values[index], 0);
+  }
+  const values = readArrayField(series, keys);
+  return finiteNumber(values[index], 0);
+};
+
+const normalizeTrendPoint = (item, index) => {
+  if (Array.isArray(item)) {
+    const hasLabel = Number.isNaN(Number(item[0]));
+    const offset = hasLabel ? 1 : 0;
+    return {
+      label: formatTrendLabel(hasLabel ? item[0] : undefined, index),
+      pass: finiteNumber(item[offset], 0),
+      fail: finiteNumber(item[offset + 1], 0),
+      block: finiteNumber(item[offset + 2], 0),
+      other: finiteNumber(item[offset + 3], 0)
+    };
+  }
+
+  const pass = finiteNumber(readField(item, ['pass', 'passed', 'success', 'succeeded', 'completed', 'ok']), 0);
+  const fail = finiteNumber(readField(item, ['fail', 'failed', 'failure', 'error', 'errors']), 0);
+  const block = finiteNumber(readField(item, ['block', 'blocked', 'blocking']), 0);
+  const explicitOther = readField(item, ['other', 'others', 'pending', 'skipped', 'unexecuted', 'not_run', 'unknown']);
+  const total = finiteNumber(readField(item, ['total', 'count']), 0);
+
+  return {
+    label: formatTrendLabel(readField(item, ['label', 'date', 'day', 'period', 'name', 'time']), index),
+    pass,
+    fail,
+    block,
+    other: explicitOther === undefined ? Math.max(total - pass - fail - block, 0) : finiteNumber(explicitOther, 0)
+  };
+};
+
+const normalizeExecutionTrend = (payload) => {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload.map(normalizeTrendPoint).slice(-14);
+  const labels = readArrayField(payload, ['labels', 'dates', 'days', 'periods']);
+  if (labels.length) {
+    const series = payload.series || payload;
+    return labels.map((label, index) => ({
+      label: formatTrendLabel(label, index),
+      pass: readSeriesValue(series, ['pass', 'passed', 'success', 'succeeded', 'completed', 'ok'], index),
+      fail: readSeriesValue(series, ['fail', 'failed', 'failure', 'error', 'errors'], index),
+      block: readSeriesValue(series, ['block', 'blocked', 'blocking'], index),
+      other: readSeriesValue(series, ['other', 'others', 'pending', 'skipped', 'unexecuted', 'not_run', 'unknown'], index)
+    })).slice(-14);
+  }
+
+  return readArrayField(payload, ['items', 'list', 'records', 'rows', 'points', 'data'])
+    .map(normalizeTrendPoint)
+    .slice(-14);
+};
+
+const emptyCoverage = () => ({
+  hasData: false,
+  total: 0,
+  covered: 0,
+  partial: 0,
+  uncovered: 0,
+  coveredPercent: 0,
+  partialPercent: 0,
+  uncoveredPercent: 0
+});
+
+const normalizeRequirementCoverage = (payload) => {
+  if (!payload || (Array.isArray(payload) && payload.length === 0)) return emptyCoverage();
+
+  if (Array.isArray(payload)) {
+    const counts = payload.reduce((acc, item, index) => {
+      if (Array.isArray(item)) {
+        const [label, count] = Number.isNaN(Number(item[0])) ? item : [index, item[0]];
+        const key = String(label).toLowerCase();
+        if (key.includes('partial') || key.includes('部分')) acc.partial += finiteNumber(count, 0);
+        else if (key.includes('uncovered') || key.includes('missing') || key.includes('not') || key.includes('未')) acc.uncovered += finiteNumber(count, 0);
+        else acc.covered += finiteNumber(count, 0);
+        return acc;
+      }
+
+      const key = String(readField(item, ['status', 'type', 'name', 'label', 'coverage']) || '').toLowerCase();
+      const count = finiteNumber(readField(item, ['count', 'value', 'total']), 0);
+      if (key.includes('partial') || key.includes('部分')) acc.partial += count;
+      else if (key.includes('uncovered') || key.includes('missing') || key.includes('not') || key.includes('未')) acc.uncovered += count;
+      else acc.covered += count;
+      return acc;
+    }, { covered: 0, partial: 0, uncovered: 0 });
+    const total = counts.covered + counts.partial + counts.uncovered;
+    return total > 0
+      ? {
+          hasData: true,
+          total,
+          ...counts,
+          coveredPercent: (counts.covered / total) * 100,
+          partialPercent: (counts.partial / total) * 100,
+          uncoveredPercent: (counts.uncovered / total) * 100
+        }
+      : emptyCoverage();
+  }
+
+  const entries = readArrayField(payload, ['items', 'list', 'records', 'rows', 'data']);
+  if (entries.length) return normalizeRequirementCoverage(entries);
+
+  const covered = finiteNumber(readField(payload, ['covered', 'covered_count', 'full', 'full_covered', 'linked', 'passed']), 0);
+  const partial = finiteNumber(readField(payload, ['partial', 'partial_count', 'partially_covered']), 0);
+  const uncoveredValue = readField(payload, ['uncovered', 'uncovered_count', 'missing', 'missing_count', 'not_covered', 'notCovered']);
+  const explicitTotal = finiteNumber(readField(payload, ['total', 'requirement_total', 'requirement_items', 'all']), 0);
+  const uncovered = uncoveredValue === undefined ? Math.max(explicitTotal - covered - partial, 0) : finiteNumber(uncoveredValue, 0);
+  const total = explicitTotal || covered + partial + uncovered;
+  const explicitRate = normalizePercentValue(readField(payload, ['coverage_rate', 'covered_rate', 'rate', 'percent', 'percentage']));
+  const coveredPercent = explicitRate ?? (total > 0 ? (covered / total) * 100 : 0);
+  const partialPercent = total > 0 ? (partial / total) * 100 : 0;
+  const uncoveredPercent = total > 0 ? (uncovered / total) * 100 : Math.max(0, 100 - coveredPercent - partialPercent);
+
+  return total > 0 || explicitRate !== null
+    ? {
+        hasData: true,
+        total,
+        covered,
+        partial,
+        uncovered,
+        coveredPercent,
+        partialPercent,
+        uncoveredPercent
+      }
+    : emptyCoverage();
+};
+
+const normalizeModuleHeatmap = (payload) => {
+  const defaultDimensions = ['需求', '用例', '执行', '缺陷'];
+  if (!payload || (Array.isArray(payload) && payload.length === 0)) return { dimensions: defaultDimensions, rows: [] };
+
+  const configuredDimensions = Array.isArray(payload) ? [] : readArrayField(payload, ['dimensions', 'columns', 'metrics']);
+  const dimensions = (configuredDimensions.length
+    ? configuredDimensions
+    : defaultDimensions
+  ).map((item) => String(readField(item, ['label', 'name', 'key']) || item));
+
+  const matrix = readArrayField(payload, ['data', 'matrix', 'values']);
+  const moduleLabels = readArrayField(payload, ['modules', 'module_names', 'labels']);
+  const rowPayload = Array.isArray(payload)
+    ? payload
+    : (moduleLabels.length && matrix.length
+      ? moduleLabels.map((module, index) => ({
+          module: readField(module, ['module', 'name', 'label', 'module_name']) || module,
+          values: matrix[index]
+        }))
+      : readArrayField(payload, ['rows', 'items', 'list', 'records', 'modules']));
+
+  const metricKeys = [
+    ['requirements', 'requirement_items', 'requirement_count', 'req', '需求'],
+    ['test_cases', 'cases', 'case_count', '用例'],
+    ['executions', 'execution_count', 'runs', '执行'],
+    ['defects', 'defect_count', 'bugs', '缺陷']
+  ];
+
+  const rows = rowPayload.map((row, rowIndex) => {
+    const label = String(readField(row, ['module', 'module_name', 'name', 'label', 'title']) || `模块 ${rowIndex + 1}`);
+    const values = readField(row, ['values', 'cells', 'data', 'metrics']);
+    const cells = dimensions.map((dim, dimIndex) => {
+      if (Array.isArray(values)) {
+        const cell = values[dimIndex];
+        return finiteNumber(readField(cell, ['value', 'count', 'heat']) ?? cell, 0);
+      }
+      if (values && typeof values === 'object') {
+        return finiteNumber(readField(values, [String(dim), String(dim).toLowerCase(), ...(metricKeys[dimIndex] || [])]), 0);
+      }
+      return finiteNumber(readField(row, metricKeys[dimIndex] || [String(dim), String(dim).toLowerCase()]), 0);
+    });
+    return { label, cells };
+  }).filter((row) => row.label && row.cells.some((value) => value > 0)).slice(0, 8);
+
+  return { dimensions, rows };
+};
+
+const heatmapThemeRgb = (theme) => {
+  switch (theme) {
+    case 'clickhouse': return '234, 179, 8';
+    case 'brutalist': return '0, 0, 0';
+    case 'cyber-glass': return '6, 182, 212';
+    case 'dark': return '37, 99, 235';
+    case 'linear': return '92, 92, 214';
+    case 'editorial': return '28, 25, 23';
+    case 'ibm': return '15, 98, 254';
+    case 'airtable': return '37, 99, 235';
+    case 'notion': return '55, 53, 47';
+    default: return '79, 70, 229';
+  }
+};
+
 export default function Dashboard({ theme }) {
   const { selectedProject, loading: projectLoading, error: projectError } = useProjectContext();
-  const [progressValue, setProgressValue] = React.useState(0);
-  const [casesCount, setCasesCount] = React.useState({ covered: 0, partial: 0, uncovered: 0 });
   const [hoveredRow, setHoveredRow] = React.useState(null);
   const [hoveredCol, setHoveredCol] = React.useState(null);
   const [reloadKey, setReloadKey] = React.useState(0);
@@ -65,39 +305,6 @@ export default function Dashboard({ theme }) {
     updatedAt: null,
     error: ''
   });
-
-  React.useEffect(() => {
-    let start = 0;
-    const end = 78.4;
-    const duration = 1000;
-    const stepTime = 15;
-    const steps = duration / stepTime;
-    const increment = end / steps;
-    
-    const covEnd = 977;
-    const partEnd = 184;
-    const uncovEnd = 87;
-    
-    const timer = setInterval(() => {
-      start += increment;
-      if (start >= end) {
-        setProgressValue(end);
-        setCasesCount({ covered: covEnd, partial: partEnd, uncovered: uncovEnd });
-        clearInterval(timer);
-      } else {
-        const curProgress = Number(start.toFixed(1));
-        setProgressValue(curProgress);
-        const ratio = start / end;
-        setCasesCount({
-          covered: Math.floor(covEnd * ratio),
-          partial: Math.floor(partEnd * ratio),
-          uncovered: Math.floor(uncovEnd * ratio)
-        });
-      }
-    }, stepTime);
-    
-    return () => clearInterval(timer);
-  }, []);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -178,6 +385,45 @@ export default function Dashboard({ theme }) {
   };
 
   const chartColor = getThemeChartColors();
+  const trendPoints = normalizeExecutionTrend(dashboardData?.execution_trend);
+  const trendHasData = trendPoints.length > 0;
+  const trendMax = Math.max(1, ...trendPoints.flatMap((point) => [point.pass, point.fail, point.block, point.other]));
+  const trendScaleLabels = [trendMax, trendMax * 0.75, trendMax * 0.5, trendMax * 0.25, 0].map(compactNumberText);
+  const trendChart = { left: 40, right: 500, top: 20, bottom: 140 };
+  const trendX = (index) => (trendPoints.length <= 1
+    ? (trendChart.left + trendChart.right) / 2
+    : trendChart.left + index * ((trendChart.right - trendChart.left) / (trendPoints.length - 1)));
+  const trendY = (value) => trendChart.bottom - (finiteNumber(value, 0) / trendMax) * (trendChart.bottom - trendChart.top);
+  const trendCoordinates = (key) => trendPoints.map((point, index) => [trendX(index), trendY(point[key])]);
+  const trendLinePath = (key) => trendCoordinates(key).map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`).join(' ');
+  const trendAreaPath = (key) => {
+    const coordinates = trendCoordinates(key);
+    if (!coordinates.length) return '';
+    const line = coordinates.map(([x, y], index) => `${index === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`).join(' ');
+    const first = coordinates[0];
+    const last = coordinates[coordinates.length - 1];
+    return `${line} L ${last[0].toFixed(1)} ${trendChart.bottom} L ${first[0].toFixed(1)} ${trendChart.bottom} Z`;
+  };
+  const trendSeries = [
+    { key: 'pass', color: 'var(--accent-color)', width: 2.2 },
+    { key: 'fail', color: chartColor.fail, width: 1.8 },
+    { key: 'block', color: chartColor.block, width: 1.6 },
+    { key: 'other', color: chartColor.unexec === 'var(--border-color)' ? '#8e9aaf' : chartColor.unexec, width: 1.4 }
+  ];
+  const requirementCoverage = normalizeRequirementCoverage(dashboardData?.requirement_coverage);
+  const coverageTotal = requirementCoverage.total || finiteNumber(dashboardData?.requirement_items, 0);
+  const coverageCoveredDash = requirementCoverage.hasData ? clampNumber(requirementCoverage.coveredPercent, 0, 100) : 0;
+  const coveragePartialDash = requirementCoverage.hasData ? clampNumber(requirementCoverage.partialPercent, 0, 100 - coverageCoveredDash) : 0;
+  const coverageRows = [
+    { label: '已覆盖', count: requirementCoverage.covered, percent: requirementCoverage.coveredPercent, colorClass: 'bg-[var(--accent-color)] animate-pulse' },
+    { label: '部分覆盖', count: requirementCoverage.partial, percent: requirementCoverage.partialPercent, colorClass: 'bg-[#f59e0b]' },
+    { label: '未覆盖', count: requirementCoverage.uncovered, percent: requirementCoverage.uncoveredPercent, colorClass: 'bg-[var(--border-color)]' }
+  ];
+  const moduleHeatmap = normalizeModuleHeatmap(dashboardData?.module_heatmap);
+  const heatmapRows = moduleHeatmap.rows;
+  const heatmapDimensions = moduleHeatmap.dimensions;
+  const heatmapMax = Math.max(0, ...heatmapRows.flatMap((row) => row.cells));
+  const heatmapGridStyle = { gridTemplateColumns: `minmax(0, 1.2fr) repeat(${heatmapDimensions.length}, minmax(0, 1fr))` };
   const executionSummary = dashboardData?.execution_summary || {};
   const apiExecutionSummary = dashboardData?.api_execution_summary || {};
   const autoExecutionSummary = dashboardData?.auto_execution_summary || {};
@@ -212,14 +458,6 @@ export default function Dashboard({ theme }) {
     { label: '接口测试库总数', value: numberText(dashboardData?.api_test_libs, '186'), change: dashboardData ? `接口 ${numberText(dashboardData?.api_endpoints, '0')}` : '↑ 4', icon: Network, color: 'text-indigo-500 bg-indigo-500/10' },
     { label: '自动化脚本总数', value: numberText(dashboardData?.auto_case_files, '842'), change: dashboardData ? `项目 ${numberText(dashboardData?.auto_projects, '0')}` : '↑ 27', icon: Cpu, color: 'text-slate-500 bg-slate-500/10' },
     { label: '性能测试方案总数', value: numberText(dashboardData?.perf_plans, '24'), change: dashboardData ? `结果 ${numberText(dashboardData?.perf_results, '0')}` : '↑ 1', icon: Gauge, color: 'text-rose-500 bg-rose-500/10' },
-  ];
-
-  // ======================== 热力图数据 ========================
-  const modules = ['认证模块', '交易模块', '知识库', '插件服务', '用户中心', '计费系统', '通知系统', '报表系统'];
-  const dimensions = ['需求', '用例', '执行', '缺陷'];
-  const heatmapData = [
-    [4, 3, 2, 1], [3, 4, 3, 2], [2, 3, 1, 1], [1, 2, 2, 1],
-    [3, 3, 4, 2], [2, 2, 3, 3], [1, 1, 2, 1], [2, 2, 1, 1]
   ];
 
   // ======================== 最近活动数据 ========================
@@ -421,100 +659,103 @@ export default function Dashboard({ theme }) {
               <line x1="40" y1="140" x2="500" y2="140" stroke="var(--border-color)" strokeWidth="1" />
 
               {/* 轴刻度 */}
-              <text x="30" y="24" textAnchor="end" stroke="var(--bg-card)" strokeWidth="2.5" paintOrder="stroke fill" className="text-[11px] fill-current text-[var(--text-primary)] font-black">1.5K</text>
-              <text x="30" y="54" textAnchor="end" stroke="var(--bg-card)" strokeWidth="2.5" paintOrder="stroke fill" className="text-[11px] fill-current text-[var(--text-primary)] font-black">1.2K</text>
-              <text x="30" y="84" textAnchor="end" stroke="var(--bg-card)" strokeWidth="2.5" paintOrder="stroke fill" className="text-[11px] fill-current text-[var(--text-primary)] font-black">900</text>
-              <text x="30" y="114" textAnchor="end" stroke="var(--bg-card)" strokeWidth="2.5" paintOrder="stroke fill" className="text-[11px] fill-current text-[var(--text-primary)] font-black">600</text>
-              <text x="30" y="144" textAnchor="end" stroke="var(--bg-card)" strokeWidth="2.5" paintOrder="stroke fill" className="text-[11px] fill-current text-[var(--text-primary)] font-black">300</text>
+              {trendScaleLabels.map((label, index) => (
+                <text
+                  key={index}
+                  x="30"
+                  y={24 + index * 30}
+                  textAnchor="end"
+                  stroke="var(--bg-card)"
+                  strokeWidth="2.5"
+                  paintOrder="stroke fill"
+                  className="text-[11px] fill-current text-[var(--text-primary)] font-black"
+                >
+                  {label}
+                </text>
+              ))}
 
-              {Array.from({ length: 14 }).map((_, i) => {
-                const x = 40 + i * (460 / 13);
-                const day = String(7 + i).padStart(2, '0');
-                return (
-                  <text key={i} x={x} y="154" textAnchor="middle" stroke="var(--bg-card)" strokeWidth="2.5" paintOrder="stroke fill" className="text-[11px] fill-current text-[var(--text-primary)] font-black">
-                    {day}
-                  </text>
-                );
-              })}
+              {trendPoints.map((point, index) => (
+                <text
+                  key={`${point.label}-${index}`}
+                  x={trendX(index)}
+                  y="154"
+                  textAnchor="middle"
+                  stroke="var(--bg-card)"
+                  strokeWidth="2.5"
+                  paintOrder="stroke fill"
+                  className="text-[11px] fill-current text-[var(--text-primary)] font-black"
+                >
+                  {point.label}
+                </text>
+              ))}
 
-              {/* 折线1：通过 (大厂主题色面积图) */}
-              <path 
-                d="M 40 85 L 75 75 L 110 65 L 145 68 L 180 50 L 215 62 L 250 50 L 285 58 L 320 48 L 355 52 L 390 42 L 425 45 L 460 55 L 500 45" 
-                fill="none" stroke="var(--accent-color)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="path-drawn"
-              />
-              <path 
-                d="M 40 85 L 75 75 L 110 65 L 145 68 L 180 50 L 215 62 L 250 50 L 285 58 L 320 48 L 355 52 L 390 42 L 425 45 L 460 55 L 500 45" 
-                fill="none" stroke="var(--accent-color)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="svg-pulse-path"
-                opacity="0.8"
-              />
-              <path
-                d="M 40 85 L 75 75 L 110 65 L 145 68 L 180 50 L 215 62 L 250 50 L 285 58 L 320 48 L 355 52 L 390 42 L 425 45 L 460 55 L 500 45 L 500 140 L 40 140 Z"
-                fill="url(#grad_dashboard_pass)" opacity="0.15"
-              />
               <defs>
                 <linearGradient id="grad_dashboard_pass" x1="0%" y1="0%" x2="0%" y2="100%">
                   <stop offset="0%" stopColor="var(--accent-color)" />
                   <stop offset="100%" stopColor="var(--accent-color)" stopOpacity="0" />
                 </linearGradient>
               </defs>
-              {[
-                [40, 85], [75, 75], [110, 65], [145, 68], [180, 50], [215, 62], 
-                [250, 50], [285, 58], [320, 48], [355, 52], [390, 42], [425, 45], [460, 55], [500, 45]
-              ].map(([cx, cy], i) => (
-                <circle 
-                  key={i} 
-                  cx={cx} 
-                  cy={cy} 
-                  r="2.5" 
-                  fill="var(--bg-card)" 
-                  stroke="var(--accent-color)" 
-                  strokeWidth="1.5" 
-                  style={{
-                    transformOrigin: `${cx}px ${cy}px`,
-                    animation: 'scaleUpBounce 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
-                    animationDelay: `${i * 60 + 300}ms`,
-                    opacity: 0
-                  }}
-                />
-              ))}
-              {/* 最后一个通过点的雷达呼吸灯 */}
-              <circle cx="500" cy="45" r="5" fill="var(--accent-color)" opacity="0.35" className="animate-ping" pointerEvents="none" />
-              <circle cx="500" cy="45" r="3" fill="var(--accent-color)" opacity="0.15" className="telemetry-indicator-pulse" pointerEvents="none" />
 
-              {/* 折线2：失败 */}
-              <path 
-                d="M 40 115 L 75 110 L 110 102 L 145 105 L 180 100 L 215 102 L 250 103 L 285 98 L 320 100 L 355 98 L 390 92 L 425 90 L 460 95 L 500 97" 
-                fill="none" stroke={chartColor.fail} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="path-drawn"
-              />
-              <path 
-                d="M 40 115 L 75 110 L 110 102 L 145 105 L 180 100 L 215 102 L 250 103 L 285 98 L 320 100 L 355 98 L 390 92 L 425 90 L 460 95 L 500 97" 
-                fill="none" stroke={chartColor.fail} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="svg-pulse-path"
-                opacity="0.8"
-              />
-              {[
-                [40, 115], [75, 110], [110, 102], [145, 105], [180, 100], [215, 102], 
-                [250, 103], [285, 98], [320, 100], [355, 98], [390, 92], [425, 90], [460, 95], [500, 97]
-              ].map(([cx, cy], i) => (
-                <circle 
-                  key={i} 
-                  cx={cx} 
-                  cy={cy} 
-                  r="2" 
-                  fill="var(--bg-card)" 
-                  stroke={chartColor.fail} 
-                  strokeWidth="1.2" 
-                  style={{
-                    transformOrigin: `${cx}px ${cy}px`,
-                    animation: 'scaleUpBounce 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
-                    animationDelay: `${i * 60 + 500}ms`,
-                    opacity: 0
-                  }}
+              {trendHasData && (
+                <path
+                  d={trendAreaPath('pass')}
+                  fill="url(#grad_dashboard_pass)"
+                  opacity="0.15"
                 />
+              )}
+
+              {trendHasData && trendSeries.map((series, seriesIndex) => (
+                <React.Fragment key={series.key}>
+                  <path
+                    d={trendLinePath(series.key)}
+                    fill="none"
+                    stroke={series.color}
+                    strokeWidth={series.width}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="path-drawn"
+                  />
+                  <path
+                    d={trendLinePath(series.key)}
+                    fill="none"
+                    stroke={series.color}
+                    strokeWidth={series.width}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="svg-pulse-path"
+                    opacity="0.7"
+                  />
+                  {trendCoordinates(series.key).map(([cx, cy], index) => (
+                    <circle
+                      key={index}
+                      cx={cx}
+                      cy={cy}
+                      r={seriesIndex === 0 ? 2.5 : 2}
+                      fill="var(--bg-card)"
+                      stroke={series.color}
+                      strokeWidth={seriesIndex === 0 ? 1.5 : 1.2}
+                      style={{
+                        transformOrigin: `${cx}px ${cy}px`,
+                        animation: 'scaleUpBounce 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
+                        animationDelay: `${index * 45 + 260 + seriesIndex * 80}ms`,
+                        opacity: 0
+                      }}
+                    />
+                  ))}
+                  {trendCoordinates(series.key).slice(-1).map(([cx, cy]) => (
+                    <React.Fragment key="last">
+                      <circle cx={cx} cy={cy} r="5" fill={series.color} opacity="0.28" className="animate-ping" pointerEvents="none" />
+                      <circle cx={cx} cy={cy} r="3" fill={series.color} opacity="0.15" className="telemetry-indicator-pulse" pointerEvents="none" />
+                    </React.Fragment>
+                  ))}
+                </React.Fragment>
               ))}
-              {/* 最后一个失败点的雷达呼吸灯 */}
-              <circle cx="500" cy="97" r="5" fill={chartColor.fail} opacity="0.35" className="animate-ping" pointerEvents="none" />
-              <circle cx="500" cy="97" r="3" fill={chartColor.fail} opacity="0.15" className="telemetry-indicator-pulse" pointerEvents="none" />
             </svg>
+            {!trendHasData && (
+              <div className="absolute inset-0 flex items-center justify-center text-[11px] font-black text-[var(--text-secondary)]">
+                暂无后端趋势数据
+              </div>
+            )}
           </div>
         </div>
 
@@ -531,52 +772,43 @@ export default function Dashboard({ theme }) {
               <div className="sonar-ripple-circle sonar-ripple-circle-delay"></div>
               <svg className="w-full h-full transform -rotate-90 relative z-10" viewBox="0 0 36 36">
                 <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--border-color)" strokeWidth="3" />
-                <circle cx="18" cy="18" r="15.915" fill="none" stroke="#f59e0b" strokeWidth="3.2" 
-                  strokeDasharray={`${(progressValue * 14.8) / 78.4} ${100 - (progressValue * 14.8) / 78.4}`} 
-                  strokeDashoffset={-(progressValue * 78.4) / 78.4} 
+                <circle cx="18" cy="18" r="15.915" fill="none" stroke="#f59e0b" strokeWidth="3.2"
+                  strokeDasharray={`${coveragePartialDash} ${100 - coveragePartialDash}`}
+                  strokeDashoffset={-coverageCoveredDash}
                   className="transition-all duration-100 ease-out"
                 />
-                <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--accent-color)" strokeWidth="3.2" 
-                  strokeDasharray={`${progressValue} ${100 - progressValue}`} 
-                  strokeDashoffset="0" 
+                <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--accent-color)" strokeWidth="3.2"
+                  strokeDasharray={`${coverageCoveredDash} ${100 - coverageCoveredDash}`}
+                  strokeDashoffset="0"
                   className="transition-all duration-100 ease-out"
                 />
                 <path d="M18,18 L18,2 A16,16 0 0,1 30,10 Z" fill="var(--accent-glow)" className="radar-sweeper-beam" />
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
-                <span className="text-[13.5px] font-black leading-none text-[var(--text-primary)]">{progressValue}%</span>
-                <span className="text-[8px] text-[var(--text-secondary)] opacity-60 mt-1 leading-none">已覆盖</span>
+                <span className="text-[13.5px] font-black leading-none text-[var(--text-primary)]">{requirementCoverage.hasData ? percentText(requirementCoverage.coveredPercent) : '--'}</span>
+                <span className="text-[8px] text-[var(--text-secondary)] opacity-60 mt-1 leading-none">{requirementCoverage.hasData ? '已覆盖' : '暂无数据'}</span>
               </div>
             </div>
 
             {/* 右侧指标说明 - 联动滚动 */}
             <div className="flex-1 pl-3.5 space-y-2 text-[9px] font-bold text-[var(--text-primary)]">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <span className="size-2 rounded-full shrink-0 bg-[var(--accent-color)] animate-pulse"></span>
-                  <span className="opacity-80">已覆盖</span>
+              {coverageRows.map((item) => (
+                <div key={item.label} className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`size-2 rounded-full shrink-0 ${item.colorClass}`}></span>
+                    <span className="opacity-80">{item.label}</span>
+                  </div>
+                  <span>
+                    {requirementCoverage.hasData ? numberText(item.count, '0') : '--'}{' '}
+                    <span className="opacity-45 font-normal">({requirementCoverage.hasData ? percentText(item.percent) : '--'})</span>
+                  </span>
                 </div>
-                <span>{casesCount.covered} <span className="opacity-45 font-normal">({Math.round(progressValue)}%)</span></span>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <span className="size-2 rounded-full shrink-0 bg-[#f59e0b]"></span>
-                  <span className="opacity-80">部分覆盖</span>
-                </div>
-                <span>{casesCount.partial} <span className="opacity-45 font-normal">(15%)</span></span>
-              </div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5">
-                  <span className="size-2 rounded-full shrink-0 bg-[var(--border-color)]"></span>
-                  <span className="opacity-80">未覆盖</span>
-                </div>
-                <span>{casesCount.uncovered} <span className="opacity-45 font-normal">(7%)</span></span>
-              </div>
+              ))}
             </div>
           </div>
 
           <div className="border-t border-[var(--border-color)] pt-2 text-right">
-            <span className="text-[9px] text-[var(--text-secondary)] opacity-50">需求总数：{numberText(dashboardData?.requirement_items, '1,248')}</span>
+            <span className="text-[9px] text-[var(--text-secondary)] opacity-50">需求总数：{numberText(coverageTotal, '0')}</span>
           </div>
         </div>
 
@@ -588,9 +820,9 @@ export default function Dashboard({ theme }) {
 
           <div>
             {/* 十字列标题高亮 */}
-            <div className="grid grid-cols-5 text-xs font-black text-center mb-2.5 py-1.5 rounded bg-[var(--border-color)]/40 text-[var(--text-primary)]">
+            <div className="grid text-xs font-black text-center mb-2.5 py-1.5 rounded bg-[var(--border-color)]/40 text-[var(--text-primary)]" style={heatmapGridStyle}>
               <div></div>
-              {dimensions.map((dim, idx) => {
+              {heatmapDimensions.map((dim, idx) => {
                 const isColHovered = hoveredCol === idx;
                 return (
                   <div 
@@ -607,11 +839,12 @@ export default function Dashboard({ theme }) {
             <div className="relative overflow-hidden rounded-lg p-0.5">
               <div className="absolute left-0 w-full h-[2.5px] bg-gradient-to-r from-transparent via-[var(--accent-color)] to-transparent pointer-events-none animate-scan-y z-10" />
               
-              <div className="space-y-2 relative z-0">
-                {modules.map((mod, rowIdx) => {
+              {heatmapRows.length ? (
+                <div className="space-y-2 relative z-0">
+                {heatmapRows.map((row, rowIdx) => {
                   const isRowHovered = hoveredRow === rowIdx;
                   return (
-                    <div key={rowIdx} className="grid grid-cols-5 items-center gap-1 text-center">
+                    <div key={row.label} className="grid items-center gap-1 text-center" style={heatmapGridStyle}>
                       {/* 十字行标题高亮 */}
                       <span 
                         className={`text-[11px] font-black text-left truncate pr-1 transition-all duration-200 ${
@@ -620,25 +853,15 @@ export default function Dashboard({ theme }) {
                             : 'text-[var(--text-primary)] opacity-85'
                         }`}
                       >
-                        {mod}
+                        {row.label}
                       </span>
-                      {heatmapData[rowIdx].map((val, colIdx) => {
-                        const getThemeRgb = (t) => {
-                          switch (t) {
-                            case 'clickhouse': return '234, 179, 8';
-                            case 'brutalist': return '0, 0, 0';
-                            case 'cyber-glass': return '6, 182, 212';
-                            case 'dark': return '37, 99, 235';
-                            case 'linear': return '92, 92, 214';
-                            case 'editorial': return '28, 25, 23';
-                            case 'ibm': return '15, 98, 254';
-                            case 'airtable': return '37, 99, 235';
-                            case 'notion': return '55, 53, 47';
-                            default: return '79, 70, 229'; // basic
-                          }
-                        };
-                        const rgb = getThemeRgb(theme);
-                        const fillStyle = { backgroundColor: `rgba(${rgb}, ${0.12 + val * 0.19})` };
+                      {row.cells.map((rawValue, colIdx) => {
+                        const level = heatmapMax > 4
+                          ? Math.ceil((finiteNumber(rawValue, 0) / heatmapMax) * 4)
+                          : Math.round(finiteNumber(rawValue, 0));
+                        const val = clampNumber(level, 0, 4);
+                        const rgb = heatmapThemeRgb(theme);
+                        const fillStyle = { backgroundColor: `rgba(${rgb}, ${val > 0 ? 0.10 + val * 0.18 : 0.06})` };
                         
                         // 部署多频波段闪烁
                         const pulseClass = val === 4 
@@ -673,14 +896,19 @@ export default function Dashboard({ theme }) {
                                 ? 'scale-125 border-[var(--accent-color)] shadow-[0_0_10px_var(--accent-glow)] z-20' 
                                 : 'hover:scale-115'
                             }`}
-                            title={`${mod} - ${dimensions[colIdx]}: 热度 ${val}`}
+                            title={`${row.label} - ${heatmapDimensions[colIdx]}: ${numberText(rawValue, '0')}`}
                           />
                         );
                       })}
                     </div>
                   );
                 })}
-              </div>
+                </div>
+              ) : (
+                <div className="min-h-[150px] flex items-center justify-center text-[11px] font-black text-[var(--text-secondary)]">
+                  暂无模块热力数据
+                </div>
+              )}
             </div>
           </div>
 
@@ -691,7 +919,7 @@ export default function Dashboard({ theme }) {
               <span className="w-20 h-2 rounded-full border border-[var(--border-color)] thermal-legend-flow" />
               <span>高</span>
             </div>
-            <span className="text-[var(--text-secondary)] font-extrabold">需求总数：{numberText(dashboardData?.requirement_items, '1,248')}</span>
+            <span className="text-[var(--text-secondary)] font-extrabold">需求总数：{numberText(dashboardData?.requirement_items, '0')}</span>
           </div>
         </div>
 
