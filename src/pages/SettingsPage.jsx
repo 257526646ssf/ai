@@ -19,8 +19,10 @@ import {
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
 import { apiGet, apiPost, formatDateTime } from '../lib/api';
+import { useProjectContext } from '../lib/projectContext';
 
 export default function SettingsPage() {
+  const { selectedProject } = useProjectContext();
   const [logLevel, setLogLevel] = useState('info');
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isClearingCache, setIsClearingCache] = useState(false);
@@ -28,6 +30,7 @@ export default function SettingsPage() {
   const [maxWorkers, setMaxWorkers] = useState(8);
   const [timeoutLimit, setTimeoutLimit] = useState(30);
   const [schemaStatus, setSchemaStatus] = useState(null);
+  const [runtimeDeps, setRuntimeDeps] = useState(null);
   const [settingsApiState, setSettingsApiState] = useState({ status: 'loading', message: '' });
   
   // 危险操作安全锁
@@ -58,13 +61,15 @@ export default function SettingsPage() {
 
     async function loadSystemSettings() {
       try {
-        const [schema, preference] = await Promise.all([
+        const [schema, preference, dependencies] = await Promise.all([
           apiGet('/system/schema-status'),
-          apiGet('/system/preferences/runtime-settings').catch(() => null)
+          apiGet('/system/preferences/runtime-settings').catch(() => null),
+          apiGet('/system/runtime-dependencies').catch(() => null)
         ]);
 
         if (cancelled) return;
         setSchemaStatus(schema);
+        setRuntimeDeps(dependencies);
         const value = preference?.value || {};
         if (value.logLevel) setLogLevel(value.logLevel);
         if (Number.isFinite(Number(value.maxWorkers))) setMaxWorkers(Number(value.maxWorkers));
@@ -104,7 +109,8 @@ export default function SettingsPage() {
 
     try {
       const snapshot = await apiPost('/system/backup', {
-        name: `frontend-snapshot-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`
+        name: `frontend-snapshot-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}`,
+        project_id: selectedProject?.id || undefined
       });
       setTerminalLogs(prev => [
         ...prev,
@@ -221,7 +227,7 @@ export default function SettingsPage() {
       <div className="flex justify-between items-center bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl p-4 shadow-sm">
         <div>
           <h1 className="text-base font-bold text-[var(--text-primary)]">系统设置</h1>
-          <p className="text-[11px] text-[var(--text-secondary)] mt-1">管理系统内核配置、并发控制、调度参数以及执行本地数据库备份与危险运维操作。</p>
+          <p className="text-[11px] text-[var(--text-secondary)] mt-1">管理系统内核配置、并发控制、调度参数以及执行本地数据库备份与危险运维操作。当前项目：{selectedProject?.name || selectedProject?.code || '未选择'}</p>
         </div>
         <button 
           onClick={handleSaveSettings}
@@ -292,8 +298,10 @@ export default function SettingsPage() {
             <Settings className="size-3.5 text-slate-400" />
           </div>
           <div className="mt-2 flex flex-col">
-            <span className="text-sm font-bold text-[var(--text-primary)]">v2.5.0-Release ({schemaStatus?.status || 'demo'})</span>
-            <span className="text-[9px] opacity-50 mt-1">检查时间：{formatDateTime(schemaStatus?.checked_at)}</span>
+            <span className="text-sm font-bold text-[var(--text-primary)]">
+              Playwright {runtimeDeps?.auto_runner?.playwright?.status || 'unknown'} / JMeter {runtimeDeps?.perf_runner?.jmeter?.status || 'unknown'}
+            </span>
+            <span className="text-[9px] opacity-50 mt-1">检查时间：{formatDateTime(runtimeDeps?.checked_at || schemaStatus?.checked_at)}</span>
           </div>
         </div>
       </div>

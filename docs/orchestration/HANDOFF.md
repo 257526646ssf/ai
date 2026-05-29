@@ -312,3 +312,16 @@
 - 为真实 Playwright runner 增加依赖安装状态检测和更明确的前端错误提示。
 - 为 JMeter HTML report 提供静态文件预览或受控下载入口，而不仅是结果 HTML 摘要导出。
 - 继续减少历史演示数据区块，优先替换图表和风险列表为后端真实统计。
+
+## 第十八轮完成状态
+- Dashboard / Requirements / TestCases / Execution / Reports / Settings 已统一使用 `useProjectContext`，不再各自读取 `/projects` 后选第一个项目。
+- ApiTesting / Automation / Performance 已去除无全局项目时的项目扫描 fallback，页面以全局选择器为唯一项目来源。
+- `/projects/{projectId}/dashboard` 已扩展 API、自动化、性能、报告和状态分布统计，Dashboard 的关键指标、风险待办和执行概览优先取后端数据。
+- Reports 详情页已用后端报告 snapshot 生成通过率、缺陷分布、风险项和准出提示。
+- `/system/runtime-dependencies` 已提供 Playwright/pytest/Node/npx/JMeter 非侵入式依赖检查；Automation / Performance 前端展示状态并在缺依赖时提示。
+- `/perf-results/{resultId}/artifacts/download` 已提供性能执行 artifacts ZIP 受控下载，Performance 报告页增加 Artifacts 下载入口。
+- `docs/orchestration/ROUND18_REPORT.md` 已记录实现、验证和残余风险。
+- Round 18 主线程验收：`python -m compileall backend\aitest_platform` 通过；`npm run build` 通过；`python -m pytest backend\tests\test_round13_frontend_integration.py backend\tests\test_round11_exports.py -q` 通过。
+
+## 剩余需决策项
+- 正式 Alembic migration、Celery/Redis 异步队列、真实密钥加密存储会改变依赖、运行拓扑或迁移策略，未在本轮擅自引入；当前系统继续使用已有 schema-status、自检、脱敏和结构化 runner 降级能力。

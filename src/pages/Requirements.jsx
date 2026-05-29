@@ -19,6 +19,7 @@ import {
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
 import { apiGet, apiPost, formatDateTime, pickList } from '../lib/api';
+import { useProjectContext } from '../lib/projectContext';
 
 const mapRequirementStatus = (status) => {
   const normalized = String(status || '').toLowerCase();
@@ -76,6 +77,7 @@ const mapRequirementItem = (item) => {
 };
 
 export default function Requirements() {
+  const { selectedProject, loading: projectLoading, error: projectError } = useProjectContext();
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'workbench'
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [selectedLibIndex, setSelectedLibIndex] = useState(0);
@@ -165,13 +167,13 @@ export default function Requirements() {
     async function loadRequirementLibs() {
       setRequirementsStatus({ loading: true, message: '正在同步后端需求库...' });
       try {
-        const projectsPayload = await apiGet('/projects', { params: { page: 1, pageSize: 1 } });
-        const project = pickList(projectsPayload)[0];
+        if (projectLoading) return;
+        const project = selectedProject;
         if (!project?.id) {
           if (!cancelled) {
             setProjectContext(null);
             setRemoteLibs([]);
-            setRequirementsStatus({ loading: false, message: '后端暂无项目，显示演示需求库' });
+            setRequirementsStatus({ loading: false, message: projectError || '后端暂无项目，显示演示需求库' });
           }
           return;
         }
@@ -200,7 +202,7 @@ export default function Requirements() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [projectLoading, projectError, selectedProject]);
 
   useEffect(() => {
     let cancelled = false;

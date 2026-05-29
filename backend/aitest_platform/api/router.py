@@ -66,17 +66,18 @@ from aitest_platform.services.api_scenario_runner import (
     sanitize_scenario_mapping_definition,
     sanitize_scenario_nodes,
 )
-from aitest_platform.services.auto_runner import AutoCaseFileInput, run_auto_project
+from aitest_platform.services.auto_runner import AutoCaseFileInput, inspect_auto_runner_dependencies, run_auto_project
 from aitest_platform.services.exporting import (
     ExportPayloadError,
     build_auto_execution_artifacts_zip,
     build_auto_project_zip,
+    build_perf_result_artifacts_zip,
     export_defects,
     export_perf_result,
     export_perf_script,
     export_test_cases as export_test_cases_payload,
 )
-from aitest_platform.services.perf_runner import run_jmeter_plan, sanitize_perf_payload
+from aitest_platform.services.perf_runner import inspect_jmeter_dependency, run_jmeter_plan, sanitize_perf_payload
 from aitest_platform.services.reporting import (
     ReportingPayloadError,
     build_lightweight_conclusion,
@@ -596,18 +597,54 @@ def delete_project(projectId: str):
         return {"deleted": True, "id": project.id}
 
 
+def _grouped_count(session: Any, column: Any, *conditions: Any) -> dict[str, int]:
+    stmt = select(column, func.count()).group_by(column)
+    for condition in conditions:
+        stmt = stmt.where(condition)
+    rows = session.execute(stmt).all()
+    counts = {str(key or "unknown"): int(value or 0) for key, value in rows}
+    counts["total"] = sum(counts.values())
+    return counts
+
+
 @router.get("/projects/{projectId}/dashboard")
 def project_dashboard(projectId: str):
     pid = to_int(projectId, "projectId")
     with session_scope() as session:
         AitestRepository(session).get_project(pid)
+        api_lib_ids = select(ApiTestLib.id).where(ApiTestLib.project_id == pid, ApiTestLib.is_deleted.is_(False))
+        auto_project_ids = select(AutoProject.id).where(AutoProject.project_id == pid, AutoProject.is_deleted.is_(False))
+        execution_summary = _grouped_count(session, Execution.status, Execution.project_id == pid)
+        api_execution_summary = _grouped_count(session, ApiExecution.status, ApiExecution.lib_id.in_(api_lib_ids))
+        auto_execution_summary = _grouped_count(session, AutoExecution.status, AutoExecution.auto_project_id.in_(auto_project_ids))
+        defect_status_summary = _grouped_count(session, Defect.status, Defect.project_id == pid)
+        defect_severity_summary = _grouped_count(session, Defect.severity, Defect.project_id == pid)
+        test_round_summary = _grouped_count(session, TestRound.status, TestRound.project_id == pid)
         return {
             "project_id": pid,
             "requirement_libs": session.scalar(select(func.count()).select_from(RequirementLib).where(RequirementLib.project_id == pid, RequirementLib.is_deleted.is_(False))) or 0,
+            "requirement_documents": session.scalar(select(func.count()).select_from(RequirementDocument).where(RequirementDocument.project_id == pid, RequirementDocument.is_deleted.is_(False))) or 0,
             "requirement_items": session.scalar(select(func.count()).select_from(RequirementItem).where(RequirementItem.project_id == pid, RequirementItem.is_deleted.is_(False))) or 0,
             "test_cases": session.scalar(select(func.count()).select_from(TestCase).where(TestCase.project_id == pid, TestCase.is_deleted.is_(False))) or 0,
             "executions": session.scalar(select(func.count()).select_from(Execution).where(Execution.project_id == pid)) or 0,
             "defects": session.scalar(select(func.count()).select_from(Defect).where(Defect.project_id == pid)) or 0,
+            "api_test_libs": session.scalar(select(func.count()).select_from(ApiTestLib).where(ApiTestLib.project_id == pid, ApiTestLib.is_deleted.is_(False))) or 0,
+            "api_endpoints": session.scalar(select(func.count()).select_from(ApiEndpoint).where(ApiEndpoint.lib_id.in_(api_lib_ids), ApiEndpoint.is_deleted.is_(False))) or 0,
+            "api_test_cases": session.scalar(select(func.count()).select_from(ApiTestCase).where(ApiTestCase.lib_id.in_(api_lib_ids), ApiTestCase.is_deleted.is_(False))) or 0,
+            "api_executions": api_execution_summary["total"],
+            "auto_projects": session.scalar(select(func.count()).select_from(AutoProject).where(AutoProject.project_id == pid, AutoProject.is_deleted.is_(False))) or 0,
+            "auto_case_files": session.scalar(select(func.count()).select_from(AutoCaseFile).where(AutoCaseFile.auto_project_id.in_(auto_project_ids), AutoCaseFile.is_deleted.is_(False))) or 0,
+            "auto_executions": auto_execution_summary["total"],
+            "perf_plans": session.scalar(select(func.count()).select_from(PerfPlan).where(PerfPlan.project_id == pid, PerfPlan.is_deleted.is_(False))) or 0,
+            "perf_results": session.scalar(select(func.count()).select_from(PerfResult).where(PerfResult.project_id == pid)) or 0,
+            "reports": session.scalar(select(func.count()).select_from(Report).where(Report.project_id == pid)) or 0,
+            "test_rounds": test_round_summary["total"],
+            "execution_summary": execution_summary,
+            "api_execution_summary": api_execution_summary,
+            "auto_execution_summary": auto_execution_summary,
+            "defect_status_summary": defect_status_summary,
+            "defect_severity_summary": defect_severity_summary,
+            "test_round_summary": test_round_summary,
             "updated_at": now_iso(),
         }
 
@@ -2299,6 +2336,15 @@ def download_perf_result(planId: str, resultId: str, format: str = Query("json")
             raise HTTPException(status_code=404 if "not found" in str(exc).lower() else 400, detail=str(exc)) from exc
 
 
+@router.get("/perf-results/{resultId}/artifacts/download")
+def download_perf_result_artifacts(resultId: str):
+    with session_scope() as session:
+        try:
+            return build_perf_result_artifacts_zip(session, result_id=to_int(resultId, "resultId"))
+        except ExportPayloadError as exc:
+            raise HTTPException(status_code=404 if "not found" in str(exc).lower() else 400, detail=str(exc)) from exc
+
+
 @router.post("/perf-plans/{planId}/generate-report")
 def generate_perf_report(planId: str):
     with session_scope() as session:
@@ -2709,6 +2755,15 @@ def system_restore(payload: RestorePayload):
 @router.get("/system/schema-status")
 def system_schema_status():
     return get_schema_status()
+
+
+@router.get("/system/runtime-dependencies")
+def system_runtime_dependencies():
+    return {
+        "auto_runner": inspect_auto_runner_dependencies(),
+        "perf_runner": {"jmeter": inspect_jmeter_dependency()},
+        "checked_at": now_iso(),
+    }
 
 
 @router.get("/system/operation-logs")

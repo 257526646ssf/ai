@@ -17,6 +17,7 @@ import {
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
 import { apiGet, apiPost, downloadTextFile, formatDateTime, pickList } from '../lib/api';
+import { useProjectContext } from '../lib/projectContext';
 
 const mapCaseStatus = (status) => {
   const normalized = String(status || '').toLowerCase();
@@ -37,6 +38,7 @@ const mapBackendCase = (item) => ({
 });
 
 export default function TestCases() {
+  const { selectedProject, loading: projectLoading, error: projectError } = useProjectContext();
   const [strategy, setStrategy] = useState('standard'); // standard, boundary, risk, scenario, custom
   const [caseCount, setCaseCount] = useState(20);
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'ai-review-diff'
@@ -112,11 +114,14 @@ export default function TestCases() {
     const loadBackendCases = async () => {
       setTestcaseStatus({ loading: true, message: '正在同步后端测试用例...' });
       try {
-        const projectsPayload = await apiGet('/projects', { params: { page: 1, pageSize: 1 } });
-        const project = pickList(projectsPayload)[0];
+        if (projectLoading) return;
+        const project = selectedProject;
         if (!project?.id) {
           if (!cancelled) {
-            setTestcaseStatus({ loading: false, message: '后端暂无项目，显示演示用例' });
+            setProjectContext(null);
+            setSelectedLib(null);
+            setSelectedRequirementItem(null);
+            setTestcaseStatus({ loading: false, message: projectError || '后端暂无项目，显示演示用例' });
           }
           return;
         }
@@ -171,7 +176,7 @@ export default function TestCases() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [projectLoading, projectError, selectedProject]);
 
   const handleOpenNewCaseModal = () => {
     window.dispatchEvent(new CustomEvent('open-modal', { detail: { type: 'new-case', data: { reqId: selectedRequirementItem?.id || 'REQ-00001' } } }));

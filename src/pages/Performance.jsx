@@ -15,10 +15,8 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, downloadTextFile, formatDateTime, pickList } from '../lib/api';
+import { apiGet, apiPost, downloadBase64File, downloadTextFile, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
-
-const PROJECT_SCAN_LIMIT = 80;
 
 const showToast = (message, type = 'success') => {
   window.dispatchEvent(new CustomEvent('show-toast', { detail: { message, type } }));
@@ -48,7 +46,7 @@ const mapBackendPerfPlan = (plan, latestResult = null) => {
 };
 
 export default function Performance() {
-  const { selectedProject } = useProjectContext();
+  const { selectedProject, loading: projectLoading, error: projectError } = useProjectContext();
   const [viewMode, setViewMode] = useState('list'); // 'list', 'report', 'plan-create', 'script-gen', 'history-compare'
   const [isRunning, setIsRunning] = useState(false);
   const [pressureMode, setPressureMode] = useState(0);
@@ -61,6 +59,7 @@ export default function Performance() {
   const [generatedScriptContent, setGeneratedScriptContent] = useState('');
   const [useJMeterRunner, setUseJMeterRunner] = useState(false);
   const [generateHtmlReport, setGenerateHtmlReport] = useState(true);
+  const [runtimeDeps, setRuntimeDeps] = useState(null);
   const [targetApis, setTargetApis] = useState([
     { method: 'POST', url: '/api/v1/auth/login', weight: 30 },
     { method: 'POST', url: '/api/v1/session/create', weight: 40 },
@@ -99,23 +98,16 @@ export default function Performance() {
   const loadPerformanceData = React.useCallback(async ({ silent = false } = {}) => {
     if (!silent) setPerfStatus(prev => ({ ...prev, loading: true }));
     try {
-      const projects = selectedProject?.id
-        ? [selectedProject]
-        : pickList(await apiGet('/projects', { params: { page: 1, pageSize: PROJECT_SCAN_LIMIT } }));
-      if (!projects.length) {
-        setPerfStatus({ loading: false, usingBackend: false, message: '后端暂无项目，列表使用内置样例。' });
+      if (projectLoading) return;
+      if (!selectedProject?.id) {
+        setProjectContext(null);
+        setRemotePlans([]);
+        setPerfStatus({ loading: false, usingBackend: false, message: projectError || '后端暂无项目，列表使用内置样例。' });
         return;
       }
 
-      let selected = { project: projects[0], plans: [] };
-      for (const project of projects) {
-        const payload = await apiGet(`/projects/${project.id}/perf-plans`, { params: { page: 1, pageSize: 20 } }).catch(() => null);
-        const items = pickList(payload);
-        if (items.length > 0) {
-          selected = { project, plans: items };
-          break;
-        }
-      }
+      const payload = await apiGet(`/projects/${selectedProject.id}/perf-plans`, { params: { page: 1, pageSize: 20 } }).catch(() => null);
+      const selected = { project: selectedProject, plans: pickList(payload) };
 
       const enrichedPlans = await Promise.all(selected.plans.map(async (plan) => {
         const resultPayload = await apiGet(`/perf-plans/${plan.id}/results`).catch(() => null);
@@ -137,11 +129,25 @@ export default function Performance() {
       setPerfStatus({ loading: false, usingBackend: false, message: `性能方案加载失败：${error.message || error}` });
       showToast(`性能方案加载失败：${error.message || error}`, 'error');
     }
-  }, [selectedProject]);
+  }, [projectLoading, projectError, selectedProject]);
 
   React.useEffect(() => {
     loadPerformanceData();
   }, [loadPerformanceData]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    apiGet('/system/runtime-dependencies')
+      .then((payload) => {
+        if (!cancelled) setRuntimeDeps(payload);
+      })
+      .catch(() => {
+        if (!cancelled) setRuntimeDeps(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const agentLoads = [
     [
@@ -210,6 +216,11 @@ export default function Performance() {
     setIsRunning(true);
     try {
       const target = await ensureBackendPerfPlan(plan);
+      const jmeterStatus = runtimeDeps?.perf_runner?.jmeter;
+      if (useJMeterRunner && jmeterStatus && !jmeterStatus.available) {
+        showToast('JMeter CLI 未检测到，请安装 JMeter 或关闭真实 JMeter runner。', 'error');
+        return;
+      }
       const planResult = await apiPost(`/perf-plans/${target.backendId}/generate-plan`, {});
       const scriptResult = await apiPost(`/perf-plans/${target.backendId}/generate-script`, {});
       setGeneratedScriptContent(scriptResult?.script?.content || '');
@@ -286,6 +297,24 @@ export default function Performance() {
       downloadTextFile({ filename: payload.filename, content: payload.content, mimeType: payload.mime_type || payload.mimeType });
     } catch (error) {
       showToast(`性能结果导出失败：${error.message || error}`, 'error');
+    }
+  };
+
+  const handleDownloadPerfArtifacts = async () => {
+    const resultId = perfExecution?.id || activePlan?.latestResult?.id;
+    if (!resultId) {
+      showToast('当前没有可下载的性能执行 artifacts。', 'info');
+      return;
+    }
+    try {
+      const payload = await apiGet(`/perf-results/${resultId}/artifacts/download`, { timeoutMs: 15000 });
+      downloadBase64File({
+        filename: payload.filename,
+        contentBase64: payload.content_base64,
+        mimeType: payload.mime_type || payload.mimeType
+      });
+    } catch (error) {
+      showToast(`性能 artifacts 下载失败：${error.message || error}`, 'error');
     }
   };
 
@@ -679,6 +708,13 @@ export default function Performance() {
               <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors">
                 <span>运行队列 (0)</span>
               </button>
+              <div className={`px-2.5 py-1.5 rounded-lg border text-[9px] font-bold ${
+                runtimeDeps?.perf_runner?.jmeter?.available
+                  ? 'border-emerald-500/20 text-emerald-600 bg-emerald-500/10'
+                  : 'border-amber-500/20 text-amber-600 bg-amber-500/10'
+              }`}>
+                JMeter: {runtimeDeps?.perf_runner?.jmeter?.status || 'unknown'}
+              </div>
               <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[11px] font-bold text-[var(--text-primary)] cursor-pointer">
                 <input
                   type="checkbox"
@@ -1051,6 +1087,13 @@ export default function Performance() {
               >
                 <Download className="size-3.5" />
                 <span>HTML</span>
+              </button>
+              <button
+                onClick={handleDownloadPerfArtifacts}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors"
+              >
+                <Download className="size-3.5" />
+                <span>Artifacts</span>
               </button>
               <button className="px-3 py-1.5 rounded-lg border border-red-500/30 hover:bg-red-500/10 text-red-500 text-[11px] font-bold cursor-pointer transition-colors bg-[var(--bg-card)]">
                 停止执行

@@ -19,6 +19,7 @@ import {
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
 import { apiGet, apiPost, downloadTextFile, formatDateTime, pickList } from '../lib/api';
+import { useProjectContext } from '../lib/projectContext';
 
 const toPercentLabel = (value, fallback = '97.46%') => {
   const num = Number(value);
@@ -86,7 +87,31 @@ const buildReportInsights = (report) => {
   ];
 };
 
+const readRiskItems = (report) => {
+  const items = report?.raw?.data_snapshot?.risk_items;
+  return Array.isArray(items) ? items : [];
+};
+
+const countDefectsBySeverity = (report) => {
+  const defects = report?.raw?.data_snapshot?.defects?.items;
+  const counts = { fatal: 0, critical: 0, high: 0, medium: 0, low: 0 };
+  if (!Array.isArray(defects)) {
+    counts.medium = Number(report?.bugs || 0);
+    return counts;
+  }
+  defects.forEach((item) => {
+    const severity = String(item?.severity || '').toLowerCase();
+    if (['fatal', 'blocker'].includes(severity)) counts.fatal += 1;
+    else if (['critical', '严重'].includes(severity)) counts.critical += 1;
+    else if (['high', 'major', '高'].includes(severity)) counts.high += 1;
+    else if (['low', 'minor', '低'].includes(severity)) counts.low += 1;
+    else counts.medium += 1;
+  });
+  return counts;
+};
+
 export default function Reports() {
+  const { selectedProject, loading: projectLoading, error: projectError } = useProjectContext();
   const [viewMode, setViewMode] = useState('list'); // 'list', 'report-detail', 'template-manage', 'lightweight-conclusion'
   const [selectedReportId, setSelectedReportId] = useState('REP-20250520-01');
   const [projectContext, setProjectContext] = useState(null);
@@ -119,6 +144,22 @@ export default function Reports() {
   const reports = remoteReports.length ? remoteReports : fallbackReports;
   const selectedReport = reports.find(rep => rep.id === selectedReportId) || reports[0];
   const selectedInsights = reportAiInsights[selectedReportId] || buildReportInsights(selectedReport);
+  const selectedMetrics = readReportMetrics(selectedReport?.raw || {});
+  const latestPassRate = selectedReport?.rate || toPercentLabel(selectedMetrics.passRate, '97.46%');
+  const latestPassNumber = Number(String(latestPassRate).replace('%', ''));
+  const latestPassDash = Number.isFinite(latestPassNumber) ? `${Math.max(0, Math.min(100, latestPassNumber))} ${100 - Math.max(0, Math.min(100, latestPassNumber))}` : '0 100';
+  const totalDefects = reports.reduce((sum, rep) => sum + Number(rep.bugs || 0), 0);
+  const selectedRiskItems = readRiskItems(selectedReport);
+  const selectedDefectSeverity = countDefectsBySeverity(selectedReport);
+  const primaryRisk = selectedRiskItems[0] || {
+    title: selectedReport?.bugs ? '当前报告存在残留缺陷' : '暂无高风险事实',
+    detail: selectedReport?.bugs ? `报告快照记录 ${selectedReport.bugs} 个缺陷，请结合严重级别复核准出。` : '当前报告快照未发现失败执行或未关闭缺陷。'
+  };
+  const releaseRisk = selectedInsights.some(item => item.type === 'danger')
+    ? '阻断风险'
+    : selectedInsights.some(item => item.type === 'warning')
+      ? '需复核'
+      : '安全准出';
 
   useEffect(() => {
     let cancelled = false;
@@ -126,13 +167,13 @@ export default function Reports() {
     async function loadReports() {
       setReportStatus({ loading: true, error: '' });
       try {
-        const projectsPayload = await apiGet('/projects', { params: { page: 1, pageSize: 1 } });
-        const project = pickList(projectsPayload)[0];
+        if (projectLoading) return;
+        const project = selectedProject;
         if (!project?.id) {
           if (!cancelled) {
             setProjectContext(null);
             setRemoteReports([]);
-            setReportStatus({ loading: false, error: '后端暂无项目，已显示演示报告' });
+            setReportStatus({ loading: false, error: projectError || '后端暂无项目，已显示演示报告' });
           }
           return;
         }
@@ -163,7 +204,7 @@ export default function Reports() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [projectLoading, projectError, selectedProject]);
 
   const showToast = (message, type = 'success') => {
     window.dispatchEvent(new CustomEvent('show-toast', { detail: { message, type } }));
@@ -325,19 +366,19 @@ export default function Reports() {
                   <div className="sonar-ripple-circle sonar-ripple-circle-delay !border-[#10b981]"></div>
                   <svg className="w-full h-full transform -rotate-90 relative z-10" viewBox="0 0 36 36">
                     <circle cx="18" cy="18" r="15.9" fill="none" stroke="var(--border-color)" strokeWidth="3" />
-                    <circle cx="18" cy="18" r="15.9" fill="none" stroke="#10b981" strokeWidth="3" strokeDasharray="92.4 7.6" className="path-drawn" />
+                    <circle cx="18" cy="18" r="15.9" fill="none" stroke="#10b981" strokeWidth="3" strokeDasharray={latestPassDash} className="path-drawn" />
                     <path d="M18,18 L18,2 A16,16 0 0,1 30,10 Z" fill="rgba(16, 185, 129, 0.15)" className="radar-sweeper-beam" />
                   </svg>
-                  <div className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-[var(--text-primary)] z-10"><AnimatedNumber value={92.4} />%</div>
+                  <div className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-[var(--text-primary)] z-10">{latestPassRate}</div>
                 </div>
               </div>
 
               <div className="col-span-2 border border-slate-100 rounded-xl p-3 text-[9px] font-semibold text-slate-500 bg-[#fafafb] space-y-1.5">
                 <span className="text-slate-400 block font-bold">各模块用例通过明细</span>
                 <div className="space-y-1 scale-95 origin-left">
-                  <div className="flex justify-between"><span>用户认证模块: 100%</span><span>156 / 156</span></div>
-                  <div className="flex justify-between"><span>会话对话模块: 94.5%</span><span>512 / 542</span></div>
-                  <div className="flex justify-between text-red-500"><span>核心结算支付: 85.0%</span><span>243 / 286</span></div>
+                  <div className="flex justify-between"><span>主链执行通过率</span><span>{latestPassRate}</span></div>
+                  <div className="flex justify-between"><span>报告缺陷数</span><span>{selectedReport?.bugs || 0} 个</span></div>
+                  <div className={`flex justify-between ${selectedRiskItems.length ? 'text-red-500' : 'text-emerald-500'}`}><span>风险项</span><span>{selectedRiskItems.length || 0} 条</span></div>
                 </div>
               </div>
             </div>
@@ -347,23 +388,23 @@ export default function Reports() {
               <span className="font-bold block mb-2 text-slate-700">引入缺陷等级分布</span>
               <div className="grid grid-cols-5 gap-2 text-center font-bold">
                 <div className="p-2 bg-purple-500/10 rounded-lg text-purple-700 text-[9px]">
-                  <div>1 个</div>
+                  <div>{selectedDefectSeverity.fatal} 个</div>
                   <div className="text-[7.5px] opacity-60 mt-0.5">致命 (Fatal)</div>
                 </div>
                 <div className="p-2 bg-red-500/10 rounded-lg text-red-600 text-[9px]">
-                  <div>8 个</div>
+                  <div>{selectedDefectSeverity.critical} 个</div>
                   <div className="text-[7.5px] opacity-60 mt-0.5">严重 (Critical)</div>
                 </div>
                 <div className="p-2 bg-amber-500/10 rounded-lg text-amber-600 text-[9px]">
-                  <div>15 个</div>
+                  <div>{selectedDefectSeverity.high} 个</div>
                   <div className="text-[7.5px] opacity-60 mt-0.5">高 (High)</div>
                 </div>
                 <div className="p-2 bg-blue-500/10 rounded-lg text-blue-600 text-[9px]">
-                  <div>20 个</div>
+                  <div>{selectedDefectSeverity.medium} 个</div>
                   <div className="text-[7.5px] opacity-60 mt-0.5">中 (Medium)</div>
                 </div>
                 <div className="p-2 bg-slate-500/10 rounded-lg text-slate-500 text-[9px]">
-                  <div>10 个</div>
+                  <div>{selectedDefectSeverity.low} 个</div>
                   <div className="text-[7.5px] opacity-60 mt-0.5">低 (Low)</div>
                 </div>
               </div>
@@ -380,16 +421,16 @@ export default function Reports() {
               
               <div className="space-y-3.5 text-[9.5px] font-semibold text-slate-600 leading-relaxed font-sans">
                 <div className="p-3 bg-red-500/5 border border-red-500/10 rounded-xl" style={{ transform: 'translateZ(10px)' }}>
-                  <span className="font-bold text-red-500">发现核心风险挂起项</span>
+                  <span className="font-bold text-red-500">{primaryRisk.title}</span>
                   <p className="text-[8px] text-slate-400 mt-1 leading-normal">
-                    由于结算模块测试用例通过率发生了一定的下滑 (85%)，系统引入了 1 个致命的“死锁事务挂起”缺陷仍未修复，这可能对大规模并发时的交易准确度带来影响。
+                    {primaryRisk.detail}
                   </p>
                 </div>
 
                 <div className="p-3 bg-purple-500/5 border border-purple-500/10 rounded-xl" style={{ transform: 'translateZ(15px)' }}>
                   <span className="font-bold text-purple-700">上线签发意见说明</span>
                   <p className="text-[8px] text-slate-400 mt-1 leading-normal">
-                    在当前未修复该致命死锁缺陷前，建议阻止直接发布上线。若业务必须紧急发布，应部署连接超时与自愈哨兵。
+                    {selectedInsights[0]?.text || '请基于后端报告快照、缺陷状态和执行通过率决定是否进入下一阶段。'}
                   </p>
                 </div>
               </div>
@@ -577,7 +618,7 @@ export default function Reports() {
               </div>
               <div className="mt-2 flex flex-col">
                 <span className="text-xl font-black text-[var(--text-primary)] leading-tight"><AnimatedNumber value={reports.length} /> 份</span>
-                <span className="text-[9px] text-[var(--text-secondary)] mt-1">覆盖系统 8 个核心业务模块</span>
+                <span className="text-[9px] text-[var(--text-secondary)] mt-1">{projectContext?.name || '演示项目'} 报告中心</span>
               </div>
             </div>
 
@@ -587,8 +628,8 @@ export default function Reports() {
                 <CheckCircle className="size-3.5 text-emerald-500" />
               </div>
               <div className="mt-2 flex flex-col">
-                <span className="text-xl font-black text-emerald-500 leading-tight"><AnimatedNumber value={97.46} />%</span>
-                <span className="text-[9px] text-[var(--text-secondary)] mt-1">较上周平均提升 3.2% ↑</span>
+                <span className="text-xl font-black text-emerald-500 leading-tight">{latestPassRate}</span>
+                <span className="text-[9px] text-[var(--text-secondary)] mt-1">来自当前选中报告快照</span>
               </div>
             </div>
 
@@ -598,8 +639,8 @@ export default function Reports() {
                 <AlertTriangle className="size-3.5 text-amber-500 animate-pulse" />
               </div>
               <div className="mt-2 flex flex-col">
-                <span className="text-xl font-black text-red-500 leading-tight"><AnimatedNumber value={72} /> 个</span>
-                <span className="text-[9px] text-[var(--text-secondary)] mt-1">其中致命/严重级别共 24 个</span>
+                <span className="text-xl font-black text-red-500 leading-tight"><AnimatedNumber value={totalDefects} /> 个</span>
+                <span className="text-[9px] text-[var(--text-secondary)] mt-1">按当前报告列表聚合</span>
               </div>
             </div>
 
@@ -609,8 +650,8 @@ export default function Reports() {
                 <Sparkles className="size-3.5 text-purple-500" />
               </div>
               <div className="mt-2 flex flex-col">
-                <span className="text-xl font-black text-[var(--text-primary)] leading-tight">安全准出</span>
-                <span className="text-[9px] text-[var(--text-secondary)] mt-1">2 个发布轮次通过 AI 审计</span>
+                <span className="text-xl font-black text-[var(--text-primary)] leading-tight">{releaseRisk}</span>
+                <span className="text-[9px] text-[var(--text-secondary)] mt-1">由后端报告风险项生成</span>
               </div>
             </div>
           </div>

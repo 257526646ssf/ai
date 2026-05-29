@@ -18,9 +18,9 @@ import {
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
 import { apiGet, apiPost, downloadTextFile, formatDateTime, pickList } from '../lib/api';
+import { useProjectContext } from '../lib/projectContext';
 
 const DEMO_PROJECT_NAME = 'AI 测试演示项目';
-const PROJECT_SCAN_LIMIT = 80;
 const TEST_CASE_PAGE_SIZE = 50;
 
 const numberText = (value, fallback = '0') => {
@@ -310,20 +310,6 @@ const fetchProjectTestCases = async (projectId) => {
   return { payload, list: pickList(payload) };
 };
 
-const chooseExecutionProject = async (projects, isCancelled = () => false) => {
-  let fallback = null;
-
-  for (const candidate of projects.slice(0, PROJECT_SCAN_LIMIT)) {
-    if (isCancelled()) return null;
-    const cases = await fetchProjectTestCases(candidate.id);
-    const snapshot = { project: candidate, casesPayload: cases.payload, testCases: cases.list };
-    if (!fallback) fallback = snapshot;
-    if (cases.list.length) return snapshot;
-  }
-
-  return fallback;
-};
-
 const toActiveCase = (row) => ({
   id: row.id,
   title: row.title,
@@ -346,6 +332,7 @@ const countCaseStatuses = (rows) => rows.reduce((acc, row) => {
 }, { total: 0, pass: 0, fail: 0, block: 0 });
 
 export default function Execution() {
+  const { selectedProject, loading: projectLoading, error: projectError } = useProjectContext();
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'history-records'
   const [activeCase, setActiveCase] = useState({
     id: 'TC-20250520-0002',
@@ -440,9 +427,8 @@ export default function Execution() {
     }
 
     try {
-      const projectsPayload = await apiGet('/projects', { params: { page: 1, pageSize: PROJECT_SCAN_LIMIT } });
-      const selectedProject = await chooseExecutionProject(pickList(projectsPayload), isCancelled);
-      const project = selectedProject?.project;
+      if (projectLoading) return;
+      const project = selectedProject;
 
       if (!project?.id) {
         if (isCancelled()) return;
@@ -453,10 +439,11 @@ export default function Execution() {
         setRemoteDefects([]);
         setRemoteBuildRuns([]);
         setStats(execStats);
-        setExecutionStatus({ loading: false, message: '后端暂无项目，显示演示执行数据', usingBackend: false });
+        setExecutionStatus({ loading: false, message: projectError || '后端暂无项目，显示演示执行数据', usingBackend: false });
         return;
       }
 
+      const selectedProjectCases = await fetchProjectTestCases(project.id);
       const [statisticsPayload, historyPayload, defectsPayload, roundsPayload] = await Promise.all([
         apiGet('/executions/statistics', { params: { projectId: project.id } }).catch(() => null),
         apiGet('/executions/history', { params: { projectId: project.id, page: 1, pageSize: 50 } }).catch(() => null),
@@ -467,7 +454,7 @@ export default function Execution() {
       if (isCancelled()) return;
 
       const executions = pickList(historyPayload);
-      const testCases = selectedProject?.testCases || [];
+      const testCases = selectedProjectCases.list || [];
       const defects = pickList(defectsPayload);
       const testRounds = pickList(roundsPayload);
       const { rows, defects: mappedDefects } = buildExecutionRows(testCases, executions, defects);
@@ -519,7 +506,7 @@ export default function Execution() {
         usingBackend: false
       });
     }
-  }, []);
+  }, [projectLoading, projectError, selectedProject]);
 
   React.useEffect(() => {
     let cancelled = false;

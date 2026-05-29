@@ -51,6 +51,22 @@ def sanitize_perf_payload(value: Any) -> Any:
     return value
 
 
+def inspect_jmeter_dependency(jmeter_path: Any = None) -> dict[str, Any]:
+    requested = str(jmeter_path or "jmeter").strip() or "jmeter"
+    resolved = requested if _looks_like_path(requested) else shutil.which(requested)
+    exists = bool(resolved and (not _looks_like_path(resolved) or Path(resolved).exists()))
+    status = "ready" if exists else "jmeter_not_found"
+    return sanitize_perf_payload(
+        {
+            "available": exists,
+            "status": status,
+            "requested": requested,
+            "path": resolved,
+            "note": "This check only resolves the CLI path and does not execute JMeter.",
+        }
+    )
+
+
 def run_jmeter_plan(jmx_script: str | None, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     data = payload or {}
     started = time.perf_counter()

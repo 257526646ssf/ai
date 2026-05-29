@@ -17,6 +17,7 @@ import {
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
 import { apiGet, formatDateTime, pickList } from '../lib/api';
+import { useProjectContext } from '../lib/projectContext';
 
 const numberText = (value, fallback = '0') => {
   const num = Number(value);
@@ -31,6 +32,15 @@ const percentFromCounts = (total, defects, fallback = '87.6%') => {
   return `${passRate.toFixed(1)}%`;
 };
 
+const countFromSummary = (summary = {}, keys = []) => keys.reduce((sum, key) => sum + Number(summary?.[key] || 0), 0);
+
+const percentFromSummary = (summary = {}, fallback = '0%') => {
+  const total = Number(summary?.total || 0);
+  if (!Number.isFinite(total) || total <= 0) return fallback;
+  const passed = countFromSummary(summary, ['pass', 'passed', 'success', 'succeeded', 'completed']);
+  return `${Math.max(0, Math.min(100, (passed / total) * 100)).toFixed(1)}%`;
+};
+
 const activityIconByType = (type = '') => {
   const lowered = String(type).toLowerCase();
   if (lowered.includes('defect') || lowered.includes('bug')) return { icon: AlertCircle, iconStyle: 'bg-red-500 text-white', style: 'border-red-500/20 text-red-500 bg-red-500/5' };
@@ -41,6 +51,7 @@ const activityIconByType = (type = '') => {
 };
 
 export default function Dashboard({ theme }) {
+  const { selectedProject, loading: projectLoading, error: projectError } = useProjectContext();
   const [progressValue, setProgressValue] = React.useState(0);
   const [casesCount, setCasesCount] = React.useState({ covered: 0, partial: 0, uncovered: 0 });
   const [hoveredRow, setHoveredRow] = React.useState(null);
@@ -94,14 +105,14 @@ export default function Dashboard({ theme }) {
     async function loadDashboardData() {
       setApiState(prev => ({ ...prev, status: 'loading', error: '' }));
       try {
-        const projectsPayload = await apiGet('/projects', { params: { page: 1, pageSize: 1 } });
-        const project = pickList(projectsPayload)[0];
+        if (projectLoading) return;
+        const project = selectedProject;
 
         if (!project?.id) {
           if (!cancelled) {
             setDashboardData(null);
             setRemoteActivities([]);
-            setApiState({ status: 'empty', projectName: '演示项目', updatedAt: null, error: '' });
+            setApiState({ status: projectError ? 'offline' : 'empty', projectName: '演示项目', updatedAt: null, error: projectError || '' });
           }
           return;
         }
@@ -149,7 +160,7 @@ export default function Dashboard({ theme }) {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
+  }, [projectLoading, projectError, selectedProject, reloadKey]);
 
 
   // 根据主题自适应图表色彩
@@ -167,7 +178,17 @@ export default function Dashboard({ theme }) {
   };
 
   const chartColor = getThemeChartColors();
-  const passRate = percentFromCounts(dashboardData?.test_cases, dashboardData?.defects);
+  const executionSummary = dashboardData?.execution_summary || {};
+  const apiExecutionSummary = dashboardData?.api_execution_summary || {};
+  const autoExecutionSummary = dashboardData?.auto_execution_summary || {};
+  const defectSeveritySummary = dashboardData?.defect_severity_summary || {};
+  const passRate = dashboardData?.executions ? percentFromSummary(executionSummary, '0%') : percentFromCounts(dashboardData?.test_cases, dashboardData?.defects);
+  const apiPassRate = percentFromSummary(apiExecutionSummary, dashboardData ? '0%' : '87.0%');
+  const autoPassRate = percentFromSummary(autoExecutionSummary, dashboardData ? '0%' : '90.1%');
+  const failedExecutions = countFromSummary(executionSummary, ['fail', 'failed', 'failure', 'error']);
+  const blockedExecutions = countFromSummary(executionSummary, ['block', 'blocked']);
+  const severeDefects = countFromSummary(defectSeveritySummary, ['fatal', 'blocker', 'critical', '严重', '致命']);
+  const highDefects = countFromSummary(defectSeveritySummary, ['high', 'major', '高']);
   const backendStatusText = apiState.status === 'online'
     ? `已连接：${apiState.projectName}`
     : apiState.status === 'loading'
@@ -188,9 +209,9 @@ export default function Dashboard({ theme }) {
     { label: '测试用例总数', value: numberText(dashboardData?.test_cases, '3,652'), change: dashboardData ? '实时项目数据' : '↑ 132 (+3.7%)', icon: CheckSquare, color: 'text-amber-500 bg-amber-500/10' },
     { label: '用例执行总数', value: numberText(dashboardData?.executions, '2,891'), change: dashboardData ? '执行记录聚合' : '↑ 156 (+5.7%)', icon: Play, color: 'text-purple-500 bg-purple-500/10' },
     { label: '用例通过率', value: passRate, change: dashboardData ? `缺陷 ${numberText(dashboardData?.defects, '0')}` : '↑ 3.2%', icon: Target, color: 'text-cyan-500 bg-cyan-500/10' },
-    { label: '接口测试库总数', value: '186', change: '↑ 4', icon: Network, color: 'text-indigo-500 bg-indigo-500/10' },
-    { label: '自动化脚本总数', value: '842', change: '↑ 27', icon: Cpu, color: 'text-slate-500 bg-slate-500/10' },
-    { label: '性能测试方案总数', value: '24', change: '↑ 1', icon: Gauge, color: 'text-rose-500 bg-rose-500/10' },
+    { label: '接口测试库总数', value: numberText(dashboardData?.api_test_libs, '186'), change: dashboardData ? `接口 ${numberText(dashboardData?.api_endpoints, '0')}` : '↑ 4', icon: Network, color: 'text-indigo-500 bg-indigo-500/10' },
+    { label: '自动化脚本总数', value: numberText(dashboardData?.auto_case_files, '842'), change: dashboardData ? `项目 ${numberText(dashboardData?.auto_projects, '0')}` : '↑ 27', icon: Cpu, color: 'text-slate-500 bg-slate-500/10' },
+    { label: '性能测试方案总数', value: numberText(dashboardData?.perf_plans, '24'), change: dashboardData ? `结果 ${numberText(dashboardData?.perf_results, '0')}` : '↑ 1', icon: Gauge, color: 'text-rose-500 bg-rose-500/10' },
   ];
 
   // ======================== 热力图数据 ========================
@@ -231,14 +252,19 @@ export default function Dashboard({ theme }) {
 
   // ======================== 项目健康度 ========================
   const healthMetrics = [
-    { label: '用例通过率', val: '87.6%', change: '↑ 3.2%', linePath: 'M 5 20 Q 20 5, 35 15 T 65 5 T 95 8' },
-    { label: '缺陷密度', val: '2.34', unit: '/KLOC', change: '↓ 0.21', linePath: 'M 5 5 Q 20 20, 35 12 T 65 18 T 95 22' },
-    { label: '自动化覆盖', val: '64.8%', change: '↑ 1.6%', linePath: 'M 5 18 Q 20 12, 35 14 T 65 8 T 95 4' },
-    { label: '需求覆盖率', val: '78.4%', change: '↑ 2.8%', linePath: 'M 5 22 Q 20 15, 35 18 T 65 10 T 95 5' }
+    { label: '用例通过率', val: passRate, change: dashboardData ? '后端执行' : '↑ 3.2%', linePath: 'M 5 20 Q 20 5, 35 15 T 65 5 T 95 8' },
+    { label: '缺陷总数', val: numberText(dashboardData?.defects, '2.34'), unit: dashboardData ? '个' : '/KLOC', change: dashboardData ? `严重 ${severeDefects + highDefects}` : '↓ 0.21', linePath: 'M 5 5 Q 20 20, 35 12 T 65 18 T 95 22' },
+    { label: '自动化通过率', val: autoPassRate, change: dashboardData ? `执行 ${numberText(dashboardData?.auto_executions, '0')}` : '↑ 1.6%', linePath: 'M 5 18 Q 20 12, 35 14 T 65 8 T 95 4' },
+    { label: '接口通过率', val: apiPassRate, change: dashboardData ? `执行 ${numberText(dashboardData?.api_executions, '0')}` : '↑ 2.8%', linePath: 'M 5 22 Q 20 15, 35 18 T 65 10 T 95 5' }
   ];
 
   // ======================== 今日测试执行概览 ========================
-  const executionOverview = [
+  const executionOverview = dashboardData ? [
+    { type: '主链执行', plan: numberText(dashboardData?.test_rounds, '0'), pass: numberText(countFromSummary(executionSummary, ['pass', 'passed', 'success']), '0'), fail: failedExecutions + blockedExecutions, rate: passRate },
+    { type: '接口测试', plan: numberText(dashboardData?.api_test_libs, '0'), pass: numberText(countFromSummary(apiExecutionSummary, ['pass', 'passed', 'success', 'completed']), '0'), fail: countFromSummary(apiExecutionSummary, ['fail', 'failed', 'error']), rate: apiPassRate },
+    { type: '自动化测试', plan: numberText(dashboardData?.auto_projects, '0'), pass: numberText(countFromSummary(autoExecutionSummary, ['pass', 'passed', 'success', 'completed']), '0'), fail: countFromSummary(autoExecutionSummary, ['fail', 'failed', 'error']), rate: autoPassRate },
+    { type: '性能测试', plan: numberText(dashboardData?.perf_plans, '0'), pass: numberText(dashboardData?.perf_results, '0'), fail: 0, rate: dashboardData?.perf_results ? '已产出' : '待执行' }
+  ] : [
     { type: '测试计划', plan: 8, exec: 8, pass: '6,532', fail: 982, rate: '86.9%' },
     { type: '接口测试', plan: 23, exec: 23, pass: '1,256', fail: 187, rate: '87.0%' },
     { type: '自动化测试', plan: 15, exec: 15, pass: '3,842', fail: 421, rate: '90.1%' },
@@ -246,7 +272,13 @@ export default function Dashboard({ theme }) {
   ];
 
   // ======================== 待办事项 ========================
-  const todos = [
+  const todos = dashboardData ? [
+    ...(dashboardData.defects ? [{ text: `处理当前项目 ${numberText(dashboardData.defects)} 个缺陷，优先看严重/高优先级`, priority: severeDefects + highDefects ? '高' : '中', priorityColor: severeDefects + highDefects ? 'text-red-500 bg-red-500/10 border-red-500/10' : 'text-amber-500 bg-amber-500/10 border-amber-500/10' }] : []),
+    ...(failedExecutions ? [{ text: `复盘 ${failedExecutions} 条失败执行记录并补充缺陷关联`, priority: '高', priorityColor: 'text-red-500 bg-red-500/10 border-red-500/10' }] : []),
+    ...(blockedExecutions ? [{ text: `解除 ${blockedExecutions} 条阻塞执行，确认环境或数据依赖`, priority: '中', priorityColor: 'text-amber-500 bg-amber-500/10 border-amber-500/10' }] : []),
+    ...(dashboardData.api_test_cases ? [{ text: `检查 ${numberText(dashboardData.api_test_cases)} 条接口用例的最近运行状态`, priority: '中', priorityColor: 'text-amber-500 bg-amber-500/10 border-amber-500/10' }] : []),
+    ...(dashboardData.reports ? [{ text: `复核最新 ${numberText(dashboardData.reports)} 份报告的准出结论`, priority: '低', priorityColor: 'text-blue-500 bg-blue-500/10 border-blue-500/10' }] : [])
+  ].slice(0, 6) : [
     { text: '评审需求文档《用户权限管理需求说明书》', priority: '高', priorityColor: 'text-red-500 bg-red-500/10 border-red-500/10' },
     { text: '修复缺陷 #BUG-20250519-011', priority: '高', priorityColor: 'text-red-500 bg-red-500/10 border-red-500/10' },
     { text: '执行测试计划「版本 v2.3.0 上线回归」', priority: '中', priorityColor: 'text-amber-500 bg-amber-500/10 border-amber-500/10' },
@@ -254,6 +286,10 @@ export default function Dashboard({ theme }) {
     { text: '性能测试「并发 500 - 订单接口」执行分析', priority: '中', priorityColor: 'text-amber-500 bg-amber-500/10 border-amber-500/10' },
     { text: '整理测试报告（周报）', priority: '低', priorityColor: 'text-blue-500 bg-blue-500/10 border-blue-500/10' }
   ];
+  const visibleTodos = todos.length ? todos : [
+    { text: '当前项目暂无高风险待办，继续补充执行记录和报告证据', priority: '低', priorityColor: 'text-blue-500 bg-blue-500/10 border-blue-500/10' }
+  ];
+  const todoCount = visibleTodos.length;
 
   return (
     <div className="space-y-5 text-left relative pb-10 w-full animate-[fadeIn_0.2s_ease-out]">
@@ -287,7 +323,7 @@ export default function Dashboard({ theme }) {
               <span className="px-2 py-0.5 bg-purple-500/20 text-purple-600 dark:text-purple-300 rounded font-black text-[9px] tracking-wider uppercase border border-purple-500/30 animate-pulse">v2.5 Live</span>
             </div>
             <p className="text-[12px] text-[var(--text-primary)] mt-2 leading-relaxed font-bold">
-              今日平台共处理了 <span className="crucial-glow-text font-black">3</span> 个回归测试流水线，用例平均通过率稳定在 <span className="glorious-highlight-text text-[13px] font-black">87.6%</span>。发现 <span className="text-red-500 font-black text-[13px] underline decoration-wavy underline-offset-4">12 个严重缺陷</span> 挂起（主要收敛在结算与支付模块），建议优先关注 <code className="bg-black/10 dark:bg-white/15 px-1.5 py-0.5 rounded font-mono text-[10px] text-pink-600 dark:text-pink-400 font-extrabold border border-pink-500/25">/api/v1/payment/check</code> 接口的连接池死锁风险，防止波及下周的 <span className="text-[var(--accent-color)] font-extrabold underline">v2.3.0 大版本签发</span>。
+              当前项目共记录了 <span className="crucial-glow-text font-black">{numberText(dashboardData?.test_rounds, '3')}</span> 个测试轮次，主链执行通过率为 <span className="glorious-highlight-text text-[13px] font-black">{passRate}</span>。后端发现 <span className="text-red-500 font-black text-[13px] underline decoration-wavy underline-offset-4">{numberText(dashboardData?.defects, '12')} 个缺陷</span>，其中严重/高风险 <span className="text-red-500 font-black">{dashboardData ? severeDefects + highDefects : 12}</span> 个；建议优先复盘失败执行与接口自动化结果，避免影响后续 <span className="text-[var(--accent-color)] font-extrabold underline">准出判断</span>。
             </p>
           </div>
         </div>
@@ -540,7 +576,7 @@ export default function Dashboard({ theme }) {
           </div>
 
           <div className="border-t border-[var(--border-color)] pt-2 text-right">
-            <span className="text-[9px] text-[var(--text-secondary)] opacity-50">需求总数：1,248</span>
+            <span className="text-[9px] text-[var(--text-secondary)] opacity-50">需求总数：{numberText(dashboardData?.requirement_items, '1,248')}</span>
           </div>
         </div>
 
@@ -655,7 +691,7 @@ export default function Dashboard({ theme }) {
               <span className="w-20 h-2 rounded-full border border-[var(--border-color)] thermal-legend-flow" />
               <span>高</span>
             </div>
-            <span className="text-[var(--text-secondary)] font-extrabold">需求总数：1,248</span>
+            <span className="text-[var(--text-secondary)] font-extrabold">需求总数：{numberText(dashboardData?.requirement_items, '1,248')}</span>
           </div>
         </div>
 
@@ -841,11 +877,11 @@ export default function Dashboard({ theme }) {
           <div className="theme-card rounded-xl p-4 shadow-sm">
             <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2.5 mb-2.5 text-[var(--text-primary)]">
               <span className="text-xs font-black">待办事项</span>
-              <span className="text-[11px] font-black text-[var(--text-secondary)]">待处理事项 6</span>
+              <span className="text-[11px] font-black text-[var(--text-secondary)]">待处理事项 {todoCount}</span>
             </div>
 
             <div className="space-y-2 overflow-y-auto max-h-[120px]">
-              {todos.map((todo, idx) => (
+              {visibleTodos.map((todo, idx) => (
                 <div key={idx} className="flex items-center justify-between gap-2.5 text-left text-xs py-2 border-b border-[var(--border-color)] last:border-b-0 text-[var(--text-primary)]">
                   <div className="flex items-center gap-2 min-w-0">
                     <input 

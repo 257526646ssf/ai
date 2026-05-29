@@ -81,6 +81,35 @@ def sanitize_runner_payload(value: Any) -> Any:
     return value
 
 
+def inspect_auto_runner_dependencies() -> dict[str, Any]:
+    npx_path = shutil.which("npx") or shutil.which("npx.cmd")
+    node_path = shutil.which("node") or shutil.which("node.exe")
+    pytest_available = _module_available("pytest")
+    python_available = bool(sys.executable)
+    playwright_ready = bool(npx_path and node_path)
+    warnings: list[dict[str, str]] = []
+    if not npx_path:
+        warnings.append({"type": "npx_not_found", "message": "Playwright runner requires npx on PATH."})
+    if not node_path:
+        warnings.append({"type": "node_not_found", "message": "Playwright runner requires Node.js on PATH."})
+    if not pytest_available:
+        warnings.append({"type": "pytest_not_found", "message": "pytest runner requires pytest importable in the backend Python environment."})
+    return sanitize_runner_payload(
+        {
+            "python": {"available": python_available, "path": sys.executable},
+            "pytest": {"available": pytest_available},
+            "node": {"available": bool(node_path), "path": node_path},
+            "npx": {"available": bool(npx_path), "path": npx_path},
+            "playwright": {
+                "available": playwright_ready,
+                "status": "ready" if playwright_ready else "missing_npx",
+                "note": "This check is non-invasive and does not install packages or launch browsers.",
+            },
+            "warnings": warnings,
+        }
+    )
+
+
 def run_auto_project(
     case_files: list[AutoCaseFileInput],
     *,
@@ -418,6 +447,14 @@ def _build_command(workdir: Path, files: list[dict[str, Any]], mode: str) -> lis
 
     target = python_case_paths[0] if python_case_paths else None
     return [sys.executable, target] if target else None
+
+
+def _module_available(module_name: str) -> bool:
+    try:
+        __import__(module_name)
+        return True
+    except Exception:
+        return False
 
 
 def _runner_mode(command: list[str]) -> str:

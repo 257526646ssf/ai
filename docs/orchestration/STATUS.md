@@ -443,3 +443,19 @@
 - 真实 Playwright runner 依赖本机 Node/Playwright 环境；缺依赖时返回结构化失败。
 - 真实 JMeter runner 依赖 JMeter CLI；缺工具时返回结构化 error。
 - 旧页面仍有部分静态演示图表，后续需继续替换为后端统计。
+
+## 第十八轮范围
+- P0：将全局项目选择器下沉到 Dashboard / Requirements / TestCases / Execution / Reports / Settings。
+- P0：去除 ApiTesting / Automation / Performance 的项目扫描 fallback，统一以全局项目为准。
+- P0：扩展 dashboard 后端统计，并替换 Dashboard / Reports 中影响判断的静态数字、风险项和待办。
+- P0：新增 runtime dependencies 自检，前端展示 Playwright / JMeter 依赖状态。
+- P0：为 JMeter HTML report / 性能 artifacts 提供受控 ZIP 下载入口。
+
+## 第十八轮验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `npm run build`：通过，仅保留 Vite chunk size warning。
+- `python -m pytest backend\tests\test_round13_frontend_integration.py backend\tests\test_round11_exports.py -q`：11 passed，2 warnings。
+
+## 第十八轮残余风险
+- 正式 Alembic migration、Celery/Redis 异步队列、真实密钥加密存储仍属于生产基础设施决策项；本轮未擅自新增依赖或改变部署拓扑。
+- 历史趋势图还有部分静态曲线形态，但关键汇总数字、风险项、准出提示、runner 状态和下载入口已接后端事实。

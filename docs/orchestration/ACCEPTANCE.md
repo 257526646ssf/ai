@@ -315,3 +315,16 @@
 - `npm run build`: passed, with only Vite chunk size warning.
 - `python -m pytest backend\tests\test_round11_exports.py -q`: passed, 8 tests, with 2 FastAPI dependency warnings.
 - `cd backend; python -m pytest -q`: passed, with 2 FastAPI dependency warnings.
+
+## 第十八轮验收
+- [x] Dashboard / Requirements / TestCases / Execution / Reports / Settings 均使用全局项目上下文。
+- [x] ApiTesting / Automation / Performance 不再自行扫描项目列表选择项目。
+- [x] Dashboard 后端契约返回 API、自动化、性能、报告和状态分布统计。
+- [x] Reports 详情页按后端报告 snapshot 展示通过率、缺陷分布、风险项和准出建议。
+- [x] `/system/runtime-dependencies` 返回 Playwright / JMeter 运行依赖状态，前端有可见提示。
+- [x] `/perf-results/{resultId}/artifacts/download` 返回可解码 ZIP，至少包含 `manifest.json`。
+
+## Round 18 Evidence
+- `python -m compileall backend\aitest_platform`: passed.
+- `npm run build`: passed, with only Vite chunk size warning.
+- `python -m pytest backend\tests\test_round13_frontend_integration.py backend\tests\test_round11_exports.py -q`: passed, 11 tests, with 2 FastAPI dependency warnings.

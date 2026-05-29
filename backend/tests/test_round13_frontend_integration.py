@@ -30,7 +30,24 @@ def test_frontend_dashboard_settings_contracts_are_stable(client):
 
     dashboard = data_of(client.get(f"{API_PREFIX}/projects/{project_id}/dashboard"))
     assert dashboard["project_id"] == project_id
-    for key in ("requirement_libs", "requirement_items", "test_cases", "executions", "defects", "updated_at"):
+    for key in (
+        "requirement_libs",
+        "requirement_documents",
+        "requirement_items",
+        "test_cases",
+        "executions",
+        "defects",
+        "api_test_libs",
+        "api_test_cases",
+        "auto_projects",
+        "auto_case_files",
+        "perf_plans",
+        "perf_results",
+        "reports",
+        "execution_summary",
+        "defect_status_summary",
+        "updated_at",
+    ):
         assert key in dashboard, dashboard
 
     activity = post_json(
@@ -48,3 +65,8 @@ def test_frontend_dashboard_settings_contracts_are_stable(client):
     )
     assert preference["key"] == "runtime-settings"
     assert preference["value"]["maxWorkers"] == 8
+
+    dependencies = data_of(client.get(f"{API_PREFIX}/system/runtime-dependencies"))
+    assert dependencies["auto_runner"]["python"]["available"] is True
+    assert "playwright" in dependencies["auto_runner"]
+    assert "jmeter" in dependencies["perf_runner"]

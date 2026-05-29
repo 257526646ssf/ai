@@ -23,8 +23,6 @@ import AnimatedNumber from '../components/AnimatedNumber';
 import { apiGet, apiPost, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
-const PROJECT_SCAN_LIMIT = 80;
-
 const numberText = (value, fallback = '0') => {
   const num = Number(value);
   return Number.isFinite(num) ? num.toLocaleString('zh-CN') : fallback;
@@ -61,7 +59,7 @@ const mapBackendLib = (lib, apis = [], cases = []) => {
 };
 
 export default function ApiTesting() {
-  const { selectedProject } = useProjectContext();
+  const { selectedProject, loading: projectLoading, error: projectError } = useProjectContext();
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'workbench' or 'env-scenario'
   const [selectedLibIdx, setSelectedLibIdx] = useState(0); // 列表页选中联动索引
   const [isSending, setIsSending] = useState(false);
@@ -207,34 +205,25 @@ export default function ApiTesting() {
       setApiStatus({ loading: true, message: '正在同步后端接口库...', usingBackend: false });
     }
     try {
-      const projects = selectedProject?.id
-        ? [selectedProject]
-        : pickList(await apiGet('/projects', { params: { page: 1, pageSize: PROJECT_SCAN_LIMIT } }));
-      let selected = null;
+      if (projectLoading) return;
+      const project = selectedProject;
 
-      for (const project of projects) {
-        const libsPayload = await apiGet(`/projects/${project.id}/api-test-libs`, { params: { page: 1, pageSize: 10 } }).catch(() => null);
-        const libs = pickList(libsPayload);
-        if (!selected || libs.length) {
-          selected = { project, libs };
-        }
-        if (libs.length) break;
-      }
-
-      if (!selected?.project?.id) {
+      if (!project?.id) {
         setProjectContext(null);
         setRemoteLibs([]);
-        setApiStatus({ loading: false, message: '后端暂无项目，显示演示接口库', usingBackend: false });
+        setApiStatus({ loading: false, message: projectError || '后端暂无项目，显示演示接口库', usingBackend: false });
         return;
       }
 
-      const detailedLibs = await Promise.all(selected.libs.map((lib) => fetchApiLibDetail(lib)));
-      setProjectContext(selected.project);
+      const libsPayload = await apiGet(`/projects/${project.id}/api-test-libs`, { params: { page: 1, pageSize: 10 } }).catch(() => null);
+      const libs = pickList(libsPayload);
+      const detailedLibs = await Promise.all(libs.map((lib) => fetchApiLibDetail(lib)));
+      setProjectContext(project);
       setRemoteLibs(detailedLibs);
       setSelectedLibIdx(0);
       setApiStatus({
         loading: false,
-        message: detailedLibs.length ? `已连接 ${selected.project.name || selected.project.code}，接口库已同步` : `已连接 ${selected.project.name || selected.project.code}，暂无接口库`,
+        message: detailedLibs.length ? `已连接 ${project.name || project.code}，接口库已同步` : `已连接 ${project.name || project.code}，暂无接口库`,
         usingBackend: detailedLibs.length > 0
       });
     } catch (error) {
@@ -242,7 +231,7 @@ export default function ApiTesting() {
       setRemoteLibs([]);
       setApiStatus({ loading: false, message: error?.message || '后端暂不可用，显示演示接口库', usingBackend: false });
     }
-  }, [fetchApiLibDetail, selectedProject]);
+  }, [fetchApiLibDetail, projectLoading, projectError, selectedProject]);
 
   React.useEffect(() => {
     loadApiTestingData();

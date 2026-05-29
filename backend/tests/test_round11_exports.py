@@ -181,6 +181,7 @@ def test_perf_plan_script_and_result_download_are_structured_and_redacted(client
     script = data_of(client.get(f"{API_PREFIX}/perf-plans/{perf_context['perf_plan_id']}/download-script"))
     result = data_of(client.get(f"{API_PREFIX}/perf-plans/{perf_context['perf_plan_id']}/results/{perf_context['perf_result_id']}/download"))
     html_result = data_of(client.get(f"{API_PREFIX}/perf-plans/{perf_context['perf_plan_id']}/results/{perf_context['perf_result_id']}/download", params={"format": "html"}))
+    artifact_download = data_of(client.get(f"{API_PREFIX}/perf-results/{perf_context['perf_result_id']}/artifacts/download"))
 
     assert script["format"] == "jmx", script
     assert script["filename"].endswith(".jmx"), script
@@ -192,6 +193,10 @@ def test_perf_plan_script_and_result_download_are_structured_and_redacted(client
     assert html_result["format"] == "html", html_result
     assert html_result["filename"].endswith(".html"), html_result
     assert "<html" in html_result["content"].lower(), html_result
+    artifact_zip = base64.b64decode(artifact_download["content_base64"])
+    with zipfile.ZipFile(io.BytesIO(artifact_zip)) as archive:
+        assert "manifest.json" in set(archive.namelist()), archive.namelist()
     assert_no_sensitive(script)
     assert_no_sensitive(result)
     assert_no_sensitive(html_result)
+    assert_no_sensitive(artifact_download)

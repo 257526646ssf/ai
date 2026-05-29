@@ -26,8 +26,6 @@ import AnimatedNumber from '../components/AnimatedNumber';
 import { apiGet, apiPost, downloadBase64File, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
-const PROJECT_SCAN_LIMIT = 80;
-
 const showToast = (message, type = 'success') => {
   window.dispatchEvent(new CustomEvent('show-toast', { detail: { message, type } }));
 };
@@ -63,7 +61,7 @@ const mapBackendAutoProject = (project) => {
 };
 
 export default function Automation() {
-  const { selectedProject } = useProjectContext();
+  const { selectedProject, loading: projectLoading, error: projectError } = useProjectContext();
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'wizard'
   const [wizardStep, setWizardStep] = useState(1); // 1, 2, 3, 4
   const [selectedProjIdx, setSelectedProjIdx] = useState(0);
@@ -76,6 +74,7 @@ export default function Automation() {
   const [isSyncingRepo, setIsSyncingRepo] = useState(false);
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [autoRunnerMode, setAutoRunnerMode] = useState('auto');
+  const [runtimeDeps, setRuntimeDeps] = useState(null);
 
   // 17-页数据
   const autoStats = [
@@ -104,23 +103,17 @@ export default function Automation() {
   const loadAutomationData = React.useCallback(async ({ silent = false } = {}) => {
     if (!silent) setAutoStatus(prev => ({ ...prev, loading: true }));
     try {
-      const projects = selectedProject?.id
-        ? [selectedProject]
-        : pickList(await apiGet('/projects', { params: { page: 1, pageSize: PROJECT_SCAN_LIMIT } }));
-      if (!projects.length) {
-        setAutoStatus({ loading: false, usingBackend: false, message: '后端暂无项目，列表使用内置样例。' });
+      if (projectLoading) return;
+      if (!selectedProject?.id) {
+        setProjectContext(null);
+        setRemoteProjects([]);
+        setAutoStatus({ loading: false, usingBackend: false, message: projectError || '后端暂无项目，列表使用内置样例。' });
         return;
       }
 
-      let selected = { project: projects[0], autoProjects: [] };
-      for (const project of projects) {
-        const payload = await apiGet(`/projects/${project.id}/auto-projects`, { params: { page: 1, pageSize: 20 } }).catch(() => null);
-        const items = pickList(payload);
-        if (items.length > 0) {
-          selected = { project, autoProjects: items };
-          break;
-        }
-      }
+      const payload = await apiGet(`/projects/${selectedProject.id}/auto-projects`, { params: { page: 1, pageSize: 20 } }).catch(() => null);
+      const items = pickList(payload);
+      const selected = { project: selectedProject, autoProjects: items };
 
       setProjectContext(selected.project);
       setRemoteProjects(selected.autoProjects.map(mapBackendAutoProject));
@@ -136,11 +129,25 @@ export default function Automation() {
       setAutoStatus({ loading: false, usingBackend: false, message: `自动化项目加载失败：${error.message || error}` });
       showToast(`自动化项目加载失败：${error.message || error}`, 'error');
     }
-  }, [selectedProject]);
+  }, [projectLoading, projectError, selectedProject]);
 
   React.useEffect(() => {
     loadAutomationData();
   }, [loadAutomationData]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    apiGet('/system/runtime-dependencies')
+      .then((payload) => {
+        if (!cancelled) setRuntimeDeps(payload);
+      })
+      .catch(() => {
+        if (!cancelled) setRuntimeDeps(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   React.useEffect(() => {
     setCliLogs([]);
@@ -219,6 +226,11 @@ export default function Automation() {
       const requestedMode = autoRunnerMode === 'playwright' && !String(target.stack || '').toLowerCase().includes('playwright')
         ? 'auto'
         : autoRunnerMode;
+      const playwrightStatus = runtimeDeps?.auto_runner?.playwright;
+      if (requestedMode === 'playwright' && playwrightStatus && !playwrightStatus.available) {
+        showToast('Playwright runner 依赖未就绪：未检测到 Node.js/npx，请先安装依赖或切换为占位 runner。', 'error');
+        return;
+      }
       const execution = await apiPost(`/auto-projects/${target.backendId}/execute`, { mode: requestedMode, timeout_ms: 10000 });
       setAutoExecution(execution);
       setViewMode('run-result');
@@ -742,6 +754,13 @@ export default function Automation() {
                 <option value="playwright">Playwright runner</option>
                 <option value="placeholder">占位 runner</option>
               </select>
+              <div className={`px-2.5 py-1.5 rounded-lg border text-[9px] font-bold ${
+                runtimeDeps?.auto_runner?.playwright?.available
+                  ? 'border-emerald-500/20 text-emerald-600 bg-emerald-500/10'
+                  : 'border-amber-500/20 text-amber-600 bg-amber-500/10'
+              }`}>
+                Playwright: {runtimeDeps?.auto_runner?.playwright?.status || 'unknown'}
+              </div>
               <button 
                 onClick={() => { setViewMode('wizard'); setWizardStep(1); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg accent-btn text-[11px] font-bold text-white cursor-pointer"

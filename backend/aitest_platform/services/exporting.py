@@ -165,6 +165,59 @@ def build_auto_execution_artifacts_zip(session: Session, *, execution_id: int) -
     }
 
 
+def build_perf_result_artifacts_zip(session: Session, *, result_id: int) -> dict[str, Any]:
+    result = session.get(PerfResult, result_id)
+    if result is None:
+        raise ExportPayloadError(f"PerfResult({result_id}) not found")
+
+    artifacts = sanitize_export_payload(result.artifacts or {})
+    artifact_dir = artifacts.get("artifact_dir") if isinstance(artifacts, dict) else None
+    root = Path(str(artifact_dir)).resolve() if artifact_dir else None
+    manifest = {
+        "result_id": result.id,
+        "plan_id": result.plan_id,
+        "project_id": result.project_id,
+        "status": result.status,
+        "summary_data": sanitize_export_payload(result.summary_data or {}),
+        "duration": result.duration,
+        "artifacts": artifacts,
+    }
+
+    file_count = 1
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+        for item in _artifact_entries(artifacts):
+            path_value = item.get("path")
+            if not path_value:
+                continue
+            source = Path(str(path_value)).resolve()
+            if root is not None and not _path_is_relative_to(source, root):
+                continue
+            if source.is_file():
+                archive_name = _safe_zip_path(item.get("relative_path") or source.name)
+                archive.writestr(f"artifacts/{archive_name}", source.read_bytes())
+                file_count += 1
+            elif source.is_dir():
+                for child in sorted(path for path in source.rglob("*") if path.is_file()):
+                    if root is not None and not _path_is_relative_to(child.resolve(), root):
+                        continue
+                    relative = child.relative_to(source).as_posix()
+                    archive_name = _safe_zip_path(f"{source.name}/{relative}")
+                    archive.writestr(f"artifacts/{archive_name}", child.read_bytes())
+                    file_count += 1
+
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return {
+        "result_id": result.id,
+        "plan_id": result.plan_id,
+        "filename": f"perf-result-{result.id}-artifacts.zip",
+        "mime_type": "application/zip",
+        "content_base64": encoded,
+        "file_count": file_count,
+    }
+
+
 def export_perf_script(session: Session, *, plan_id: int) -> dict[str, Any]:
     plan = _require_active(session, PerfPlan, plan_id, "PerfPlan")
     content = sanitize_export_payload(plan.jmx_script or "")
