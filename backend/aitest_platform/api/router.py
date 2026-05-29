@@ -63,6 +63,8 @@ from aitest_platform.services.llm_client import (
 )
 from aitest_platform.services.api_runner import run_api_request, sanitize_api_payload
 from aitest_platform.services.api_importer import ApiImportError, parse_api_import_payload, safe_import_error_detail
+from aitest_platform.services.api_mock_service import create_api_mock, dispatch_api_mock, list_api_mocks
+from aitest_platform.services.api_runtime_context import attach_runtime_context, build_case_request_payload, sanitize_runtime_payload
 from aitest_platform.services.api_scenario_runner import (
     run_api_scenario,
     sanitize_scenario_mapping_definition,
@@ -2504,18 +2506,53 @@ def delete_api(apiId: str):
 
 @router.post("/apis/debug")
 def debug_api(payload: WritePayload):
-    result = run_api_request(payload_dict(payload))
+    data = payload_dict(payload)
+    result = run_api_request(data)
     response = result.get("response_snapshot") or {}
-    return {
+    output: dict[str, Any] = {
         "status_code": response.get("status_code"),
         "duration_ms": result["duration_ms"],
         "headers": response.get("headers", {}),
         "body": response.get("body"),
         "request": result["request_snapshot"],
         "assertion_results": result["assertion_results"],
+        "assertions": result["assertion_results"],
         "status": result["status"],
         "error_message": result["error_message"],
     }
+    if data.get("save_as_case") or data.get("saveAsCase"):
+        try:
+            with session_scope() as session:
+                endpoint_id = data.get("endpoint_id") or data.get("endpointId") or data.get("api_id") or data.get("apiId")
+                endpoint = require_db_item(session, ApiEndpoint, endpoint_id, "endpoint_id")
+                expected_status = int(data.get("expected_status") or data.get("expectedStatus") or response.get("status_code") or 200)
+                case = ApiTestCase(
+                    endpoint_id=endpoint.id,
+                    lib_id=endpoint.lib_id,
+                    requirement_item_id=endpoint.requirement_item_id,
+                    name=data.get("case_name") or data.get("caseName") or data.get("name") or f"{endpoint.name} debug case",
+                    category=data.get("category", "debug"),
+                    request_headers=sanitize_payload(data.get("headers") or {}),
+                    request_query=sanitize_payload(data.get("query") or data.get("params") or {}),
+                    request_body=sanitize_payload(data.get("body")),
+                    content_type=data.get("content_type") or data.get("contentType") or "application/json",
+                    expected_status=expected_status,
+                    assertions=sanitize_payload(data.get("assertions") or [{"type": "status_code", "expected": expected_status}]),
+                    pre_script=data.get("pre_script"),
+                    post_script=data.get("post_script"),
+                    status="ready",
+                )
+                session.add(case)
+                session.flush()
+                r2_log(session, "api_test_case", "save_debug_case", case.id, {"endpoint_id": endpoint.id})
+                saved_case = model_dict(case)
+                saved_case["api_id"] = case.endpoint_id
+                output["saved_case_id"] = case.id
+                output["test_case"] = saved_case
+                output["saved_case"] = saved_case
+        except Exception as exc:
+            output["save_error"] = sanitize_payload({"error": str(exc)[:500]})
+    return output
 
 
 def _active_api_environment(session: Any, lib_id: int) -> ApiEnvironment | None:
@@ -2529,21 +2566,7 @@ def _active_api_environment(session: Any, lib_id: int) -> ApiEnvironment | None:
 
 
 def _api_case_payload(case: ApiTestCase, endpoint: ApiEndpoint, environment: ApiEnvironment | None, overrides: dict[str, Any]) -> dict[str, Any]:
-    env_headers = environment.headers if environment else {}
-    headers = {**(env_headers or {}), **(case.request_headers or {}), **(overrides.get("headers") or {})}
-    assertions = overrides.get("assertions") or case.assertions or [{"type": "status_code", "expected": case.expected_status}]
-    return {
-        "method": overrides.get("method") or endpoint.method,
-        "url": overrides.get("url"),
-        "base_url": overrides.get("base_url") or overrides.get("baseUrl") or (environment.base_url if environment else None),
-        "path": overrides.get("path") or endpoint.path,
-        "headers": headers,
-        "query": overrides.get("query") or overrides.get("params") or case.request_query or {},
-        "body": overrides["body"] if "body" in overrides else case.request_body,
-        "content_type": overrides.get("content_type") or overrides.get("contentType") or case.content_type,
-        "timeout_ms": overrides.get("timeout_ms") or overrides.get("timeoutMs"),
-        "assertions": assertions,
-    }
+    return build_case_request_payload(case, endpoint, environment, overrides)
 
 
 def _create_api_execution(
@@ -2588,6 +2611,8 @@ def generate_api_test_cases(apiId: str, payload: WritePayload | None = None):
             content_type=data.get("content_type", "application/json"),
             expected_status=int(data.get("expected_status", 200)),
             assertions=data.get("assertions") or [{"type": "status_code", "expected": 200}],
+            pre_script=data.get("pre_script"),
+            post_script=data.get("post_script"),
             status="draft",
         )
         session.add(case)
@@ -2618,24 +2643,38 @@ def execute_api_test_case(caseId: str, payload: WritePayload | None = None):
         environment_id = data.get("environment_id") or data.get("environmentId")
         environment = require_db_item(session, ApiEnvironment, environment_id, "environment_id") if environment_id else _active_api_environment(session, case.lib_id)
         if environment is not None or data.get("base_url") or data.get("baseUrl"):
-            result = run_api_request(_api_case_payload(case, endpoint, environment, data))
+            request_payload = _api_case_payload(case, endpoint, environment, data)
+            result = attach_runtime_context(run_api_request(request_payload), request_payload.get("_runtime_context"))
             execution = _create_api_execution(session, case, "case", result, environment)
         else:
+            result = {
+                "status": "passed",
+                "request_snapshot": sanitize_payload({"method": endpoint.method, "path": endpoint.path, "headers": case.request_headers, "query": case.request_query, "body": case.request_body}),
+                "response_snapshot": {"status_code": case.expected_status, "body": {"placeholder": True}},
+                "assertion_results": [{"type": "status_code", "passed": True, "expected": case.expected_status, "actual": case.expected_status}],
+                "duration_ms": 20,
+                "error_message": None,
+            }
             execution = ApiExecution(
                 lib_id=case.lib_id,
                 endpoint_id=case.endpoint_id,
                 case_id=case.id,
                 run_type="case",
-                status="passed",
-                request_snapshot=sanitize_payload({"method": endpoint.method, "path": endpoint.path, "headers": case.request_headers, "query": case.request_query, "body": case.request_body}),
-                response_snapshot={"status_code": case.expected_status, "body": {"placeholder": True}},
-                assertion_results=[{"type": "status_code", "passed": True, "expected": case.expected_status, "actual": case.expected_status}],
-                duration_ms=20,
+                status=result["status"],
+                request_snapshot=result["request_snapshot"],
+                response_snapshot=result["response_snapshot"],
+                assertion_results=result["assertion_results"],
+                duration_ms=result["duration_ms"],
             )
             session.add(execution)
             session.flush()
         r2_log(session, "api_execution", "execute_case", execution.id, {"case_id": case.id})
-        return model_dict(execution)
+        response = model_dict(execution)
+        if isinstance(result, dict) and result.get("variables"):
+            response["variables"] = sanitize_runtime_payload(result["variables"])
+        if isinstance(result, dict) and result.get("missing_variables"):
+            response["missing_variables"] = sanitize_runtime_payload(result["missing_variables"])
+        return response
 
 
 @router.post("/api-test-cases/batch-executions")
@@ -2651,23 +2690,37 @@ def batch_execute_api_test_cases(payload: WritePayload):
             endpoint = require_db_item(session, ApiEndpoint, case.endpoint_id, "endpoint_id")
             environment = specified_environment or _active_api_environment(session, case.lib_id)
             if environment is not None or data.get("base_url") or data.get("baseUrl"):
-                result = run_api_request(_api_case_payload(case, endpoint, environment, data))
+                request_payload = _api_case_payload(case, endpoint, environment, data)
+                result = attach_runtime_context(run_api_request(request_payload), request_payload.get("_runtime_context"))
                 execution = _create_api_execution(session, case, "batch", result, environment)
             else:
+                result = {
+                    "status": "passed",
+                    "request_snapshot": sanitize_payload({"method": endpoint.method, "path": endpoint.path, "headers": case.request_headers, "query": case.request_query, "body": case.request_body}),
+                    "response_snapshot": {"status_code": case.expected_status, "body": {"placeholder": True}},
+                    "assertion_results": [{"type": "status_code", "passed": True, "expected": case.expected_status, "actual": case.expected_status}],
+                    "duration_ms": 20,
+                    "error_message": None,
+                }
                 execution = ApiExecution(
                     lib_id=case.lib_id,
                     endpoint_id=case.endpoint_id,
                     case_id=case.id,
                     run_type="batch",
-                    status="passed",
-                    request_snapshot=sanitize_payload({"method": endpoint.method, "path": endpoint.path, "headers": case.request_headers, "query": case.request_query, "body": case.request_body}),
-                    response_snapshot={"status_code": case.expected_status, "body": {"placeholder": True}},
-                    assertion_results=[{"type": "status_code", "passed": True, "expected": case.expected_status, "actual": case.expected_status}],
-                    duration_ms=20,
+                    status=result["status"],
+                    request_snapshot=result["request_snapshot"],
+                    response_snapshot=result["response_snapshot"],
+                    assertion_results=result["assertion_results"],
+                    duration_ms=result["duration_ms"],
                 )
                 session.add(execution)
                 session.flush()
-            executions.append(model_dict(execution))
+            execution_payload = model_dict(execution)
+            if isinstance(result, dict) and result.get("variables"):
+                execution_payload["variables"] = sanitize_runtime_payload(result["variables"])
+            if isinstance(result, dict) and result.get("missing_variables"):
+                execution_payload["missing_variables"] = sanitize_runtime_payload(result["missing_variables"])
+            executions.append(execution_payload)
         r2_log(session, "api_execution", "batch_execute", None, {"count": len(executions)})
         return {"executions": executions}
 
@@ -2723,6 +2776,40 @@ def activate_api_environment(envId: str):
         session.flush()
         r2_log(session, "api_environment", "activate", env.id, {"lib_id": env.lib_id})
         return model_dict(env)
+
+
+@router.get("/api-test-libs/{libId}/mock-rules")
+@router.get("/api-test-libs/{libId}/mocks")
+def list_api_mock_rules(libId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+    with session_scope() as session:
+        lib = require_db_item(session, ApiTestLib, libId, "libId")
+        return list_api_mocks(session, lib.id, page_num, page_size)
+
+
+@router.post("/api-test-libs/{libId}/mock-rules")
+@router.post("/api-test-libs/{libId}/mocks")
+def create_api_mock_rule(libId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        lib = require_db_item(session, ApiTestLib, libId, "libId")
+        mock = create_api_mock(session, lib, data)
+        r2_log(session, "api_mock", "create", mock.get("id"), {"lib_id": lib.id})
+        return mock
+
+
+@router.post("/api-test-libs/{libId}/mock/dispatch")
+def dispatch_api_mock_for_lib(libId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    data["lib_id"] = to_int(libId, "libId")
+    with session_scope() as session:
+        require_db_item(session, ApiTestLib, libId, "libId")
+        return dispatch_api_mock(session, data)
+
+
+@router.post("/api-mocks/dispatch")
+def dispatch_api_mock_global(payload: WritePayload):
+    with session_scope() as session:
+        return dispatch_api_mock(session, payload_dict(payload))
 
 
 @router.get("/api-test-libs/{libId}/scenarios")

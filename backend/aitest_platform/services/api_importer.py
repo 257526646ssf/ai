@@ -33,8 +33,11 @@ def parse_api_import_payload(payload: dict[str, Any]) -> ApiImportResult:
     generate_cases = bool(data.get("generate_cases") or data.get("create_cases") or data.get("create_test_cases"))
 
     if source in {"openapi", "swagger"}:
-        document = _document_from_payload(data)
+        document = _document_from_payload(data, allow_yaml=True)
         endpoints = _parse_openapi_document(document)
+    elif source == "har":
+        document = _document_from_payload(data)
+        endpoints = _parse_har_document(document)
     elif source == "postman":
         document = _document_from_payload(data)
         endpoints = _parse_postman_collection(document)
@@ -81,13 +84,18 @@ def _source_type(data: dict[str, Any]) -> str:
         lowered = str(explicit).strip().lower().replace("-", "_")
         aliases = {
             "openapi_json": "openapi",
+            "openapi_yaml": "openapi",
+            "openapi_yml": "openapi",
             "swagger_json": "swagger",
+            "swagger_yaml": "swagger",
+            "swagger_yml": "swagger",
             "postman_collection": "postman",
             "postman_json": "postman",
             "curl_command": "curl",
+            "har_json": "har",
         }
         lowered = aliases.get(lowered, lowered)
-        if lowered in {"openapi", "swagger", "postman", "curl"}:
+        if lowered in {"openapi", "swagger", "postman", "curl", "har"}:
             return lowered
     if any(key in data for key in ("curl", "command")):
         return "curl"
@@ -95,6 +103,8 @@ def _source_type(data: dict[str, Any]) -> str:
     if isinstance(document, dict):
         if "paths" in document:
             return "openapi"
+        if isinstance(document.get("log"), dict) and isinstance(document["log"].get("entries"), list):
+            return "har"
         if "item" in document and "info" in document:
             return "postman"
     if isinstance(document, str) and document.lstrip().startswith("curl "):
@@ -109,7 +119,7 @@ def _optional_document_from_payload(data: dict[str, Any]) -> Any:
     return None
 
 
-def _document_from_payload(data: dict[str, Any]) -> Any:
+def _document_from_payload(data: dict[str, Any], *, allow_yaml: bool = False) -> Any:
     document = _optional_document_from_payload(data)
     if document is None:
         document = data
@@ -117,6 +127,13 @@ def _document_from_payload(data: dict[str, Any]) -> Any:
         try:
             return json.loads(document)
         except json.JSONDecodeError as exc:
+            if allow_yaml:
+                try:
+                    return _parse_yaml_document(document)
+                except ApiImportError:
+                    raise
+                except Exception as yaml_exc:
+                    raise ApiImportError("Import document must be valid JSON or supported YAML") from yaml_exc
             raise ApiImportError("Import document must be valid JSON") from exc
     if isinstance(document, dict):
         return document
@@ -253,6 +270,211 @@ def _status_code_value(value: Any) -> int | str:
         return int(value)
     except (TypeError, ValueError):
         return str(value)
+
+
+def _parse_har_document(document: Any) -> list[dict[str, Any]]:
+    if not isinstance(document, dict) or not isinstance(document.get("log"), dict):
+        raise ApiImportError("HAR import requires a log object")
+    entries = document["log"].get("entries")
+    if not isinstance(entries, list):
+        raise ApiImportError("HAR import requires log.entries")
+    endpoints: list[dict[str, Any]] = []
+    for index, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            continue
+        request = entry.get("request") if isinstance(entry.get("request"), dict) else {}
+        response = entry.get("response") if isinstance(entry.get("response"), dict) else {}
+        method = str(request.get("method") or "GET").upper()
+        path, query = _path_and_query_from_url(str(request.get("url") or "/"))
+        for item in request.get("queryString") or []:
+            if isinstance(item, dict) and item.get("name"):
+                query[str(item["name"])] = item.get("value", "")
+        body = _har_request_body(request.get("postData"))
+        content_type = _har_mime_type(request.get("postData"))
+        response_body = _har_response_body(response.get("content"))
+        response_schema: dict[str, Any] = {
+            "status": response.get("status"),
+            "headers": _har_headers(response.get("headers")),
+            "body": response_body,
+        }
+        if isinstance(response.get("content"), dict) and response["content"].get("mimeType"):
+            response_schema["content_type"] = response["content"].get("mimeType")
+        body_schema = body
+        if content_type and isinstance(body_schema, dict):
+            body_schema = {"content_type": content_type, **body_schema}
+        endpoints.append(
+            {
+                "name": request.get("comment") or f"{method} {path}" or f"HAR request {index}",
+                "method": method,
+                "path": path,
+                "headers_schema": _har_headers(request.get("headers")),
+                "query_schema": query,
+                "body_schema": body_schema,
+                "response_schema": response_schema,
+                "description": entry.get("comment"),
+            }
+        )
+    return endpoints
+
+
+def _har_headers(headers: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    if isinstance(headers, list):
+        for item in headers:
+            if isinstance(item, dict) and item.get("name"):
+                result[str(item["name"])] = item.get("value", "")
+    elif isinstance(headers, dict):
+        result = dict(headers)
+    return result
+
+
+def _har_request_body(post_data: Any) -> Any:
+    if not isinstance(post_data, dict):
+        return {}
+    if isinstance(post_data.get("params"), list) and post_data["params"]:
+        return {str(item.get("name")): item.get("value", "") for item in post_data["params"] if isinstance(item, dict) and item.get("name")}
+    text = post_data.get("text")
+    return _json_or_text(text) if isinstance(text, str) else (text or {})
+
+
+def _har_response_body(content: Any) -> Any:
+    if not isinstance(content, dict):
+        return {}
+    text = content.get("text")
+    return _json_or_text(text) if isinstance(text, str) else (text or {})
+
+
+def _har_mime_type(post_data: Any) -> str | None:
+    if isinstance(post_data, dict) and isinstance(post_data.get("mimeType"), str):
+        return post_data["mimeType"]
+    return None
+
+
+def _parse_yaml_document(text: str) -> dict[str, Any]:
+    lines = _yaml_lines(text)
+    if not lines:
+        raise ApiImportError("YAML document is empty")
+    value, index = _parse_yaml_node(lines, 0, lines[0][0])
+    if index < len(lines):
+        raise ApiImportError("Unsupported YAML structure")
+    if not isinstance(value, dict):
+        raise ApiImportError("YAML document must be an object")
+    return value
+
+
+def _yaml_lines(text: str) -> list[tuple[int, str]]:
+    result: list[tuple[int, str]] = []
+    for raw_line in text.splitlines():
+        if not raw_line.strip() or raw_line.lstrip().startswith("#") or raw_line.strip() in {"---", "..."}:
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        result.append((indent, raw_line.strip()))
+    return result
+
+
+def _parse_yaml_node(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[Any, int]:
+    if index >= len(lines):
+        return {}, index
+    current_indent, content = lines[index]
+    if current_indent < indent:
+        return {}, index
+    if content.startswith("- "):
+        return _parse_yaml_list(lines, index, current_indent)
+    return _parse_yaml_mapping(lines, index, current_indent)
+
+
+def _parse_yaml_mapping(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[dict[str, Any], int]:
+    result: dict[str, Any] = {}
+    while index < len(lines):
+        current_indent, content = lines[index]
+        if current_indent < indent or content.startswith("- "):
+            break
+        if current_indent > indent:
+            index += 1
+            continue
+        key, value = _split_yaml_key_value(content)
+        if value is None:
+            if index + 1 < len(lines) and lines[index + 1][0] > current_indent:
+                child, index = _parse_yaml_node(lines, index + 1, lines[index + 1][0])
+                result[key] = child
+            else:
+                result[key] = {}
+                index += 1
+        else:
+            result[key] = _yaml_scalar(value)
+            index += 1
+    return result, index
+
+
+def _parse_yaml_list(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[list[Any], int]:
+    result: list[Any] = []
+    while index < len(lines):
+        current_indent, content = lines[index]
+        if current_indent < indent or not content.startswith("- "):
+            break
+        if current_indent > indent:
+            index += 1
+            continue
+        item_text = content[2:].strip()
+        if not item_text:
+            if index + 1 < len(lines) and lines[index + 1][0] > current_indent:
+                item, index = _parse_yaml_node(lines, index + 1, lines[index + 1][0])
+            else:
+                item, index = {}, index + 1
+        elif ":" in item_text:
+            key, value = _split_yaml_key_value(item_text)
+            item = {key: _yaml_scalar(value) if value is not None else {}}
+            index += 1
+            if index < len(lines) and lines[index][0] > current_indent:
+                extra, index = _parse_yaml_mapping(lines, index, lines[index][0])
+                if isinstance(extra, dict):
+                    item.update(extra)
+        else:
+            item = _yaml_scalar(item_text)
+            index += 1
+        result.append(item)
+    return result, index
+
+
+def _split_yaml_key_value(content: str) -> tuple[str, str | None]:
+    if ":" not in content:
+        raise ApiImportError("Unsupported YAML line")
+    key, value = content.split(":", 1)
+    key = _unquote(key.strip())
+    value = value.strip()
+    return key, value if value != "" else None
+
+
+def _yaml_scalar(value: str | None) -> Any:
+    if value is None:
+        return {}
+    text = value.strip()
+    if text == "":
+        return ""
+    if text in {"{}", "[]"}:
+        return {} if text == "{}" else []
+    unquoted = _unquote(text)
+    if unquoted != text:
+        return unquoted
+    lowered = text.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    if lowered in {"null", "none", "~"}:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
+def _unquote(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    return value
 
 
 def _parse_postman_collection(document: Any) -> list[dict[str, Any]]:

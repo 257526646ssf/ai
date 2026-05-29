@@ -464,3 +464,29 @@
 - API acceptance: actual project prefix is `/api/v2`; bare `/executions/templates` and `/api/executions/templates` return 404 due to prefix mismatch; `/api/v2/executions/templates` returns 200.
 - Browser light smoke: `http://127.0.0.1:3000/` loads and includes `用例执行`; QA-collected `console.error` / `pageerror` has no obvious JS runtime error. Deep interaction was affected by script Chinese encoding / Playwright lag and is not used as complete interaction evidence.
 - Residual risks: 深层浏览器交互仅轻量验证；扩展缺陷字段仍通过 `Defect.remark` 的 R24 JSON prefix 存储；建议/复测为 deterministic 规则，非真实 LLM；本地服务仍为原有 8000/3000 dev 进程。
+
+## 第二十五轮验收
+- [x] R25 名称为接口测试增强。
+- [x] OpenAPI YAML 支持轻量解析，且不新增 PyYAML 生产依赖。
+- [x] HAR 支持基础解析并导入接口资产。
+- [x] debug 支持 `save_as_case` 保存为 `ApiTestCase`。
+- [x] API runtime context 统一处理环境变量、运行覆盖和 header 优先级。
+- [x] scenario `data_mappings.extract` 已增强变量提取和传递。
+- [x] Mock 服务提供本地平台基础 mock 能力。
+- [x] pre/post script 使用受控 allowlist DSL，danger script 会被拒绝。
+- [x] `src/pages/ApiTesting.jsx` 新增 JSON/YAML/HAR 导入面板、真实 debug 表单、保存为接口用例、环境变量/运行覆盖、场景变量映射、Mock 服务 UI、pre/post script UI。
+- [x] R25 定向测试覆盖 YAML/HAR、debug save、变量优先级、scenario mapping、mock、allowlist/danger script。
+- [x] 完整后端回归、API 冒烟、浏览器轻量 smoke 和清理检查均已由 QA worker 回填通过。
+
+## Round 25 Evidence
+- Added `backend/tests/test_round25_api_testing_enhancement.py`.
+- Added backend services `backend/aitest_platform/services/api_runtime_context.py`, `backend/aitest_platform/services/api_mock_service.py`, and `backend/aitest_platform/services/api_script_runner.py`.
+- Enhanced `backend/aitest_platform/services/api_importer.py`, `backend/aitest_platform/services/api_runner.py`, `backend/aitest_platform/services/api_scenario_runner.py`, and `backend/aitest_platform/api/router.py`.
+- `cd backend; python -m compileall aitest_platform`: passed, exit code 0.
+- `cd backend; python -m pytest tests/test_round5_api_runner.py tests/test_round6_execution_runners.py tests/test_round7_import_schedule.py tests/test_round25_api_testing_enhancement.py -q`: passed, exit code 0, with only FastAPI `HTTP_422_UNPROCESSABLE_ENTITY` deprecation warning.
+- `cd backend; python -m pytest -q`: full backend regression passed, exit code 0, with only FastAPI deprecation warning.
+- Root `npm run build`: passed, exit code 0, with only Vite chunk > 500 kB warning.
+- API smoke used temporary SQLite and the DB was deleted: OpenAPI YAML import imported=1 path `/r25/smoke/users` expected status 206; HAR import imported=1 path `/r25/smoke/orders` expected status 202; Mock create/list/dispatch matched=true status 207; debug save_as_case status 200 saved_case_id=3.
+- Browser smoke: `http://127.0.0.1:3000/` entered ApiTesting/workbench; 5 R25 UI keywords were visible: OpenAPI YAML, HAR, 环境变量, 本次运行覆盖, Mock 服务; console.error=0 and pageerror=0.
+- Cleanup: temporary processes and DB were cleaned; ports 8000/3000 had no listeners.
+- Residual risks: Vite chunk > 500 kB warning remains; browser coverage is limited to light load/visibility/console smoke, and deeper UI writes are mainly covered by API smoke.

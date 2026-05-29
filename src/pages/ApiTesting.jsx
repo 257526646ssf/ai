@@ -14,9 +14,7 @@ import {
   Play,
   RotateCw,
   Cpu,
-  Activity,
-  Terminal,
-  ActivityIcon
+  Terminal
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
@@ -33,6 +31,144 @@ const toPercentLabel = (passed, total, fallback = '0%') => {
   const t = Number(total);
   if (!Number.isFinite(p) || !Number.isFinite(t) || t <= 0) return fallback;
   return `${Math.max(0, Math.min(100, (p / t) * 100)).toFixed(1)}%`;
+};
+
+const IMPORT_SOURCES = [
+  {
+    id: 'openapi_json',
+    label: 'OpenAPI JSON',
+    sourceType: 'openapi',
+    format: 'json',
+    sample: '{\n  "openapi": "3.0.0",\n  "info": { "title": "Demo API", "version": "1.0.0" },\n  "paths": {\n    "/api/v1/ping": {\n      "get": {\n        "summary": "Ping",\n        "responses": { "200": { "description": "ok" } }\n      }\n    }\n  }\n}'
+  },
+  {
+    id: 'openapi_yaml',
+    label: 'OpenAPI YAML',
+    sourceType: 'openapi',
+    format: 'yaml',
+    sample: 'openapi: 3.0.0\ninfo:\n  title: Demo API\n  version: 1.0.0\npaths:\n  /api/v1/ping:\n    get:\n      summary: Ping\n      responses:\n        "200":\n          description: ok'
+  },
+  {
+    id: 'har',
+    label: 'HAR',
+    sourceType: 'har',
+    format: 'json',
+    sample: '{\n  "log": {\n    "version": "1.2",\n    "entries": []\n  }\n}'
+  }
+];
+
+const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+const EMPTY_ROW = { key: '', value: '', enabled: true };
+
+const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
+
+const toRecord = (value) => {
+  if (isRecord(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return isRecord(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+};
+
+const toList = (payload) => {
+  if (Array.isArray(payload)) return payload;
+  if (payload && typeof payload === 'object') return pickList(payload);
+  return [];
+};
+
+const safeStringify = (value) => {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value ?? null, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+
+const objectToRows = (value, fallback = [EMPTY_ROW]) => {
+  const entries = Object.entries(toRecord(value));
+  if (!entries.length) return fallback.map((row) => ({ ...row }));
+  return entries.map(([key, itemValue]) => ({
+    key,
+    value: typeof itemValue === 'string' ? itemValue : safeStringify(itemValue),
+    enabled: true
+  }));
+};
+
+const rowsToObject = (rows) => {
+  return (Array.isArray(rows) ? rows : []).reduce((record, row) => {
+    const key = String(row?.key || '').trim();
+    if (!key || row?.enabled === false) return record;
+    record[key] = row?.value ?? '';
+    return record;
+  }, {});
+};
+
+const parseBodyInput = (text) => {
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return trimmed;
+  }
+};
+
+const parseJsonSource = (text) => {
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed) return { ok: false, value: null, message: '请输入导入内容。' };
+  try {
+    return { ok: true, value: JSON.parse(trimmed), message: '' };
+  } catch (error) {
+    return { ok: false, value: null, message: error?.message || 'JSON 解析失败。' };
+  }
+};
+
+const joinUrl = (baseUrl, path) => {
+  const rawPath = String(path || '').trim();
+  if (/^https?:\/\//i.test(rawPath)) return rawPath;
+  const base = String(baseUrl || '').replace(/\/+$/, '');
+  const nextPath = rawPath ? `/${rawPath.replace(/^\/+/, '')}` : '';
+  return `${base}${nextPath}`;
+};
+
+const readErrorMessage = (error, fallback = '请求失败') => {
+  const payload = error?.payload;
+  if (isRecord(payload)) return payload.message || payload.detail || error?.message || fallback;
+  return error?.message || fallback;
+};
+
+const pickSavedCase = (result) => {
+  const payload = toRecord(result);
+  const nestedResult = toRecord(payload.result);
+  return (
+    payload.saved_case ||
+    payload.savedCase ||
+    payload.test_case ||
+    payload.testCase ||
+    payload.case ||
+    nestedResult.saved_case ||
+    nestedResult.test_case ||
+    null
+  );
+};
+
+const normalizeDebugResult = (result) => {
+  const payload = toRecord(result);
+  const response = toRecord(payload.response);
+  return {
+    raw: result,
+    statusCode: payload.status_code ?? payload.status ?? response.status_code ?? response.status ?? '--',
+    durationMs: payload.duration_ms ?? payload.elapsed_ms ?? payload.latency_ms ?? response.duration_ms ?? 0,
+    headers: toRecord(payload.headers || payload.response_headers || response.headers),
+    scriptResults: payload.script_results || payload.scriptResults || response.script_results || null,
+    savedCase: pickSavedCase(result)
+  };
 };
 
 const mapBackendLib = (lib, apis = [], cases = []) => {
@@ -93,34 +229,47 @@ export default function ApiTesting() {
     { name: '促销与优惠券发布系统', desc: '秒杀活动、满减发放与核销业务接口', type: 'HTTP / JSON', count: 30, cases: 298, rate: '89.4%', time: '05-18 09:05', owner: '陈磊', health: '89.4%', activeCount: 25, riskCount: 3 }
   ];
 
-  const initialBody = `{
-  "raw_text": "用户需要在智能客服系统的对话窗口中输入文本内容并发送，系统检测是否有违规内容后保存入库",
-  "source_type": "text",
-  "options": {
-    "granularity": "normal",
-    "extract_rules": true
-  }
-}`;
-
-  const initialResponse = `{
-  "status": "success",
-  "data": {
-    "document_summary": "智能客服文本消息发送与合规校验模块",
-    "items": [
-      {
-        "item_number": "REQ-00004",
-        "title": "发送文本消息",
-        "summary": "客服在会话中输入文本并发送，推送给用户并在窗口展示，记录到会话历史。",
-        "priority": "P0"
-      }
-    ],
-    "confidence": 0.97,
-    "latency_ms": 420
-  }
-}`;
-
-  const [requestBody, setRequestBody] = useState(initialBody);
   const [responseBody, setResponseBody] = useState('');
+  const [importSourceId, setImportSourceId] = useState('openapi_json');
+  const [importText, setImportText] = useState(IMPORT_SOURCES[0].sample);
+  const [importGenerateCases, setImportGenerateCases] = useState(true);
+  const [importCreateCases, setImportCreateCases] = useState(true);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const [importError, setImportError] = useState('');
+  const [debugForm, setDebugForm] = useState({
+    method: 'GET',
+    url: '',
+    baseUrl: 'http://127.0.0.1:8000',
+    path: '/api/v2/projects',
+    expectedStatus: '200',
+    body: '{\n  "page": 1,\n  "pageSize": 1\n}'
+  });
+  const [debugHeaders, setDebugHeaders] = useState([{ key: 'Content-Type', value: 'application/json', enabled: true }]);
+  const [debugQuery, setDebugQuery] = useState([{ key: 'page', value: '1', enabled: true }, { key: 'pageSize', value: '1', enabled: true }]);
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState('');
+  const [envVarRows, setEnvVarRows] = useState([{ key: 'base_url', value: 'http://127.0.0.1:8000', enabled: true }]);
+  const [runVarRows, setRunVarRows] = useState([{ key: 'trace_id', value: 'manual-r25', enabled: true }]);
+  const [saveAsCase, setSaveAsCase] = useState(false);
+  const [savedCaseResult, setSavedCaseResult] = useState(null);
+  const [debugResult, setDebugResult] = useState(null);
+  const [enableScripts, setEnableScripts] = useState(false);
+  const [preScript, setPreScript] = useState('setHeader("X-R25-Trace", variables.trace_id)');
+  const [postScript, setPostScript] = useState('assertStatus(expected_status)');
+  const [scenarioMappingRows, setScenarioMappingRows] = useState([
+    { key: 'token', value: '$.data.token', enabled: true },
+    { key: 'request_id', value: '$.headers.x-request-id', enabled: false }
+  ]);
+  const [remoteMocks, setRemoteMocks] = useState([]);
+  const [mockForm, setMockForm] = useState({
+    method: 'GET',
+    path: '/api/v1/mock-smoke',
+    statusCode: '200',
+    responseBody: '{\n  "ok": true,\n  "source": "mock"\n}'
+  });
+  const [mockStatus, setMockStatus] = useState({ type: 'info', message: 'Mock 规则尚未加载。' });
+  const [isSavingMock, setIsSavingMock] = useState(false);
+  const [isDispatchingMock, setIsDispatchingMock] = useState(false);
 
   React.useEffect(() => {
     const handleApiResponseSuccess = (e) => {
@@ -167,30 +316,34 @@ export default function ApiTesting() {
       setRemoteEnvConfigs([]);
       setRemoteScenarioSteps([]);
       setRemoteSchedules([]);
+      setRemoteMocks([]);
       return;
     }
 
-    const [envPayload, scenarioPayload, schedulePayload] = await Promise.all([
+    const [envPayload, scenarioPayload, schedulePayload, mockPayload] = await Promise.all([
       apiGet(`/api-test-libs/${lib.backendId}/environments`, { params: { page: 1, pageSize: 20 } }).catch(() => null),
       apiGet(`/api-test-libs/${lib.backendId}/scenarios`, { params: { page: 1, pageSize: 20 } }).catch(() => null),
-      apiGet(`/api-test-libs/${lib.backendId}/schedules`, { params: { page: 1, pageSize: 20 } }).catch(() => null)
+      apiGet(`/api-test-libs/${lib.backendId}/schedules`, { params: { page: 1, pageSize: 20 } }).catch(() => null),
+      apiGet(`/api-test-libs/${lib.backendId}/mocks`, { params: { page: 1, pageSize: 20 } }).catch((error) => ({ __error: error }))
     ]);
     const envs = pickList(envPayload);
     const scenarios = pickList(scenarioPayload);
     const schedules = pickList(schedulePayload);
+    const mocks = mockPayload?.__error ? [] : pickList(mockPayload);
     const endpointById = new Map((lib.rawApis || []).map((api) => [String(api.id), api]));
     const caseById = new Map((lib.rawCases || []).map((item) => [String(item.id), item]));
     const primaryScenario = scenarios[0];
-    const steps = (primaryScenario?.nodes || []).map((node, index) => {
+    const steps = toList(primaryScenario?.nodes).map((node, index) => {
       const testCase = caseById.get(String(node.case_id));
       const endpoint = endpointById.get(String(testCase?.endpoint_id));
+      const extract = toRecord(node.extract);
       return {
         id: node.id || `Step ${index + 1}`,
         name: testCase?.name || node.name || `Backend case #${node.case_id || index + 1}`,
         method: endpoint?.method || 'CASE',
         url: endpoint?.path || `case:${node.case_id || index + 1}`,
         desc: primaryScenario?.description || 'Backend scenario node',
-        extracts: Object.keys(node.extract || {}).join(', ') || 'backend runner',
+        extracts: Object.keys(extract).join(', ') || 'backend runner',
         delay: `${testCase?.expected_status || 200}`
       };
     });
@@ -198,6 +351,10 @@ export default function ApiTesting() {
     setRemoteEnvConfigs(envs);
     setRemoteScenarioSteps(steps);
     setRemoteSchedules(schedules);
+    setRemoteMocks(mocks);
+    setMockStatus(mockPayload?.__error
+      ? { type: 'error', message: readErrorMessage(mockPayload.__error, 'Mock 规则加载失败。') }
+      : { type: mocks.length ? 'success' : 'info', message: mocks.length ? `已加载 ${mocks.length} 条 Mock 规则。` : '暂无 Mock 规则。' });
   }, []);
 
   const loadApiTestingData = React.useCallback(async ({ silent = false } = {}) => {
@@ -242,6 +399,273 @@ export default function ApiTesting() {
   React.useEffect(() => {
     loadApiRuntimeData(activeBackendLib);
   }, [loadApiRuntimeData, activeBackendLib?.backendId]);
+
+  React.useEffect(() => {
+    const activeApi = activeBackendLib?.rawApis?.[0];
+    if (!activeApi) return;
+    setDebugForm((prev) => ({
+      ...prev,
+      method: String(activeApi.method || prev.method || 'GET').toUpperCase(),
+      path: activeApi.path || prev.path,
+      url: ''
+    }));
+  }, [activeBackendLib?.backendId]);
+
+  React.useEffect(() => {
+    const activeEnv = remoteEnvConfigs.find((item) => item?.is_active || item?.isActive) || remoteEnvConfigs[0];
+    if (!activeEnv?.id) return;
+    setSelectedEnvironmentId((prev) => (
+      prev && remoteEnvConfigs.some((item) => String(item.id) === String(prev)) ? prev : String(activeEnv.id)
+    ));
+    setDebugForm((prev) => ({
+      ...prev,
+      baseUrl: activeEnv.base_url || prev.baseUrl
+    }));
+    setEnvVarRows(objectToRows({
+      ...toRecord(activeEnv.variables),
+      ...(activeEnv.base_url ? { base_url: activeEnv.base_url } : {})
+    }, [{ key: 'base_url', value: activeEnv.base_url || 'http://127.0.0.1:8000', enabled: true }]));
+  }, [remoteEnvConfigs]);
+
+  const updateKeyValueRow = (setter, index, patch) => {
+    setter((prev) => (Array.isArray(prev) ? prev : []).map((row, rowIndex) => (
+      rowIndex === index ? { ...row, ...patch } : row
+    )));
+  };
+
+  const addKeyValueRow = (setter) => {
+    setter((prev) => [...(Array.isArray(prev) ? prev : []), { ...EMPTY_ROW }]);
+  };
+
+  const removeKeyValueRow = (setter, index) => {
+    setter((prev) => {
+      const nextRows = (Array.isArray(prev) ? prev : []).filter((_, rowIndex) => rowIndex !== index);
+      return nextRows.length ? nextRows : [{ ...EMPTY_ROW }];
+    });
+  };
+
+  const renderKeyValueRows = (rows, setter, { keyPlaceholder = 'key', valuePlaceholder = 'value', addLabel = '添加一行' } = {}) => {
+    const safeRows = Array.isArray(rows) && rows.length ? rows : [{ ...EMPTY_ROW }];
+    return (
+      <div className="space-y-2">
+        {safeRows.map((row, index) => (
+          <div key={index} className="grid grid-cols-[18px_minmax(0,0.9fr)_minmax(0,1.2fr)_24px] gap-1.5 items-center">
+            <input
+              type="checkbox"
+              checked={row.enabled !== false}
+              onChange={(event) => updateKeyValueRow(setter, index, { enabled: event.target.checked })}
+              className="size-3 accent-[var(--accent-color)]"
+            />
+            <input
+              value={row.key || ''}
+              onChange={(event) => updateKeyValueRow(setter, index, { key: event.target.value })}
+              placeholder={keyPlaceholder}
+              className="min-w-0 px-2 py-1.5 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[10px] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+            />
+            <input
+              value={row.value || ''}
+              onChange={(event) => updateKeyValueRow(setter, index, { value: event.target.value })}
+              placeholder={valuePlaceholder}
+              className="min-w-0 px-2 py-1.5 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[10px] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+            />
+            <button
+              type="button"
+              onClick={() => removeKeyValueRow(setter, index)}
+              className="size-6 rounded-md border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-red-500 hover:border-red-500/40 flex items-center justify-center"
+              title="删除"
+            >
+              <XCircle className="size-3" />
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() => addKeyValueRow(setter)}
+          className="w-full py-1.5 border border-dashed border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-[10px] rounded-lg cursor-pointer text-center flex items-center justify-center gap-1 hover:border-[var(--accent-color)] transition-all"
+        >
+          <Plus className="size-3" />
+          <span>{addLabel}</span>
+        </button>
+      </div>
+    );
+  };
+
+  const getActiveLibId = () => activeBackendLib?.backendId || activeBackendLib?.raw?.id || null;
+
+  const handleImportSourceChange = (sourceId) => {
+    const currentSource = IMPORT_SOURCES.find((item) => item.id === importSourceId) || IMPORT_SOURCES[0];
+    const nextSource = IMPORT_SOURCES.find((item) => item.id === sourceId) || IMPORT_SOURCES[0];
+    setImportSourceId(sourceId);
+    if (!importText.trim() || importText === currentSource.sample) {
+      setImportText(nextSource.sample);
+    }
+  };
+
+  const handleImportApis = async () => {
+    const source = IMPORT_SOURCES.find((item) => item.id === importSourceId) || IMPORT_SOURCES[0];
+    setIsImporting(true);
+    setImportError('');
+    setImportResult(null);
+    try {
+      let libId = getActiveLibId();
+      if (!libId) {
+        if (!projectContext?.id) throw new Error('当前没有可用项目，无法创建接口库。');
+        const createdLib = await apiPost(`/projects/${projectContext.id}/api-test-libs`, {
+          name: `R25 导入接口库 ${new Date().toLocaleString('zh-CN', { hour12: false })}`,
+          description: 'R25 前端导入面板创建',
+          import_source: source.sourceType
+        });
+        libId = createdLib?.id;
+      }
+      if (!libId) throw new Error('接口库创建失败，后端未返回 lib id。');
+
+      const payload = {
+        source_type: source.sourceType,
+        source_format: source.format,
+        generate_cases: importGenerateCases,
+        create_cases: importCreateCases,
+        raw_text: importText,
+        content: importText
+      };
+      if (source.format === 'json') {
+        const parsed = parseJsonSource(importText);
+        if (!parsed.ok) throw new Error(parsed.message);
+        if (source.sourceType === 'har') {
+          payload.har = parsed.value;
+        } else {
+          payload.schema = parsed.value;
+        }
+      }
+
+      const result = await apiPost(`/api-test-libs/${libId}/apis/import`, payload, { timeoutMs: 20000 });
+      setImportResult(result);
+      showToast('接口导入完成，列表已刷新。', 'success');
+      await loadApiTestingData({ silent: true });
+    } catch (error) {
+      const message = readErrorMessage(error, '接口导入失败。');
+      setImportError(message);
+      showToast(message, 'error');
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const buildDebugPayload = (forceSaveAsCase = false) => {
+    const expectedStatus = Number(debugForm.expectedStatus);
+    const headers = rowsToObject(debugHeaders);
+    const query = rowsToObject(debugQuery);
+    const runVariables = rowsToObject(runVarRows);
+    const environmentVariables = rowsToObject(envVarRows);
+    return {
+      method: String(debugForm.method || 'GET').toUpperCase(),
+      url: debugForm.url.trim() || joinUrl(debugForm.baseUrl, debugForm.path),
+      base_url: debugForm.baseUrl,
+      path: debugForm.path,
+      headers,
+      headers_override: headers,
+      query,
+      body: parseBodyInput(debugForm.body),
+      expected_status: Number.isFinite(expectedStatus) ? expectedStatus : undefined,
+      assertions: Number.isFinite(expectedStatus) ? [{ type: 'status_code', expected: expectedStatus }] : [],
+      environment_id: selectedEnvironmentId || undefined,
+      environment_variables: environmentVariables,
+      variables: runVariables,
+      save_as_case: Boolean(saveAsCase || forceSaveAsCase),
+      enable_scripts: Boolean(enableScripts),
+      pre_script: enableScripts ? preScript : undefined,
+      post_script: enableScripts ? postScript : undefined
+    };
+  };
+
+  const handleLoadMocks = async () => {
+    const libId = getActiveLibId();
+    if (!libId) {
+      setMockStatus({ type: 'error', message: '当前没有可用接口库，无法加载 Mock。' });
+      return;
+    }
+    try {
+      const payload = await apiGet(`/api-test-libs/${libId}/mocks`, { params: { page: 1, pageSize: 20 } });
+      const rules = pickList(payload);
+      setRemoteMocks(rules);
+      setMockStatus({ type: 'success', message: rules.length ? `已加载 ${rules.length} 条 Mock 规则。` : '暂无 Mock 规则。' });
+    } catch (error) {
+      setMockStatus({ type: 'error', message: readErrorMessage(error, 'Mock 规则加载失败。') });
+    }
+  };
+
+  const handleSaveMockRule = async () => {
+    const libId = getActiveLibId();
+    if (!libId) {
+      setMockStatus({ type: 'error', message: '当前没有可用接口库，无法新增 Mock。' });
+      return;
+    }
+    setIsSavingMock(true);
+    try {
+      const payload = {
+        method: mockForm.method,
+        path: mockForm.path,
+        status_code: Number(mockForm.statusCode) || 200,
+        response_body: parseBodyInput(mockForm.responseBody),
+        is_enabled: true
+      };
+      const result = await apiPost(`/api-test-libs/${libId}/mocks`, payload, { timeoutMs: 10000 });
+      setMockStatus({ type: 'success', message: `Mock 规则已提交：${result?.id ? `#${result.id}` : '后端已接收'}` });
+      await handleLoadMocks();
+    } catch (error) {
+      setMockStatus({ type: 'error', message: readErrorMessage(error, 'Mock 规则提交失败。') });
+    } finally {
+      setIsSavingMock(false);
+    }
+  };
+
+  const handleToggleMockRule = async (rule) => {
+    const libId = getActiveLibId();
+    if (!libId || !rule?.id) {
+      setMockStatus({ type: 'error', message: 'Mock 规则缺少 id，无法启停。' });
+      return;
+    }
+    const nextEnabled = !(rule.is_enabled ?? rule.isEnabled ?? rule.enabled);
+    try {
+      await apiPost(`/api-test-libs/${libId}/mocks`, {
+        id: rule.id,
+        action: nextEnabled ? 'enable' : 'disable',
+        is_enabled: nextEnabled
+      }, { timeoutMs: 10000 });
+      setMockStatus({ type: 'success', message: `Mock 规则已${nextEnabled ? '启用' : '停用'}。` });
+      await handleLoadMocks();
+    } catch (error) {
+      setMockStatus({ type: 'error', message: readErrorMessage(error, 'Mock 规则启停失败。') });
+    }
+  };
+
+  const handleDispatchMockSmoke = async () => {
+    const libId = getActiveLibId();
+    if (!libId) {
+      setMockStatus({ type: 'error', message: '当前没有可用接口库，无法 dispatch。' });
+      return;
+    }
+    setIsDispatchingMock(true);
+    try {
+      const result = await apiPost('/api-mocks/dispatch', {
+        lib_id: libId,
+        method: mockForm.method,
+        path: mockForm.path,
+        headers: rowsToObject(debugHeaders),
+        query: rowsToObject(debugQuery),
+        body: parseBodyInput(debugForm.body),
+        variables: rowsToObject(runVarRows)
+      }, { timeoutMs: 10000 });
+      setMockStatus({ type: 'success', message: 'Mock dispatch 已返回真实结果。' });
+      setResponseBody(safeStringify(result));
+      setResponseTab('body');
+    } catch (error) {
+      const message = readErrorMessage(error, 'Mock dispatch 失败。');
+      setMockStatus({ type: 'error', message });
+      setResponseBody(safeStringify({ error: message, payload: error?.payload || null }));
+    } finally {
+      setIsDispatchingMock(false);
+    }
+  };
 
   const handleSyncSwagger = async () => {
     if (!projectContext?.id) {
@@ -289,29 +713,25 @@ export default function ApiTesting() {
     }
   };
 
-  const handleSend = async () => {
+  const handleSend = async ({ forceSaveAsCase = false } = {}) => {
     setIsSending(true);
     setResponseBody('');
+    setDebugResult(null);
+    if (forceSaveAsCase) setSavedCaseResult(null);
     try {
-      let parsedBody = {};
-      try {
-        parsedBody = requestBody ? JSON.parse(requestBody) : {};
-      } catch {
-        parsedBody = { raw_text: requestBody };
+      const result = await apiPost('/apis/debug', buildDebugPayload(forceSaveAsCase), { timeoutMs: 15000 });
+      const normalized = normalizeDebugResult(result);
+      setDebugResult(normalized);
+      setResponseBody(safeStringify(result));
+      if (normalized.savedCase) {
+        setSavedCaseResult(normalized.savedCase);
+        await loadApiTestingData({ silent: true });
       }
-      const result = await apiPost('/apis/debug', {
-        method: 'GET',
-        url: 'http://127.0.0.1:8000/api/v2/projects',
-        query: { page: '1', pageSize: '1' },
-        body: parsedBody,
-        expected_status: 200,
-        assertions: [{ type: 'status_code', expected: 200 }]
-      }, { timeoutMs: 10000 });
-      setResponseBody(JSON.stringify(result, null, 2));
-      showToast(`接口调试完成，HTTP ${result.status_code || result.status || 'ok'}，耗时 ${result.duration_ms || 0}ms。`, 'success');
+      showToast(`接口调试完成，HTTP ${normalized.statusCode || 'ok'}，耗时 ${normalized.durationMs || 0}ms。`, 'success');
     } catch (error) {
-      setResponseBody(JSON.stringify({ error: error?.message || '接口调试失败' }, null, 2));
-      showToast(error?.message || '接口调试失败，请检查后端服务。', 'error');
+      const message = readErrorMessage(error, '接口调试失败。');
+      setResponseBody(safeStringify({ error: message, payload: error?.payload || null }));
+      showToast(message, 'error');
     } finally {
       setIsSending(false);
     }
@@ -331,9 +751,9 @@ export default function ApiTesting() {
         case_ids: caseIds,
         base_url: 'http://127.0.0.1:8000'
       }, { timeoutMs: 15000 });
-      const executions = result.executions || [];
+      const executions = toList(toRecord(result).executions || result);
       const passed = executions.filter((item) => item.status === 'passed').length;
-      setResponseBody(JSON.stringify(result, null, 2));
+      setResponseBody(safeStringify(result));
       showToast(`已执行 ${executions.length} 条接口断言，通过 ${passed} 条。`, passed === executions.length ? 'success' : 'warning');
     } catch (error) {
       showToast(error?.message || '接口断言执行失败。', 'error');
@@ -353,12 +773,15 @@ export default function ApiTesting() {
 
     setIsRunningScenarioChain(true);
     try {
-      let environment = remoteEnvConfigs.find((item) => item.is_active || item.isActive) || remoteEnvConfigs[0];
+      const extractMappings = rowsToObject(scenarioMappingRows);
+      let environment = remoteEnvConfigs.find((item) => String(item.id) === String(selectedEnvironmentId))
+        || remoteEnvConfigs.find((item) => item.is_active || item.isActive)
+        || remoteEnvConfigs[0];
       if (!environment?.id) {
         environment = await apiPost(`/api-test-libs/${activeLib.backendId}/environments`, {
           name: 'Local Backend',
           base_url: 'http://127.0.0.1:8000',
-          variables: { project_id: projectContext?.id },
+          variables: { project_id: projectContext?.id, ...rowsToObject(envVarRows) },
           is_active: true
         });
       }
@@ -370,18 +793,21 @@ export default function ApiTesting() {
           id: `case-${caseId}`,
           type: 'case',
           case_id: caseId,
-          order: index + 1
+          order: index + 1,
+          extract: index === 0 ? extractMappings : {}
         })),
         edges: caseIds.slice(1).map((caseId, index) => ({
           source: `case-${caseIds[index]}`,
           target: `case-${caseId}`
         })),
-        data_mappings: {}
+        data_mappings: { extract: extractMappings }
       });
 
       const scenarioResult = await apiPost(`/api-scenarios/${scenario.id}/execute`, {
         environment_id: environment.id,
         base_url: environment.base_url || 'http://127.0.0.1:8000',
+        variables: rowsToObject(runVarRows),
+        data_mappings: { extract: extractMappings },
         stop_on_failure: false
       }, { timeoutMs: 15000 });
 
@@ -402,7 +828,7 @@ export default function ApiTesting() {
       }, { timeoutMs: 15000 });
 
       setScenarioRunResult({ scenarioResult, scheduleResult });
-      setResponseBody(JSON.stringify({ scenarioResult, scheduleResult }, null, 2));
+      setResponseBody(safeStringify({ scenarioResult, scheduleResult }));
       await loadApiRuntimeData(activeLib);
       showToast(`场景链路已执行：${scenarioResult?.summary?.status || scenarioResult?.status || 'done'}，计划任务已回写。`, 'success');
     } catch (error) {
@@ -414,7 +840,7 @@ export default function ApiTesting() {
 
   const renderEnvScenario = () => {
     const displayEnvConfigs = remoteEnvConfigs.length
-      ? remoteEnvConfigs.flatMap((env) => Object.entries(env.variables || {}).map(([key, value]) => ({
+      ? remoteEnvConfigs.flatMap((env) => Object.entries(toRecord(env.variables)).map(([key, value]) => ({
         id: `${env.id}-${key}`,
         key,
         value: String(value),
@@ -429,6 +855,9 @@ export default function ApiTesting() {
     const displayScenarioSteps = remoteScenarioSteps.length ? remoteScenarioSteps : scenarioSteps;
     const latestSchedule = remoteSchedules[0];
     const scenarioSummary = scenarioRunResult?.scenarioResult?.summary || latestSchedule?.last_result || latestSchedule?.lastResult;
+    const scenarioResultPayload = toRecord(scenarioRunResult?.scenarioResult);
+    const extractedVariables = toRecord(scenarioResultPayload.extracted_variables || scenarioResultPayload.extractedVariables);
+    const nodeResults = toList(scenarioResultPayload.node_results || scenarioResultPayload.nodeResults || scenarioResultPayload.nodes);
     return (
       <div className="space-y-4 text-left animate-[fadeIn_0.2s_ease-out] w-full">
         {/* 流光连线动画样式注入 */}
@@ -649,6 +1078,28 @@ export default function ApiTesting() {
                   </div>
 
                   <div className="space-y-2">
+                    <div className="text-[9.5px] font-bold text-[var(--text-primary)]">变量提取映射</div>
+                    <p className="text-[8px] text-[var(--text-secondary)]">变量名 -&gt; JSONPath，创建场景写入 data_mappings.extract 与首节点 extract。</p>
+                    {renderKeyValueRows(scenarioMappingRows, setScenarioMappingRows, {
+                      keyPlaceholder: '变量名',
+                      valuePlaceholder: '$.data.id',
+                      addLabel: '添加提取映射'
+                    })}
+                  </div>
+
+                  {(Object.keys(extractedVariables).length > 0 || nodeResults.length > 0) && (
+                    <div className="p-2.5 border border-[var(--border-color)] bg-[var(--bg-card)] rounded-lg text-[9px] space-y-2">
+                      <div className="font-bold text-[var(--text-primary)]">最近执行提取结果</div>
+                      {Object.keys(extractedVariables).length > 0 && (
+                        <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono text-[8.5px] text-emerald-500">{safeStringify(extractedVariables)}</pre>
+                      )}
+                      {nodeResults.length > 0 && (
+                        <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all font-mono text-[8.5px] text-[var(--text-secondary)]">{safeStringify(nodeResults)}</pre>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
                     <div className="text-[9.5px] font-bold text-[var(--text-primary)]">AI 自动注入的链路断言规则</div>
                     <label className="flex items-start gap-2 p-2 border border-[var(--border-color)] bg-[var(--bg-card)] rounded-lg text-[9px] cursor-pointer">
                       <input type="checkbox" defaultChecked className="rounded size-3 accent-[var(--accent-color)] mt-0.5" />
@@ -755,6 +1206,65 @@ export default function ApiTesting() {
               )}
             </div>
           ))}
+        </div>
+
+        <div className="theme-card rounded-xl p-4 shadow-soft space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-color)] pb-2">
+            <div>
+              <h3 className="text-xs font-bold text-[var(--text-primary)]">OpenAPI / HAR 导入面板</h3>
+              <p className="text-[9.5px] text-[var(--text-secondary)] mt-1">选择 source type，粘贴 JSON、YAML 或 HAR，调用当前接口库 import 入口。</p>
+            </div>
+            <div className="p-0.5 border border-[var(--border-color)] rounded-lg flex gap-0.5 bg-[var(--bg-app)] text-[9px] font-bold">
+              {IMPORT_SOURCES.map((source) => {
+                const active = importSourceId === source.id;
+                return (
+                  <button
+                    key={source.id}
+                    type="button"
+                    onClick={() => handleImportSourceChange(source.id)}
+                    className={`px-2.5 py-1 rounded-md transition-all ${active ? 'bg-[var(--bg-card)] text-[var(--accent-color)] border border-[var(--border-color)]/50 shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)]/30'}`}
+                  >
+                    {source.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <textarea
+            value={importText}
+            onChange={(event) => setImportText(event.target.value)}
+            className="w-full h-36 font-mono text-[10px] p-3 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 focus:outline-none focus:border-[var(--accent-color)] leading-relaxed text-[var(--text-primary)]"
+          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3 text-[10px] text-[var(--text-secondary)]">
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={importGenerateCases} onChange={(event) => setImportGenerateCases(event.target.checked)} className="size-3 accent-[var(--accent-color)]" />
+                <span>generate_cases</span>
+              </label>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={importCreateCases} onChange={(event) => setImportCreateCases(event.target.checked)} className="size-3 accent-[var(--accent-color)]" />
+                <span>create_cases</span>
+              </label>
+              <span className="font-mono text-[var(--text-secondary)]">target: {activeLib?.backendId ? `lib #${activeLib.backendId}` : '自动创建接口库'}</span>
+            </div>
+            <button
+              onClick={handleImportApis}
+              disabled={isImporting}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-[11px] accent-btn disabled:opacity-70"
+            >
+              <RotateCw className={`size-3.5 ${isImporting ? 'animate-spin' : ''}`} />
+              <span>{isImporting ? '导入中...' : '导入接口'}</span>
+            </button>
+          </div>
+          {(importError || importResult) && (
+            <div className={`p-3 rounded-lg border text-[10px] ${importError ? 'border-red-500/30 bg-red-500/10 text-red-500' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600'}`}>
+              {importError ? (
+                <span className="break-all">{importError}</span>
+              ) : (
+                <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all font-mono">{safeStringify(importResult)}</pre>
+              )}
+            </div>
+          )}
         </div>
 
         {/* 7:5 选中联动列表区 */}
@@ -961,74 +1471,133 @@ export default function ApiTesting() {
     const displayLibs = remoteLibs.length ? remoteLibs : apiLibs;
     const activeLib = displayLibs[selectedLibIdx] || displayLibs[0];
     const activeApi = activeLib?.rawApis?.[0];
+    const selectedEnv = remoteEnvConfigs.find((item) => String(item.id) === String(selectedEnvironmentId));
+    const responseConsole = {
+      script_results: debugResult?.scriptResults || null,
+      saved_case: savedCaseResult || debugResult?.savedCase || null,
+      environment_priority: '环境变量 < 本次运行覆盖',
+      variables: rowsToObject(runVarRows)
+    };
+    const responseText = responseTab === 'headers'
+      ? safeStringify(debugResult?.headers || {})
+      : responseTab === 'console'
+        ? safeStringify(responseConsole)
+        : responseBody;
+    const mockRules = toList(remoteMocks);
+
     return (
       <div className="space-y-4 text-left w-full animate-[fadeIn_0.2s_ease-out]">
-        {/* 返回 */}
-        <div className="flex justify-between items-center">
-          <button 
+        <div className="flex flex-wrap justify-between items-center gap-3">
+          <button
             onClick={() => setViewMode('list')}
             className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[10.5px] text-[var(--text-secondary)] hover:bg-[var(--border-color)] hover:scale-[1.02] transition-all shadow-sm cursor-pointer"
           >
             <ArrowLeft className="size-3" />
             <span>返回接口列表</span>
           </button>
-          
-          <div className="flex items-center gap-2">
-            <button 
-              onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '接口配置保存成功！', type: 'success' } }))}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => activeApi && setDebugForm((prev) => ({
+                ...prev,
+                method: String(activeApi.method || prev.method).toUpperCase(),
+                path: activeApi.path || prev.path,
+                url: ''
+              }))}
               className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)] text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors"
             >
               <Save className="size-3.5 text-[var(--text-secondary)]" />
-              <span>保存配置</span>
+              <span>填充选中接口</span>
             </button>
-            <button 
-              onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'AI 已智能为您生成 5 条边界断言用例！', type: 'success' } }))}
-              className="px-3.5 py-1.5 text-[11px] glow-button-neon rounded-lg"
+            <button
+              onClick={handleRunAssertions}
+              disabled={isRunningAssertions}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-[11px] glow-button-neon rounded-lg disabled:opacity-70"
             >
-              <Sparkles className="size-3.5 text-white inline mr-1 animate-pulse" />
-              AI 智能生成用例
+              <Play className="size-3.5" />
+              <span>{isRunningAssertions ? '断言执行中...' : '批量执行断言'}</span>
             </button>
           </div>
         </div>
 
-        {/* 接口 URL 与方法 */}
-        <div className="theme-card rounded-xl p-4 shadow-soft flex items-center justify-between">
-          <div className="flex items-center gap-2 w-full">
-            <span className="px-3 py-1.5 bg-[rgba(59,130,246,0.12)] text-blue-500 border border-blue-500/20 font-bold rounded-lg text-xs shrink-0">POST</span>
-            <div className="flex-1 flex items-center gap-2 px-3 py-2 border border-[var(--border-color)] bg-[var(--bg-app)]/30 rounded-lg text-xs font-mono font-bold text-[var(--text-primary)]">
-              <span>{activeApi?.path || '/api/v2/projects'}</span>
+        <div className="theme-card rounded-xl p-4 shadow-soft space-y-3">
+          <div className="grid grid-cols-12 gap-2 items-end">
+            <label className="col-span-12 sm:col-span-2 text-[10px] font-bold text-[var(--text-secondary)]">
+              Method
+              <select
+                value={debugForm.method}
+                onChange={(event) => setDebugForm((prev) => ({ ...prev, method: event.target.value }))}
+                className="mt-1 w-full px-2 py-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[11px] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+              >
+                {HTTP_METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
+              </select>
+            </label>
+            <label className="col-span-12 sm:col-span-4 text-[10px] font-bold text-[var(--text-secondary)]">
+              Full URL
+              <input
+                value={debugForm.url}
+                onChange={(event) => setDebugForm((prev) => ({ ...prev, url: event.target.value }))}
+                placeholder="可选；填写后优先使用完整 URL"
+                className="mt-1 w-full px-3 py-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[11px] text-[var(--text-primary)] font-mono focus:outline-none focus:border-[var(--accent-color)]"
+              />
+            </label>
+            <label className="col-span-12 sm:col-span-3 text-[10px] font-bold text-[var(--text-secondary)]">
+              Base URL
+              <input
+                value={debugForm.baseUrl}
+                onChange={(event) => setDebugForm((prev) => ({ ...prev, baseUrl: event.target.value }))}
+                className="mt-1 w-full px-3 py-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[11px] text-[var(--text-primary)] font-mono focus:outline-none focus:border-[var(--accent-color)]"
+              />
+            </label>
+            <label className="col-span-12 sm:col-span-3 text-[10px] font-bold text-[var(--text-secondary)]">
+              Path
+              <input
+                value={debugForm.path}
+                onChange={(event) => setDebugForm((prev) => ({ ...prev, path: event.target.value }))}
+                className="mt-1 w-full px-3 py-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[11px] text-[var(--text-primary)] font-mono focus:outline-none focus:border-[var(--accent-color)]"
+              />
+            </label>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2 text-[10px] text-[var(--text-secondary)]">
+              <span className="px-2 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-app)] font-mono break-all">
+                {debugForm.url.trim() || joinUrl(debugForm.baseUrl, debugForm.path)}
+              </span>
+              <label className="flex items-center gap-1">
+                <span>Expected</span>
+                <input
+                  value={debugForm.expectedStatus}
+                  onChange={(event) => setDebugForm((prev) => ({ ...prev, expectedStatus: event.target.value }))}
+                  className="w-16 px-2 py-1 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[10px] text-[var(--text-primary)] font-mono focus:outline-none focus:border-[var(--accent-color)]"
+                />
+              </label>
+              <span>Env: {selectedEnv?.name || selectedEnvironmentId || '未选择'}</span>
             </div>
-            <button 
-              onClick={handleSend}
+            <button
+              onClick={() => handleSend()}
               disabled={isSending}
               className="flex items-center gap-1.5 px-4 py-2 glow-button-neon rounded-lg text-xs font-bold cursor-pointer disabled:opacity-75 transition-all"
             >
               <Send className="size-3.5" />
-              <span>{isSending ? '正在运行...' : '运行'}</span>
+              <span>{isSending ? '正在运行...' : '运行 /apis/debug'}</span>
             </button>
           </div>
         </div>
 
-        {/* 8:4 选中联动双面板 */}
         <div className="grid grid-cols-12 gap-4 items-start w-full">
-          {/* 左侧 8/12: Request + Response 控制台 */}
           <div className="col-span-12 lg:col-span-8 space-y-4">
-            {/* Request */}
             <div className="theme-card rounded-xl p-4 shadow-soft">
-              <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2 mb-3">
+              <div className="flex flex-wrap justify-between items-center gap-2 border-b border-[var(--border-color)] pb-2 mb-3">
                 <span className="text-xs font-bold text-[var(--text-primary)]">请求报文定义 (Request)</span>
                 <div className="p-0.5 border border-[var(--border-color)] rounded-lg flex gap-0.5 bg-[var(--bg-app)] text-[9px] font-bold">
                   {['Headers', 'Params', 'Body', 'Auth'].map((tab) => {
-                    const isTabActive = requestTab === tab.toLowerCase();
+                    const tabId = tab.toLowerCase();
+                    const isTabActive = requestTab === tabId;
                     return (
-                      <button 
+                      <button
                         key={tab}
-                        onClick={() => setRequestTab(tab.toLowerCase())}
-                        className={`px-3 py-1 rounded-md transition-all duration-200 cursor-pointer ${
-                          isTabActive 
-                            ? 'bg-[var(--bg-card)] text-[var(--accent-color)] border border-[var(--border-color)]/50 shadow-sm font-extrabold' 
-                            : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)]/30'
-                        }`}
+                        onClick={() => setRequestTab(tabId)}
+                        className={`px-3 py-1 rounded-md transition-all duration-200 cursor-pointer ${isTabActive ? 'bg-[var(--bg-card)] text-[var(--accent-color)] border border-[var(--border-color)]/50 shadow-sm font-extrabold' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)]/30'}`}
                       >
                         {tab}
                       </button>
@@ -1037,44 +1606,67 @@ export default function ApiTesting() {
                 </div>
               </div>
 
-              {requestTab === 'body' ? (
-                <textarea 
-                  value={requestBody}
-                  onChange={(e) => setRequestBody(e.target.value)}
-                  className="w-full h-36 font-mono text-[10.5px] p-3 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 focus:outline-none focus:border-[var(--accent-color)] leading-relaxed text-[var(--text-primary)] quantum-input-glow"
+              {requestTab === 'headers' && renderKeyValueRows(debugHeaders, setDebugHeaders, {
+                keyPlaceholder: 'Header',
+                valuePlaceholder: 'Header value',
+                addLabel: '添加 Header override'
+              })}
+              {requestTab === 'params' && renderKeyValueRows(debugQuery, setDebugQuery, {
+                keyPlaceholder: 'Query',
+                valuePlaceholder: 'Query value',
+                addLabel: '添加 Query 参数'
+              })}
+              {requestTab === 'body' && (
+                <textarea
+                  value={debugForm.body}
+                  onChange={(event) => setDebugForm((prev) => ({ ...prev, body: event.target.value }))}
+                  className="w-full h-44 font-mono text-[10.5px] p-3 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 focus:outline-none focus:border-[var(--accent-color)] leading-relaxed text-[var(--text-primary)] quantum-input-glow"
                 />
-              ) : (
-                <div className="h-36 flex items-center justify-center text-[10px] text-[var(--text-secondary)] border border-[var(--border-color)] bg-[var(--bg-app)]/30 rounded-lg">
-                  当前选项卡已在系统环境变量中统一鉴权，此字段在此方案中保持静态。
+              )}
+              {requestTab === 'auth' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <label className="text-[10px] font-bold text-[var(--text-secondary)]">
+                    Environment
+                    <select
+                      value={selectedEnvironmentId}
+                      onChange={(event) => setSelectedEnvironmentId(event.target.value)}
+                      className="mt-1 w-full px-2 py-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[11px] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+                    >
+                      <option value="">不使用环境</option>
+                      {remoteEnvConfigs.map((env) => (
+                        <option key={env.id} value={env.id}>{env.name || `Env #${env.id}`}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="p-3 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[10px] text-[var(--text-secondary)]">
+                    <div className="font-bold text-[var(--text-primary)]">运行优先级</div>
+                    <div className="mt-1 font-mono">环境变量 &lt; 本次运行覆盖</div>
+                    <div className="mt-1 break-all">payload: environment_id, variables, headers_override</div>
+                  </div>
                 </div>
               )}
             </div>
 
-            {/* Response - macOS Terminal 风格 */}
             <div className="theme-card rounded-xl p-4 shadow-soft">
-              <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2 mb-3">
-                <div className="flex items-center gap-3">
+              <div className="flex flex-wrap justify-between items-center gap-2 border-b border-[var(--border-color)] pb-2 mb-3">
+                <div className="flex flex-wrap items-center gap-3">
                   <span className="text-xs font-bold text-[var(--text-primary)]">响应控制台 (Response)</span>
                   {responseBody && (
-                    <div className="flex items-center gap-2.5 text-[9.5px] font-bold text-[var(--text-secondary)]">
-                      <span className="text-emerald-500 bg-[rgba(16,185,129,0.12)] px-1.5 py-0.5 rounded border border-[rgba(16,185,129,0.2)]">200 OK</span>
-                      <span>Latency: 420ms</span>
-                      <span>Size: 1.2 KB</span>
+                    <div className="flex flex-wrap items-center gap-2 text-[9.5px] font-bold text-[var(--text-secondary)]">
+                      <span className="text-emerald-500 bg-[rgba(16,185,129,0.12)] px-1.5 py-0.5 rounded border border-[rgba(16,185,129,0.2)]">HTTP {debugResult?.statusCode || '--'}</span>
+                      <span>Latency: {debugResult?.durationMs || 0}ms</span>
                     </div>
                   )}
                 </div>
                 <div className="p-0.5 border border-[var(--border-color)] rounded-lg flex gap-0.5 bg-[var(--bg-app)] text-[9px] font-bold">
                   {['Body', 'Headers', 'Console'].map((tab) => {
-                    const isTabActive = responseTab === tab.toLowerCase();
+                    const tabId = tab.toLowerCase();
+                    const isTabActive = responseTab === tabId;
                     return (
-                      <button 
+                      <button
                         key={tab}
-                        onClick={() => setResponseTab(tab.toLowerCase())}
-                        className={`px-3 py-1 rounded-md transition-all duration-200 cursor-pointer ${
-                          isTabActive 
-                            ? 'bg-[var(--bg-card)] text-[var(--accent-color)] border border-[var(--border-color)]/50 shadow-sm font-extrabold' 
-                            : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)]/30'
-                        }`}
+                        onClick={() => setResponseTab(tabId)}
+                        className={`px-3 py-1 rounded-md transition-all duration-200 cursor-pointer ${isTabActive ? 'bg-[var(--bg-card)] text-[var(--accent-color)] border border-[var(--border-color)]/50 shadow-sm font-extrabold' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)]/30'}`}
                       >
                         {tab}
                       </button>
@@ -1083,7 +1675,6 @@ export default function ApiTesting() {
                 </div>
               </div>
 
-              {/* macOS 终端外观包装 */}
               <div className="mac-terminal w-full relative overflow-hidden cyber-matrix-console">
                 <div className="flex items-center justify-between px-3 py-2 border-b border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.02)] relative z-10">
                   <div className="flex items-center gap-1.5">
@@ -1091,21 +1682,21 @@ export default function ApiTesting() {
                     <span className="size-2.5 rounded-full bg-[#ffbd2e]" />
                     <span className="size-2.5 rounded-full bg-[#27c93f]" />
                   </div>
-                  <span className="text-[9.5px] font-mono text-zinc-500 select-none">bash - response - 420ms</span>
+                  <span className="text-[9.5px] font-mono text-zinc-500 select-none">response - /apis/debug</span>
                   <div className="w-[30px]" />
                 </div>
-                
-                <div className="p-4 overflow-y-auto max-h-56 font-mono text-[10.5px] leading-relaxed text-zinc-300 text-left bg-zinc-950/50 rounded-b-xl min-h-[140px] relative z-10">
+
+                <div className="p-4 overflow-y-auto max-h-72 font-mono text-[10.5px] leading-relaxed text-zinc-300 text-left bg-zinc-950/50 rounded-b-xl min-h-[180px] relative z-10">
                   {isSending ? (
-                    <div className="h-28 flex flex-col items-center justify-center text-zinc-500 gap-2 font-sans">
+                    <div className="h-32 flex flex-col items-center justify-center text-zinc-500 gap-2 font-sans">
                       <span className="animate-spin text-lg">↻</span>
-                      <span className="text-[9.5px]">正在向网关发起动态 TLS 校验握手并拉取报文数据...</span>
+                      <span className="text-[9.5px]">正在调用后端调试执行器...</span>
                     </div>
-                  ) : responseBody ? (
-                    <pre className="whitespace-pre-wrap">{responseBody}</pre>
+                  ) : responseText ? (
+                    <pre className="whitespace-pre-wrap break-all">{responseText}</pre>
                   ) : (
-                    <div className="h-28 flex items-center justify-center text-zinc-500 font-sans text-[10px]">
-                      等待连接。请点击上方“运行”按钮触发 HTTP 请求流。
+                    <div className="h-32 flex items-center justify-center text-zinc-500 font-sans text-[10px]">
+                      等待运行结果，失败时会显示后端真实错误。
                     </div>
                   )}
                 </div>
@@ -1113,83 +1704,137 @@ export default function ApiTesting() {
             </div>
           </div>
 
-          {/* 右侧 4/12: AI 智能断言生成与雷达监控 (3D 倾斜眩光卡) */}
           <div className="col-span-12 lg:col-span-4 space-y-4">
-            <TiltCard className="p-4 shadow-soft space-y-4 animate-[slideUpFade_0.4s_ease-out] ai-laser-healing-grid">
-              <div className="relative z-10" style={{ transform: 'translateZ(15px)', transformStyle: 'preserve-3d' }}>
-                <h3 className="text-xs font-bold text-[var(--text-primary)] border-b border-[var(--border-color)] pb-2 flex items-center gap-1.5">
-                  <Sparkles className="size-4 text-[var(--accent-color)] animate-pulse" />
-                  <span>AI 智能断言校验网格</span>
-                </h3>
-                <span className="text-[9px] text-[var(--text-secondary)] block mt-1.5">机器学习特征工程：自动根据响应结构体推荐最完备的逻辑断言</span>
+            <TiltCard className="theme-card rounded-xl p-4 shadow-soft text-left space-y-3">
+              <h3 className="text-xs font-bold text-[var(--text-primary)] border-b border-[var(--border-color)] pb-2 flex items-center gap-1.5">
+                <Database className="size-3.5 text-[var(--accent-color)]" />
+                <span>环境变量与覆盖</span>
+              </h3>
+              <div className="text-[9px] text-[var(--text-secondary)] bg-[var(--bg-app)]/50 border border-[var(--border-color)] rounded-lg p-2">
+                环境变量 &lt; 本次运行覆盖。运行 payload 会带 environment_id、variables 与 headers_override。
               </div>
-
-              <div className="space-y-3 relative z-10" style={{ transform: 'translateZ(10px)' }}>
-                {[
-                  { id: 'as1', assert: 'Response Status == 200', desc: 'SLA 合规性：确保服务器应答 200', checked: true },
-                  { id: 'as2', assert: 'Response.data contains "items"', desc: '数据完整性：校验返回主体含有效项', checked: true },
-                  { id: 'as3', assert: 'items[0].priority == "P0"', desc: '核心属性校验：解析出的首位需求必须是 P0', checked: true },
-                  { id: 'as4', assert: 'Response latency < 1500ms', desc: '性能阈值哨兵：确保响应在 1.5s 以内', checked: true }
-                ].map((as) => (
-                  <div key={as.id} className="p-2.5 border border-[var(--border-color)] bg-[var(--bg-app)]/30 rounded-lg text-left hover:border-[var(--accent-color)] transition-all">
-                    <label className="flex items-start gap-2 cursor-pointer">
-                      <input type="checkbox" defaultChecked={as.checked} className="rounded size-3.5 accent-[var(--accent-color)] mt-0.5 shrink-0" />
-                      <div>
-                        <span className="font-mono text-[9px] font-bold text-[var(--text-primary)] block">{as.assert}</span>
-                        <span className="text-[8px] text-[var(--text-secondary)] mt-0.5 block leading-tight">{as.desc}</span>
-                      </div>
-                    </label>
-                  </div>
-                ))}
+              <div>
+                <div className="text-[9.5px] font-bold text-[var(--text-primary)] mb-2">环境变量</div>
+                {renderKeyValueRows(envVarRows, setEnvVarRows, {
+                  keyPlaceholder: 'Env key',
+                  valuePlaceholder: 'Env value',
+                  addLabel: '添加环境变量'
+                })}
               </div>
-
-              <div className="border-t border-[var(--border-color)] pt-3.5 relative z-10" style={{ transform: 'translateZ(20px)' }}>
-                <button 
-                  onClick={handleRunAssertions}
-                  disabled={isRunningAssertions}
-                  className="w-full py-2 bg-zinc-950 hover:bg-zinc-800 text-white dark:bg-zinc-800 dark:hover:bg-zinc-700 text-[10px] font-bold rounded-lg cursor-pointer text-center flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <Play className="size-3 fill-current" />
-                  <span>{isRunningAssertions ? '执行中...' : '批量执行物理断言'}</span>
-                </button>
+              <div>
+                <div className="text-[9.5px] font-bold text-[var(--text-primary)] mb-2">本次运行覆盖 variables</div>
+                {renderKeyValueRows(runVarRows, setRunVarRows, {
+                  keyPlaceholder: '变量名',
+                  valuePlaceholder: '覆盖值',
+                  addLabel: '添加运行覆盖'
+                })}
               </div>
             </TiltCard>
 
-            {/* 响应时间 Sparkline 卡片 */}
-            <TiltCard className="theme-card rounded-xl p-4 shadow-soft text-left">
-              <h4 className="text-[10.5px] font-bold text-[var(--text-primary)] mb-2 flex items-center gap-1.5">
-                <Activity className="size-3.5 text-[var(--accent-color)]" />
-                <span>实时网关响应时延监控</span>
-              </h4>
-              <div className="h-16 w-full relative">
-                {/* 简易 SVG 时延折线图，带渐变 */}
-                <svg className="w-full h-full" viewBox="0 0 100 30" preserveAspectRatio="none">
-                  <defs>
-                    <linearGradient id="area-grad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="var(--accent-color)" stopOpacity="0.25" />
-                      <stop offset="100%" stopColor="var(--accent-color)" stopOpacity="0" />
-                    </linearGradient>
-                  </defs>
-                  {/* 面积渐变 */}
-                  <path 
-                    d="M 0 30 L 0 20 L 15 15 L 30 25 L 45 10 L 60 18 L 75 8 L 90 22 L 100 12 L 100 30 Z" 
-                    fill="url(#area-grad)" 
-                  />
-                  {/* 折线 */}
-                  <path 
-                    d="M 0 20 L 15 15 L 30 25 L 45 10 L 60 18 L 75 8 L 90 22 L 100 12" 
-                    fill="none" 
-                    stroke="var(--accent-color)" 
-                    strokeWidth="1.2" 
-                    className="path-drawn"
-                  />
-                  {/* 斑点 */}
-                  <circle cx="100" cy="12" r="1.5" fill="var(--accent-color)" className="animate-ping" />
-                </svg>
+            <TiltCard className="theme-card rounded-xl p-4 shadow-soft text-left space-y-3">
+              <h3 className="text-xs font-bold text-[var(--text-primary)] border-b border-[var(--border-color)] pb-2 flex items-center gap-1.5">
+                <Terminal className="size-3.5 text-[var(--accent-color)]" />
+                <span>保存用例与受控脚本</span>
+              </h3>
+              <label className="flex items-center gap-2 text-[10px] text-[var(--text-secondary)] cursor-pointer">
+                <input type="checkbox" checked={saveAsCase} onChange={(event) => setSaveAsCase(event.target.checked)} className="size-3 accent-[var(--accent-color)]" />
+                <span>调试成功后传 save_as_case=true</span>
+              </label>
+              <button
+                onClick={() => handleSend({ forceSaveAsCase: true })}
+                disabled={isSending || !responseBody}
+                className="w-full py-2 bg-zinc-950 hover:bg-zinc-800 text-white dark:bg-zinc-800 dark:hover:bg-zinc-700 text-[10px] font-bold rounded-lg cursor-pointer text-center flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+              >
+                <Save className="size-3" />
+                <span>保存当前调试为接口用例</span>
+              </button>
+              {(savedCaseResult || debugResult?.savedCase) && (
+                <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all font-mono text-[8.5px] text-emerald-500 border border-emerald-500/20 bg-emerald-500/10 rounded-lg p-2">{safeStringify(savedCaseResult || debugResult.savedCase)}</pre>
+              )}
+              <div className="border-t border-[var(--border-color)] pt-3 space-y-2">
+                <label className="flex items-center gap-2 text-[10px] text-[var(--text-secondary)] cursor-pointer">
+                  <input type="checkbox" checked={enableScripts} onChange={(event) => setEnableScripts(event.target.checked)} className="size-3 accent-[var(--accent-color)]" />
+                  <span>启用 pre/post script，后端按 allowlist DSL 受控执行</span>
+                </label>
+                <textarea
+                  value={preScript}
+                  onChange={(event) => setPreScript(event.target.value)}
+                  disabled={!enableScripts}
+                  className="w-full h-16 font-mono text-[9.5px] p-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 focus:outline-none focus:border-[var(--accent-color)] leading-relaxed text-[var(--text-primary)] disabled:opacity-50"
+                />
+                <textarea
+                  value={postScript}
+                  onChange={(event) => setPostScript(event.target.value)}
+                  disabled={!enableScripts}
+                  className="w-full h-16 font-mono text-[9.5px] p-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 focus:outline-none focus:border-[var(--accent-color)] leading-relaxed text-[var(--text-primary)] disabled:opacity-50"
+                />
+                {debugResult?.scriptResults && (
+                  <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono text-[8.5px] text-[var(--text-secondary)] border border-[var(--border-color)] rounded-lg p-2">{safeStringify(debugResult.scriptResults)}</pre>
+                )}
               </div>
-              <div className="flex justify-between text-[8px] text-[var(--text-secondary)] mt-1.5">
-                <span>9次前: 220ms</span>
-                <span>当前: 120ms</span>
+            </TiltCard>
+
+            <TiltCard className="theme-card rounded-xl p-4 shadow-soft text-left space-y-3">
+              <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-2">
+                <h3 className="text-xs font-bold text-[var(--text-primary)] flex items-center gap-1.5">
+                  <Cpu className="size-3.5 text-[var(--accent-color)]" />
+                  <span>Mock 服务</span>
+                </h3>
+                <button onClick={handleLoadMocks} className="px-2 py-1 text-[9px] font-bold border border-[var(--border-color)] rounded bg-[var(--bg-card)] hover:bg-[var(--border-color)] text-[var(--text-primary)]">刷新</button>
+              </div>
+              <div className={`text-[9px] rounded-lg border p-2 ${mockStatus.type === 'error' ? 'border-red-500/30 bg-red-500/10 text-red-500' : 'border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[var(--text-secondary)]'}`}>{mockStatus.message}</div>
+              <div className="space-y-2 max-h-36 overflow-auto">
+                {mockRules.length ? mockRules.map((rule, index) => {
+                  const enabled = rule.is_enabled ?? rule.isEnabled ?? rule.enabled;
+                  return (
+                    <div key={rule.id || index} className="p-2 border border-[var(--border-color)] bg-[var(--bg-app)]/30 rounded-lg text-[9px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-mono font-bold text-[var(--text-primary)] truncate">{rule.method || 'ANY'} {rule.path || rule.url || '--'}</div>
+                          <div className="text-[var(--text-secondary)] truncate">status {rule.status_code || rule.status || 200}</div>
+                        </div>
+                        <button
+                          onClick={() => handleToggleMockRule(rule)}
+                          className={`px-2 py-1 rounded text-[8.5px] font-bold ${enabled ? 'bg-emerald-500/10 text-emerald-500' : 'bg-zinc-500/10 text-[var(--text-secondary)]'}`}
+                        >
+                          {enabled ? '启用' : '停用'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }) : (
+                  <div className="text-[9px] text-[var(--text-secondary)] border border-dashed border-[var(--border-color)] rounded-lg p-3 text-center">暂无规则</div>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <select
+                  value={mockForm.method}
+                  onChange={(event) => setMockForm((prev) => ({ ...prev, method: event.target.value }))}
+                  className="px-2 py-1.5 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[10px] text-[var(--text-primary)]"
+                >
+                  {HTTP_METHODS.map((method) => <option key={method} value={method}>{method}</option>)}
+                </select>
+                <input
+                  value={mockForm.path}
+                  onChange={(event) => setMockForm((prev) => ({ ...prev, path: event.target.value }))}
+                  className="col-span-2 min-w-0 px-2 py-1.5 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[10px] text-[var(--text-primary)] font-mono"
+                />
+              </div>
+              <div className="grid grid-cols-[70px_minmax(0,1fr)] gap-2">
+                <input
+                  value={mockForm.statusCode}
+                  onChange={(event) => setMockForm((prev) => ({ ...prev, statusCode: event.target.value }))}
+                  className="px-2 py-1.5 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[10px] text-[var(--text-primary)] font-mono"
+                />
+                <textarea
+                  value={mockForm.responseBody}
+                  onChange={(event) => setMockForm((prev) => ({ ...prev, responseBody: event.target.value }))}
+                  className="h-16 font-mono text-[9.5px] p-2 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[var(--text-primary)]"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={handleSaveMockRule} disabled={isSavingMock} className="py-2 text-[10px] font-bold rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)] text-[var(--text-primary)] disabled:opacity-60">{isSavingMock ? '提交中...' : '新增规则'}</button>
+                <button onClick={handleDispatchMockSmoke} disabled={isDispatchingMock} className="py-2 text-[10px] font-bold rounded-lg bg-zinc-950 hover:bg-zinc-800 text-white disabled:opacity-60">{isDispatchingMock ? 'Dispatch...' : 'Dispatch smoke'}</button>
               </div>
             </TiltCard>
           </div>

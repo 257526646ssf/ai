@@ -8,6 +8,12 @@ from sqlalchemy import select
 
 from aitest_platform.models import ApiEndpoint, ApiEnvironment, ApiExecution, ApiScenario, ApiTestCase
 from aitest_platform.services.api_runner import run_api_request, sanitize_api_payload
+from aitest_platform.services.api_runtime_context import (
+    attach_runtime_context,
+    build_case_request_payload,
+    resolve_runtime_variables,
+    sanitize_runtime_payload,
+)
 
 VARIABLE_PATTERN = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*}}")
 
@@ -48,10 +54,15 @@ def run_api_scenario(session: Any, scenario: ApiScenario, payload: dict[str, Any
             result = _error_result("ApiEndpoint not found", node, variables)
         else:
             request_payload = _scenario_case_payload(case, endpoint, environment, payload, variables)
-            result = run_api_request(request_payload)
-            extracted = _extract_variables(result.pop("_raw_response_snapshot", None) or result.get("response_snapshot"), _mapping_definitions(scenario, node))
+            result = attach_runtime_context(run_api_request(request_payload), request_payload.get("_runtime_context"))
+            extracted, missing_extractions = _extract_variables(
+                result.pop("_raw_response_snapshot", None) or result.get("response_snapshot"),
+                _mapping_definitions(scenario, node),
+            )
             variables.update(extracted)
             result["extracted_variables"] = sanitize_api_payload(extracted)
+            if missing_extractions:
+                result["missing_extractions"] = sanitize_api_payload(missing_extractions)
             result = _redact_variable_values(result, variables)
 
         execution = _create_case_execution(session, scenario, case, environment, result)
@@ -144,12 +155,7 @@ def _resolve_environment(session: Any, lib_id: int, payload: dict[str, Any]) -> 
 
 
 def _initial_variables(environment: ApiEnvironment | None, payload: dict[str, Any]) -> dict[str, Any]:
-    variables: dict[str, Any] = {}
-    if environment and isinstance(environment.variables, dict):
-        variables.update(environment.variables)
-    if isinstance(payload.get("variables"), dict):
-        variables.update(payload["variables"])
-    return variables
+    return resolve_runtime_variables(environment, payload)
 
 
 def _get_case(session: Any, case_id: int) -> ApiTestCase:
@@ -166,21 +172,13 @@ def _scenario_case_payload(
     payload: dict[str, Any],
     variables: dict[str, Any],
 ) -> dict[str, Any]:
-    env_headers = environment.headers if environment else {}
-    headers = {**(env_headers or {}), **(case.request_headers or {})}
-    raw_payload = {
-        "method": endpoint.method,
-        "base_url": payload.get("base_url") or payload.get("baseUrl") or (environment.base_url if environment else None),
-        "path": endpoint.path,
-        "headers": headers,
-        "query": case.request_query or {},
-        "body": case.request_body,
-        "content_type": case.content_type,
-        "timeout_ms": payload.get("timeout_ms") or payload.get("timeoutMs"),
-        "assertions": case.assertions or [{"type": "status_code", "expected": case.expected_status}],
-        "_include_raw_response": True,
-    }
-    return _inject_variables(raw_payload, variables)
+    return build_case_request_payload(
+        case,
+        endpoint,
+        environment,
+        {**payload, "variables": variables},
+        include_raw_response=True,
+    )
 
 
 def _inject_variables(value: Any, variables: dict[str, Any]) -> Any:
@@ -210,23 +208,51 @@ def _redact_variable_values(value: Any, variables: dict[str, Any]) -> Any:
 def _mapping_definitions(scenario: ApiScenario, node: dict[str, Any]) -> dict[str, Any]:
     mappings: dict[str, Any] = {}
     if isinstance(scenario.data_mappings, dict):
-        mappings.update(scenario.data_mappings)
+        extract_mappings = scenario.data_mappings.get("extract")
+        node_id = str(node.get("id") or "")
+        if isinstance(extract_mappings, dict):
+            node_mappings = extract_mappings.get(node_id) or extract_mappings.get(str(node.get("case_id") or ""))
+            if isinstance(node_mappings, dict):
+                mappings.update(node_mappings)
+            else:
+                mappings.update({key: value for key, value in extract_mappings.items() if isinstance(value, str)})
+        mappings.update(
+            {
+                key: value
+                for key, value in scenario.data_mappings.items()
+                if key not in {"extract", "stop_on_failure", "stopOnFailure"} and isinstance(value, str)
+            }
+        )
     if isinstance(node.get("extract"), dict):
         mappings.update(node["extract"])
+    if isinstance(node.get("extract_variables"), dict):
+        mappings.update({key: _normalize_json_path(value) for key, value in node["extract_variables"].items()})
     return mappings
 
 
-def _extract_variables(response_snapshot: Any, mappings: dict[str, Any]) -> dict[str, Any]:
+def _extract_variables(response_snapshot: Any, mappings: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]]]:
     if not isinstance(response_snapshot, dict):
-        return {}
+        return {}, []
     extracted: dict[str, Any] = {}
+    missing: list[dict[str, str]] = []
     for name, path in mappings.items():
-        if not isinstance(path, str) or not path.startswith("$."):
+        normalized_path = _normalize_json_path(path)
+        if not isinstance(normalized_path, str) or not normalized_path.startswith("$."):
             continue
-        value = _json_path_get(response_snapshot, path)
+        value = _json_path_get(response_snapshot, normalized_path)
         if value is not None:
             extracted[str(name)] = value
-    return extracted
+        else:
+            missing.append({"name": str(name), "path": normalized_path})
+    return extracted, missing
+
+
+def _normalize_json_path(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    if value.startswith("$."):
+        return value
+    return "$." + value.strip(".")
 
 
 def _json_path_get(value: Any, path: str) -> Any:
@@ -250,7 +276,7 @@ def _json_path_get(value: Any, path: str) -> Any:
 def _error_result(message: str, node: dict[str, Any], variables: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": "error",
-        "request_snapshot": sanitize_api_payload({"node": node, "variables": variables}),
+        "request_snapshot": sanitize_api_payload({"node": node, "variables": sanitize_runtime_payload(variables)}),
         "response_snapshot": None,
         "assertion_results": [],
         "duration_ms": 1,

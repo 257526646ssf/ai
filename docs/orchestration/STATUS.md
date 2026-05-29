@@ -543,3 +543,15 @@
 - 浏览器轻量验收：`http://127.0.0.1:3000/` 可加载，页面入口包含 `用例执行`；QA 收集到 `console.error` / `pageerror` 无明显 JS runtime error。
 - 残余风险：扩展缺陷字段通过 `Defect.remark` 的 R24 JSON prefix 存储，避免 schema 迁移；建议和复测为 deterministic 规则，非真实 LLM；冒烟使用临时数据；趋势聚合基于本地 SQLite。
 - 下一步进入 R25：接口测试增强。
+
+## 第二轮 R25 完成状态
+- R25 名称：接口测试增强。
+- 后端实现：OpenAPI YAML 轻量解析（不新增 PyYAML 依赖）、HAR 基础解析、debug `save_as_case` 保存为 `ApiTestCase`、API runtime context 统一变量/header 优先级、scenario `data_mappings.extract` 增强、Mock 服务基础能力、受控 pre/post script allowlist DSL。
+- 后端新增服务：`backend/aitest_platform/services/api_runtime_context.py`、`backend/aitest_platform/services/api_mock_service.py`、`backend/aitest_platform/services/api_script_runner.py`。
+- 后端增强：`backend/aitest_platform/services/api_importer.py`、`backend/aitest_platform/services/api_runner.py`、`backend/aitest_platform/services/api_scenario_runner.py`、`backend/aitest_platform/api/router.py`。
+- 前端实现：`src/pages/ApiTesting.jsx` 新增 JSON/YAML/HAR 导入面板、真实 debug 表单、保存为接口用例、环境变量/运行覆盖、场景变量映射、Mock 服务 UI、pre/post script UI。
+- QA：新增 `backend/tests/test_round25_api_testing_enhancement.py`，覆盖 YAML/HAR、debug save、变量优先级、scenario mapping、mock、allowlist/danger script。
+- 验证：`cd backend; python -m compileall aitest_platform` passed，exit code 0；R5/R6/R7/R25 定向回归 passed，exit code 0，仅 FastAPI `HTTP_422_UNPROCESSABLE_ENTITY` deprecation warning；`cd backend; python -m pytest -q` 完整后端回归 passed，exit code 0，仅 FastAPI deprecation warning；根目录 `npm run build` passed，exit code 0，仅 Vite chunk > 500 kB warning。
+- API/浏览器冒烟：临时 SQLite 已删除；OpenAPI YAML import imported=1 path `/r25/smoke/users` expected status 206；HAR import imported=1 path `/r25/smoke/orders` expected status 202；Mock create/list/dispatch matched=true status 207；debug save_as_case status 200 saved_case_id=3；`http://127.0.0.1:3000/` 进入 ApiTesting/workbench，R25 UI 关键词可见 5 个：OpenAPI YAML、HAR、环境变量、本次运行覆盖、Mock 服务；console.error=0，pageerror=0；进程和临时 DB 已清理，8000/3000 无监听。
+- 残余风险：YAML 为轻量解析非完整 YAML 规范；脚本为 allowlist DSL 非任意代码；Mock 服务为本地平台基础 mock 非完整代理网关；Vite 仍有 chunk > 500 kB warning；浏览器只做轻量加载/可见性/console smoke，深层 UI 写操作主要由 API 冒烟覆盖。
+- 下一步进入 R26：自动化中心增强。

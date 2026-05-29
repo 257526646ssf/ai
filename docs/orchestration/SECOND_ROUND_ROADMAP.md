@@ -80,10 +80,10 @@
 
 ## 当前下一步
 
-立即进入 R25：接口测试增强。
-- 支持 OpenAPI YAML/HAR 基础解析。
-- 补保存调试为用例、环境变量优先级、场景变量映射增强。
-- 推进 Mock 服务基础能力和前后置脚本受控执行，继续保持脱敏和本地优先约束。
+立即进入 R26：自动化中心增强。
+- 补候选筛选、在线文件编辑、代码保存。
+- 增强 Playwright 模板、执行日志/截图/trace 展示。
+- 推进 Artifacts 预览，继续保持脱敏、本地优先和结构化失败约束。
 
 ## 当前进展
 
@@ -118,3 +118,13 @@
 - R24 API 与浏览器验收：项目实际前缀为 `/api/v2`，裸 `/executions/templates` 和 `/api/executions/templates` 返回 404 是前缀不匹配，`/api/v2/executions/templates` 返回 200；`http://127.0.0.1:3000/` 可加载，页面入口包含 `用例执行`，QA 收集到 `console.error` / `pageerror` 无明显 JS runtime error；深层交互曾受脚本中文编码/Playwright 卡顿影响，未作为完整交互验收证据。
 - R24 残余风险：深层浏览器交互仅轻量验证；扩展缺陷字段仍通过 `Defect.remark` 的 R24 JSON prefix 存储；建议/复测为 deterministic 规则，非真实 LLM；本地服务仍为原有 8000/3000 dev 进程。
 - 下一步进入 R25：接口测试增强。
+
+## 当前进展补充：R25
+- R25 已完成文档收口：接口测试增强已落地。
+- 后端完成 OpenAPI YAML 轻量解析（不新增 PyYAML 依赖）、HAR 基础解析、debug `save_as_case` 保存为 `ApiTestCase`、API runtime context 统一变量/header 优先级、scenario `data_mappings.extract` 增强、Mock 服务基础能力、受控 pre/post script allowlist DSL。
+- 新增服务 `backend/aitest_platform/services/api_runtime_context.py`、`backend/aitest_platform/services/api_mock_service.py`、`backend/aitest_platform/services/api_script_runner.py`；增强 `backend/aitest_platform/services/api_importer.py`、`backend/aitest_platform/services/api_runner.py`、`backend/aitest_platform/services/api_scenario_runner.py`、`backend/aitest_platform/api/router.py`。
+- 前端 `src/pages/ApiTesting.jsx` 已新增 JSON/YAML/HAR 导入面板、真实 debug 表单、保存为接口用例、环境变量/运行覆盖、场景变量映射、Mock 服务 UI、pre/post script UI。
+- R25 验收证据见 `docs/orchestration/ROUND25_REPORT.md`：`cd backend; python -m compileall aitest_platform` passed，exit code 0；R5/R6/R7/R25 定向回归 passed，exit code 0，仅 FastAPI `HTTP_422_UNPROCESSABLE_ENTITY` deprecation warning；`cd backend; python -m pytest -q` 完整后端回归 passed，exit code 0，仅 FastAPI deprecation warning；根目录 `npm run build` passed，exit code 0，仅 Vite chunk > 500 kB warning。
+- R25 冒烟事实：临时 SQLite 已删除；OpenAPI YAML import imported=1 path `/r25/smoke/users` expected status 206；HAR import imported=1 path `/r25/smoke/orders` expected status 202；Mock create/list/dispatch matched=true status 207；debug save_as_case status 200 saved_case_id=3；浏览器进入 `http://127.0.0.1:3000/` 的 ApiTesting/workbench，OpenAPI YAML、HAR、环境变量、本次运行覆盖、Mock 服务 5 个关键词可见，console.error=0，pageerror=0；进程和临时 DB 已清理，8000/3000 无监听。
+- R25 残余风险：YAML 为轻量解析非完整 YAML 规范；脚本为 allowlist DSL 非任意代码；Mock 服务为本地平台基础 mock 非完整代理网关；Vite 仍有 chunk > 500 kB warning；浏览器只做轻量加载/可见性/console smoke，深层 UI 写操作主要由 API 冒烟覆盖。
+- 下一步进入 R26：自动化中心增强。
