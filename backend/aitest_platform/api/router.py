@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -135,6 +136,52 @@ def sanitize_payload(value: Any) -> Any:
         return clean
     if isinstance(value, list):
         return [sanitize_payload(item) for item in value]
+    return value
+
+
+def is_sensitive_key_name(key: Any) -> bool:
+    lowered = str(key).lower()
+    is_token_key = lowered == "token" or lowered.endswith("_token") or lowered.endswith("-token")
+    return (
+        lowered in SENSITIVE_KEYS
+        or is_token_key
+        or any(secret in lowered for secret in ("api_key", "apikey", "cookie", "authorization", "secret", "password", "git_auth"))
+    )
+
+
+def redact_sensitive_text(value: str) -> str:
+    lowered = value.lower()
+    secret_like = re.search(r"\bsk-[a-z0-9][a-z0-9_-]{6,}", lowered) is not None
+    if secret_like or any(
+        marker in lowered
+        for marker in (
+            "authorization:",
+            "bearer ",
+            "basic ",
+            "api_key=",
+            "apikey=",
+            "token=",
+            "cookie=",
+            "password=",
+            "secret=",
+        )
+    ):
+        return "***"
+    return value
+
+
+def safe_summary_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        clean: dict[str, Any] = {}
+        for key, item in value.items():
+            if is_sensitive_key_name(key):
+                continue
+            clean[key] = safe_summary_payload(item)
+        return clean
+    if isinstance(value, list):
+        return [safe_summary_payload(item) for item in value]
+    if isinstance(value, str):
+        return redact_sensitive_text(value)
     return value
 
 
@@ -2998,6 +3045,70 @@ def system_llm_status():
         return status
 
 
+PROMPT_VARIABLE_RE = re.compile(r"\{\{\s*([a-zA-Z_][\w.-]*)\s*\}\}|\{([a-zA-Z_][\w.-]*)\}")
+
+
+def _slugify_prompt_scene(value: Any) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+    return slug[:80] or "prompt"
+
+
+def _unique_prompt_scene(session: Any, name: Any) -> str:
+    base = f"custom_{_slugify_prompt_scene(name)}"
+    candidate = base[:128]
+    suffix = 2
+    while session.scalar(select(PromptTemplate.id).where(PromptTemplate.scene == candidate)):
+        tail = f"_{suffix}"
+        candidate = f"{base[:128 - len(tail)]}{tail}"
+        suffix += 1
+    return candidate
+
+
+def _extract_prompt_variables(content: str) -> list[str]:
+    variables: list[str] = []
+    seen: set[str] = set()
+    for match in PROMPT_VARIABLE_RE.finditer(content or ""):
+        name = match.group(1) or match.group(2)
+        if name and name not in seen:
+            seen.add(name)
+            variables.append(name)
+    return variables
+
+
+def _normalize_prompt_variables(value: Any, content: str) -> list[str]:
+    raw_items = value if isinstance(value, list) else _extract_prompt_variables(content)
+    variables: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items or []:
+        name = str(item).strip()
+        if name and not is_sensitive_key_name(name) and name not in seen:
+            seen.add(name)
+            variables.append(name)
+    return variables
+
+
+def _prompt_template_public(template: PromptTemplate) -> dict[str, Any]:
+    data = model_dict(template)
+    data["variables"] = [item for item in (data.get("variables") or []) if not is_sensitive_key_name(item)]
+    return safe_summary_payload(data)
+
+
+def _prompt_test_variables(data: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(data.get("variables"), dict):
+        return dict(data["variables"])
+    return {key: value for key, value in data.items() if key != "variables"}
+
+
+def _render_prompt_content(content: str, variables: dict[str, Any]) -> str:
+    rendered = content or ""
+    for key, value in variables.items():
+        text = str(value)
+        rendered = rendered.replace("{{" + key + "}}", text)
+        rendered = rendered.replace("{{ " + key + " }}", text)
+        rendered = rendered.replace("{" + key + "}", text)
+    return redact_sensitive_text(rendered)
+
+
 @router.get("/prompt-templates")
 def list_prompt_templates(page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
     with session_scope() as session:
@@ -3013,7 +3124,37 @@ def list_prompt_templates(page_num: int = Query(1, alias="page"), page_size: int
                 )
             )
             session.flush()
-        return db_page(session, PromptTemplate, page_num, page_size, order_by=PromptTemplate.id.desc())
+        stmt = select(PromptTemplate).order_by(PromptTemplate.id.desc()).offset((page_num - 1) * page_size).limit(page_size)
+        total = session.scalar(select(func.count()).select_from(PromptTemplate)) or 0
+        items = list(session.scalars(stmt))
+        return {"list": [_prompt_template_public(item) for item in items], "total": total, "page": page_num, "pageSize": page_size}
+
+
+@router.post("/prompt-templates")
+def create_prompt_template(payload: WritePayload):
+    data = sanitize_payload(payload_dict(payload))
+    name = str(data.get("name") or "").strip()
+    content = str(data.get("content") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+
+    with session_scope() as session:
+        scene = str(data.get("scene") or "").strip() or _unique_prompt_scene(session, name)
+        if session.scalar(select(PromptTemplate.id).where(PromptTemplate.scene == scene)):
+            raise HTTPException(status_code=409, detail=f"PromptTemplate scene already exists: {scene}")
+        template = PromptTemplate(
+            scene=scene,
+            name=name,
+            content=content,
+            variables=_normalize_prompt_variables(data.get("variables"), content),
+            is_builtin=bool(data.get("is_builtin", False)),
+        )
+        session.add(template)
+        session.flush()
+        r2_log(session, "prompt_template", "create", template.id, {"scene": scene})
+        return _prompt_template_public(template)
 
 
 @router.patch("/prompt-templates/{templateId}")
@@ -3024,18 +3165,31 @@ def update_prompt_template(templateId: str, payload: WritePayload):
         update_columns(template, data, ("scene", "name", "content", "variables", "is_builtin"))
         session.flush()
         r2_log(session, "prompt_template", "update", template.id)
-        return model_dict(template)
+        return _prompt_template_public(template)
 
 
 @router.post("/prompt-templates/{templateId}/test")
 def test_prompt_template(templateId: str, payload: WritePayload | None = None):
-    data = sanitize_payload(payload_dict(payload))
+    data = payload_dict(payload)
     with session_scope() as session:
         template = require_db_item(session, PromptTemplate, templateId, "templateId")
-        rendered = template.content
-        for key, value in data.items():
-            rendered = rendered.replace("{{" + key + "}}", str(value))
-        return {"template_id": template.id, "rendered": rendered, "input": data}
+        raw_variables = _prompt_test_variables(data)
+        render_variables = sanitize_payload(raw_variables)
+        rendered = _render_prompt_content(template.content, render_variables)
+        return {"template_id": template.id, "rendered": rendered, "input": safe_summary_payload(raw_variables)}
+
+
+@router.delete("/prompt-templates/{templateId}")
+def delete_prompt_template(templateId: str):
+    with session_scope() as session:
+        template = require_db_item(session, PromptTemplate, templateId, "templateId")
+        if template.is_builtin:
+            raise HTTPException(status_code=400, detail="builtin prompt template cannot be deleted")
+        template_id = template.id
+        session.delete(template)
+        session.flush()
+        r2_log(session, "prompt_template", "delete", template_id)
+        return {"deleted": True, "id": template_id}
 
 
 def _context_project_id(context: dict[str, Any]) -> int | None:
@@ -3074,6 +3228,237 @@ def _compact_chat_facts(aggregation_context: dict[str, Any] | None) -> dict[str,
             "automation_summary": data.get("automation_summary") or {},
             "performance_summary": data.get("performance_summary") or {},
             "source_refs": aggregation_context.get("source_refs_json") or {},
+        }
+    )
+
+
+def _assistant_project_facts(session: Any, project_id: int | None) -> dict[str, Any]:
+    if project_id is None:
+        return {}
+    aggregation_context = _safe_chat_aggregation_context(session, {"project_id": project_id})
+    if not aggregation_context:
+        return {"project_id": project_id, "available": False}
+    compact = _compact_chat_facts(aggregation_context)
+    return safe_summary_payload(
+        {
+            "project": compact.get("project") or {},
+            "metrics": compact.get("metrics") or {},
+            "risk_items": (compact.get("risk_items") or [])[:3],
+            "execution_summary": compact.get("execution_summary") or {},
+            "api_summary": compact.get("api_summary") or {},
+            "automation_summary": compact.get("automation_summary") or {},
+            "performance_summary": compact.get("performance_summary") or {},
+            "source_refs": {
+                "project_id": project_id,
+                "counts": ((compact.get("source_refs") or {}).get("counts") or {}),
+            },
+        }
+    )
+
+
+def _recent_activity_brief(activity: dict[str, Any]) -> dict[str, Any]:
+    return safe_summary_payload(
+        {
+            "id": activity.get("id"),
+            "title": activity.get("title") or activity.get("name") or activity.get("route"),
+            "route": activity.get("route"),
+            "target_type": activity.get("target_type"),
+            "target_id": activity.get("target_id"),
+            "project_id": activity.get("project_id"),
+            "created_at": activity.get("created_at"),
+            "updated_at": activity.get("updated_at"),
+        }
+    )
+
+
+def _operation_log_brief(log: OperationLog) -> dict[str, Any]:
+    return safe_summary_payload(
+        {
+            "id": log.id,
+            "module": log.module,
+            "action": log.action,
+            "target_type": log.target_type,
+            "target_id": log.target_id,
+            "detail": log.detail if isinstance(log.detail, dict) else {},
+            "created_at": log.created_at.isoformat() if hasattr(log.created_at, "isoformat") else log.created_at,
+        }
+    )
+
+
+def _prompt_template_brief(template: PromptTemplate) -> dict[str, Any]:
+    return safe_summary_payload(
+        {
+            "id": template.id,
+            "scene": template.scene,
+            "name": template.name,
+            "variables": template.variables or [],
+            "is_builtin": template.is_builtin,
+            "updated_at": template.updated_at.isoformat() if hasattr(template.updated_at, "isoformat") else template.updated_at,
+        }
+    )
+
+
+def _list_values(container: Any) -> list[Any]:
+    if isinstance(container, dict):
+        value = container.get("list") or container.get("items") or container.get("records") or []
+        return value if isinstance(value, list) else []
+    return container if isinstance(container, list) else []
+
+
+def _chat_context_note(context: dict[str, Any]) -> str:
+    sources = [context]
+    if isinstance(context.get("assistant_context"), dict):
+        sources.insert(0, context["assistant_context"])
+    parts: list[str] = []
+    for source in sources:
+        recent = _list_values(source.get("recent_activities"))
+        titles = [
+            str(item.get("title") or item.get("name") or item.get("route"))
+            for item in recent
+            if isinstance(item, dict) and (item.get("title") or item.get("name") or item.get("route"))
+        ][:3]
+        if titles:
+            parts.append("recent: " + " | ".join(titles))
+        facts = source.get("project_facts")
+        if isinstance(facts, dict):
+            metrics = facts.get("metrics") or {}
+            if metrics:
+                parts.append(
+                    "facts: "
+                    + ", ".join(
+                        f"{key}={metrics.get(key)}"
+                        for key in ("requirement_item_count", "test_case_count", "open_defect_count")
+                        if key in metrics
+                    )
+                )
+    note = "; ".join(part for part in parts if part)
+    return str(safe_summary_payload(note)) if note else ""
+
+
+def _append_chat_context_note(reply: str, context: dict[str, Any]) -> str:
+    note = _chat_context_note(context)
+    if not note:
+        return reply
+    return f"{reply}\n\nAssistant context: {note}"
+
+
+@router.get("/assistant/context")
+def assistant_context(
+    projectId: str | None = None,
+    project_id: str | None = None,
+    activeTab: str | None = None,
+    active_tab: str | None = None,
+    limit: int = Query(5, ge=1, le=20),
+):
+    raw_project_id = project_id if project_id is not None else projectId
+    resolved_project_id = to_int(raw_project_id, "projectId") if raw_project_id is not None else None
+    with session_scope() as session:
+        recent = list_recent_activities(session, project_id=resolved_project_id, limit=limit)
+        logs = list(session.scalars(select(OperationLog).order_by(OperationLog.id.desc()).limit(limit)))
+        templates = list(session.scalars(select(PromptTemplate).order_by(PromptTemplate.id.desc()).limit(20)))
+        payload = {
+            "project_id": resolved_project_id,
+            "active_tab": active_tab or activeTab,
+            "recent_activities": {
+                "list": [_recent_activity_brief(item) for item in recent.get("list", [])],
+                "total": recent.get("total", 0),
+            },
+            "operation_logs": {"list": [_operation_log_brief(log) for log in logs], "total": len(logs)},
+            "prompt_templates": {"list": [_prompt_template_brief(template) for template in templates], "total": len(templates)},
+            "project_facts": _assistant_project_facts(session, resolved_project_id),
+            "provider_call_performed": False,
+            "generated_at": now_iso(),
+        }
+        return safe_summary_payload(payload)
+
+
+def _draft_subject(message: str, context: dict[str, Any]) -> str:
+    normalized = " ".join(message.split())
+    if normalized:
+        return normalized[:120]
+    facts = context.get("project_facts") if isinstance(context, dict) else {}
+    project = facts.get("project") if isinstance(facts, dict) else {}
+    if isinstance(project, dict) and (project.get("name") or project.get("code")):
+        return str(project.get("name") or project.get("code"))[:120]
+    return "current scope"
+
+
+def _test_points_draft(subject: str, context: dict[str, Any]) -> dict[str, Any]:
+    items = [
+        {"title": f"正常流程覆盖：{subject}", "point_type": "functional", "priority": "P1"},
+        {"title": f"边界条件覆盖：{subject}", "point_type": "boundary", "priority": "P1"},
+        {"title": f"异常与错误提示：{subject}", "point_type": "exception", "priority": "P2"},
+        {"title": f"权限、数据校验与审计：{subject}", "point_type": "security", "priority": "P2"},
+    ]
+    metrics = ((context.get("project_facts") or {}).get("metrics") or {}) if isinstance(context, dict) else {}
+    if metrics.get("open_defect_count", 0):
+        items.append({"title": f"缺陷回归验证：{subject}", "point_type": "regression", "priority": "P1"})
+    return {"items": items, "text": "\n".join(f"- {item['title']}" for item in items)}
+
+
+def _clarifying_questions_draft(subject: str, context: dict[str, Any]) -> dict[str, Any]:
+    active_tab = context.get("active_tab") or context.get("activeTab") or "current page"
+    questions = [
+        f"{subject} 的核心用户角色和成功标准是什么？",
+        "哪些输入、状态或权限组合必须被明确覆盖？",
+        f"在 {active_tab} 场景下，失败、超时或数据为空时前端应该如何反馈？",
+        "这次范围内是否有必须兼容的历史数据或外部系统约束？",
+    ]
+    return {"items": questions, "text": "\n".join(f"{index}. {question}" for index, question in enumerate(questions, start=1))}
+
+
+def _defect_note_draft(subject: str, context: dict[str, Any]) -> dict[str, Any]:
+    active_tab = context.get("active_tab") or context.get("activeTab") or "current page"
+    note = {
+        "title": f"待确认缺陷：{subject}",
+        "severity": "normal",
+        "status": "open",
+        "environment": active_tab,
+        "steps_to_reproduce": [
+            f"进入 {active_tab}",
+            f"执行与 {subject} 相关的操作",
+            "观察实际结果并保存截图、请求或日志证据",
+        ],
+        "actual_result": subject,
+        "expected_result": "功能表现应符合需求说明，错误状态应有明确提示且不泄漏敏感信息。",
+        "impact": "需要产品、前端和后端共同确认影响范围后再定级。",
+    }
+    return {"note": note, "text": json.dumps(note, ensure_ascii=False)}
+
+
+def _assistant_draft_payload(draft_type: str, message: str, context: dict[str, Any]) -> dict[str, Any]:
+    subject = _draft_subject(message, context)
+    if draft_type == "test_points":
+        return _test_points_draft(subject, context)
+    if draft_type == "clarifying_questions":
+        return _clarifying_questions_draft(subject, context)
+    if draft_type == "defect_note":
+        return _defect_note_draft(subject, context)
+    raise HTTPException(status_code=400, detail=f"unsupported draft type: {draft_type}")
+
+
+@router.post("/assistant/drafts")
+def assistant_drafts(payload: WritePayload):
+    data = payload_dict(payload)
+    draft_type = str(data.get("type") or data.get("draft_type") or "").strip()
+    if not draft_type:
+        raise HTTPException(status_code=400, detail="type is required")
+    context = data.get("context") if isinstance(data.get("context"), dict) else {}
+    message = str(data.get("message") or "").strip()
+    safe_context = safe_summary_payload(context)
+    safe_message = redact_sensitive_text(message)
+    draft = _assistant_draft_payload(draft_type, safe_message, safe_context)
+    return safe_summary_payload(
+        {
+            "type": draft_type,
+            "draft_type": draft_type,
+            "message": safe_message,
+            "context": safe_context,
+            "draft": draft,
+            "source": "deterministic-rules-v1",
+            "provider_call_performed": False,
+            "llm_provider_called": False,
+            "created_at": now_iso(),
         }
     )
 
@@ -3121,14 +3506,37 @@ def handle_chat_request(request: ChatRequest) -> dict[str, Any]:
         if aggregation_context:
             context = {**context, "project_facts": _compact_chat_facts(aggregation_context)}
         fallback_reply = _build_chat_fallback_reply(message, context, aggregation_context)
+        fallback_reply = _append_chat_context_note(fallback_reply, context)
         config = default_llm_config(session, context.get("config_id") or context.get("configId"))
         if config is None:
-            return create("chat_messages", {"message": message, "context": context, "reply": fallback_reply, "status": "fallback", "reason": "No enabled LLM config found."})
+            return create(
+                "chat_messages",
+                {
+                    "message": message,
+                    "context": safe_summary_payload(context),
+                    "reply": fallback_reply,
+                    "status": "fallback",
+                    "reason": "No enabled LLM config found.",
+                    "provider_call_performed": False,
+                    "llm_provider_called": False,
+                },
+            )
 
         fallback, settings = require_llm_runtime(config)
         if fallback is not None:
             record_llm_usage(session, config.id, "chat", duration_ms=1)
-            record = create("chat_messages", {"message": message, "context": context, "reply": fallback_reply, "status": fallback["status"], "llm": fallback})
+            record = create(
+                "chat_messages",
+                {
+                    "message": message,
+                    "context": safe_summary_payload(context),
+                    "reply": fallback_reply,
+                    "status": fallback["status"],
+                    "llm": fallback,
+                    "provider_call_performed": False,
+                    "llm_provider_called": False,
+                },
+            )
             return sanitize_payload(sanitize_llm_payload(record))
 
         assert settings.base_url is not None and settings.api_key is not None and settings.model is not None
@@ -3169,6 +3577,8 @@ def handle_chat_request(request: ChatRequest) -> dict[str, Any]:
                     "status": "ok",
                     "model": settings.model,
                     "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens, "duration_ms": duration_ms},
+                    "provider_call_performed": True,
+                    "llm_provider_called": True,
                 },
             )
             return sanitize_payload(sanitize_llm_payload(record))
@@ -3183,6 +3593,8 @@ def handle_chat_request(request: ChatRequest) -> dict[str, Any]:
                     "status": "fallback",
                     "error": str(exc),
                     "model": settings.model,
+                    "provider_call_performed": True,
+                    "llm_provider_called": True,
                 },
             )
             return sanitize_payload(sanitize_llm_payload(record))

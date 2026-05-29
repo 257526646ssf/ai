@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
+import PromptTemplatePanel from '../components/PromptTemplatePanel';
 import { apiGet, apiPost, apiRequest, pickList } from '../lib/api';
 
 const HIDDEN_KEY_LABEL = 'env:AITEST_LLM_API_KEY';
@@ -858,6 +859,8 @@ export default function LlmConfig() {
         </div>
 
       </div>
+
+      <PromptTemplatePanel />
 
     </div>
   );

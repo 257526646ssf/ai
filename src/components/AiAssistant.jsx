@@ -7,17 +7,195 @@ import {
   MessageSquare, 
   ArrowRight, 
   Sparkles,
+  Save,
   Clipboard,
   Check
 } from 'lucide-react';
-import { apiPost } from '../lib/api';
+import { apiGet, apiPost, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
+
+const PROMPT_TEMPLATE_LIMIT = 6;
+const RECENT_ACTIVITY_LIMIT = 5;
+
+const DRAFT_ACTIONS = [
+  {
+    type: 'test_points',
+    label: '生成测试点',
+    desc: '按当前上下文拆解',
+    icon: Clipboard
+  },
+  {
+    type: 'clarifying_questions',
+    label: '生成澄清问题',
+    desc: '补齐需求疑点',
+    icon: MessageSquare
+  },
+  {
+    type: 'defect_note',
+    label: '生成缺陷备注',
+    desc: '沉淀复现与影响',
+    icon: Sparkles
+  }
+];
+
+const currentTime = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+const showToast = (message, type = 'info') => {
+  window.dispatchEvent(new CustomEvent('show-toast', { detail: { message, type } }));
+};
+
+const readField = (source, keys = []) => {
+  if (!source || typeof source !== 'object') return undefined;
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined && value !== null && value !== '') return value;
+  }
+  return undefined;
+};
+
+const pickKnownList = (payload, keys = []) => {
+  if (Array.isArray(payload)) return payload;
+  const picked = pickList(payload);
+  if (picked.length) return picked;
+  if (!payload || typeof payload !== 'object') return [];
+  for (const key of keys) {
+    const value = payload[key];
+    if (Array.isArray(value)) return value;
+    if (value && typeof value === 'object') {
+      const nestedList = pickList(value);
+      if (nestedList.length) return nestedList;
+    }
+  }
+  return [];
+};
+
+const pickKnownLists = (payload, keys = []) => {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== 'object') return [];
+
+  const lists = [];
+  lists.push(...pickList(payload));
+  for (const key of keys) {
+    const value = payload[key];
+    if (Array.isArray(value)) {
+      lists.push(...value);
+    } else if (value && typeof value === 'object') {
+      lists.push(...pickList(value));
+    }
+  }
+  return lists;
+};
+
+const compactText = (value, maxLength = 42) => {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...`;
+};
+
+const safeStringify = (value) => {
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const normalizePromptTemplate = (item, index = 0, source = 'remote') => {
+  const content = typeof item === 'string'
+    ? item
+    : readField(item, ['content', 'prompt', 'template', 'body', 'q', 'text']);
+  const title = typeof item === 'string'
+    ? compactText(item, 22)
+    : readField(item, ['name', 'title', 'label', 'text', 'scene']) || compactText(content, 22);
+  const normalizedContent = String(content || title || '').trim();
+  if (!normalizedContent) return null;
+  return {
+    id: readField(item, ['id', 'template_id', 'templateId']) || `${source}-${index}-${normalizedContent.slice(0, 12)}`,
+    title: compactText(title || normalizedContent, 24),
+    content: normalizedContent,
+    scene: typeof item === 'object' ? readField(item, ['scene', 'category', 'type']) : '',
+    source
+  };
+};
+
+const normalizeActivity = (item, index = 0, source = 'remote') => {
+  if (typeof item === 'string') {
+    return {
+      id: `${source}-${index}`,
+      title: compactText(item, 32),
+      desc: '',
+      time: '',
+      summary: item
+    };
+  }
+
+  const detail = readField(item, ['detail', 'metadata', 'payload']);
+  const detailText = safeStringify(detail);
+  const title = readField(item, ['summary', 'title', 'name', 'message', 'action'])
+    || [readField(item, ['module', 'target_type', 'type']), readField(item, ['action'])].filter(Boolean).join(' / ')
+    || '系统活动已记录';
+  const desc = readField(item, ['description', 'desc', 'content'])
+    || detailText
+    || [readField(item, ['target_type']), readField(item, ['target_id'])].filter(Boolean).join(' / ');
+  const createdAt = readField(item, ['created_at', 'createdAt', 'updated_at', 'updatedAt', 'time']);
+  const summary = readField(item, ['summary', 'message'])
+    || [title, desc].filter(Boolean).join('：');
+
+  return {
+    id: readField(item, ['id', 'activity_id', 'activityId']) || `${source}-${index}`,
+    title: compactText(title, 34),
+    desc: compactText(desc, 48),
+    time: compactText(createdAt, 18),
+    summary
+  };
+};
+
+const mergePromptTemplates = (primary = [], fallback = []) => {
+  const seen = new Set();
+  return [...primary, ...fallback].filter((item) => {
+    const key = item?.content?.trim();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, PROMPT_TEMPLATE_LIMIT);
+};
+
+const normalizePromptTemplates = (payload, source = 'remote') => (
+  pickKnownList(payload, ['templates', 'prompt_templates', 'promptTemplates', 'prompts', 'common_prompts'])
+    .map((item, index) => normalizePromptTemplate(item, index, source))
+    .filter(Boolean)
+    .slice(0, PROMPT_TEMPLATE_LIMIT)
+);
+
+const normalizeActivities = (payload, source = 'remote') => {
+  const nestedContext = payload?.context && typeof payload.context === 'object' ? payload.context : {};
+  const activityKeys = ['activities', 'recent_activities', 'recentActivities', 'operation_logs', 'operationLogs', 'operations', 'logs'];
+  const list = pickKnownLists(payload, activityKeys)
+    .concat(pickKnownLists(nestedContext, activityKeys));
+  const normalized = list
+    .map((item, index) => normalizeActivity(item, index, source))
+    .filter((item) => item.summary)
+    .slice(0, RECENT_ACTIVITY_LIMIT);
+  const summary = readField(payload, ['summary', 'activity_summary', 'recent_activity_summary'])
+    || readField(nestedContext, ['summary', 'activity_summary', 'recent_activity_summary']);
+  if (summary && !normalized.some((item) => item.summary === summary)) {
+    normalized.unshift(normalizeActivity(String(summary), 0, `${source}-summary`));
+  }
+  return normalized.slice(0, RECENT_ACTIVITY_LIMIT);
+};
 
 export default function AiAssistant({ activeTab, isOpen, onClose }) {
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
+  const [promptTemplates, setPromptTemplates] = useState([]);
+  const [recentActivities, setRecentActivities] = useState([]);
+  const [isSavingPrompt, setIsSavingPrompt] = useState(false);
+  const [draftingType, setDraftingType] = useState(null);
   const messagesEndRef = useRef(null);
   const { selectedProject } = useProjectContext();
 
@@ -72,6 +250,71 @@ export default function AiAssistant({ activeTab, isOpen, onClose }) {
     return recommendations[activeTab] || recommendations.dashboard;
   };
 
+  const getPromptShortcuts = () => {
+    const fallbackTemplates = getRecommendations().map((item, index) => normalizePromptTemplate(item, index, 'local')).filter(Boolean);
+    return mergePromptTemplates(promptTemplates, fallbackTemplates);
+  };
+
+  const recentActivitySummaries = recentActivities
+    .slice(0, RECENT_ACTIVITY_LIMIT)
+    .map((item) => item.summary)
+    .filter(Boolean);
+
+  const buildAssistantContext = (query, currentMessages = messages) => {
+    const recentMessages = currentMessages.slice(-6).map((item) => ({
+      role: item.sender === 'ai' ? 'assistant' : 'user',
+      content: item.text
+    }));
+    const currentProject = selectedProject
+      ? {
+          id: selectedProject.id,
+          name: selectedProject.name,
+          code: selectedProject.code
+        }
+      : null;
+
+    return {
+      prompt: query,
+      active_tab: activeTab,
+      activeTab,
+      project_id: selectedProject?.id,
+      project_name: selectedProject?.name || selectedProject?.code,
+      current_project: currentProject,
+      currentProject,
+      recent_activity_summary: recentActivitySummaries,
+      recentActivitySummary: recentActivitySummaries,
+      recent_messages: recentMessages,
+      recentMessages,
+      messages: [...recentMessages, { role: 'user', content: query }]
+    };
+  };
+
+  const appendAiMessage = (text) => {
+    setMessages(prev => [...prev, {
+      sender: 'ai',
+      text,
+      time: currentTime()
+    }]);
+  };
+
+  const buildLocalDraft = (draftType, prompt = '') => {
+    const projectName = selectedProject?.name || selectedProject?.code || '当前项目';
+    const activityText = recentActivitySummaries.length
+      ? recentActivitySummaries.slice(0, 3).map((item) => `- ${item}`).join('\n')
+      : '- 暂无可用最近操作，建议先选择项目或刷新后端数据。';
+    const focusLine = prompt.trim() ? `\n\n用户补充关注点：${prompt.trim()}` : '';
+
+    if (draftType === 'test_points') {
+      return `### 测试点草稿：${projectName}\n\n1. 核心链路：覆盖当前页面中与 ${activeTab} 相关的主流程、成功路径和数据落库。\n2. 异常链路：补充失败、超时、权限不足、重复提交和空数据场景。\n3. 数据一致性：核对需求、用例、执行记录、缺陷和报告之间的引用关系。\n4. 回归范围：优先回归最近操作影响到的模块。\n\n最近操作依据：\n${activityText}${focusLine}`;
+    }
+
+    if (draftType === 'clarifying_questions') {
+      return `### 澄清问题草稿：${projectName}\n\n1. 当前变更的业务目标和验收口径是什么？\n2. 哪些用户角色、权限边界或异常输入必须覆盖？\n3. 最近操作中涉及的失败、缺陷或报告项是否已有最终结论？\n4. 是否存在必须兼容的历史数据、旧接口或自动化脚本？\n5. 本轮测试的准出门槛和阻塞条件是什么？\n\n最近操作依据：\n${activityText}${focusLine}`;
+    }
+
+    return `### 缺陷备注草稿：${projectName}\n\n- 现象：根据当前页面和最近操作，需补充一次可复现的失败说明。\n- 影响范围：优先核对 ${activeTab} 模块及其上下游数据链路。\n- 初步判断：可能与最新执行记录、接口返回、环境配置或需求变更同步有关。\n- 建议动作：补充复现步骤、实际结果、期望结果、日志截图和关联用例后再提交。\n\n最近操作依据：\n${activityText}${focusLine}`;
+  };
+
   // 初始化欢迎词
   useEffect(() => {
     if (messages.length === 0) {
@@ -106,11 +349,69 @@ export default function AiAssistant({ activeTab, isOpen, onClose }) {
         {
           sender: 'ai',
           text: getWelcomeMessage(),
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          time: currentTime()
         }
       ]);
     }
   }, [activeTab, messages.length]);
+
+  // 打开助手时同步 Prompt 快捷项和最近操作上下文
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let cancelled = false;
+    const controller = new AbortController();
+    const projectId = selectedProject?.id;
+
+    async function loadPromptTemplates() {
+      try {
+        const payload = await apiGet('/prompt-templates', {
+          params: { page: 1, pageSize: PROMPT_TEMPLATE_LIMIT, projectId, activeTab },
+          signal: controller.signal,
+          timeoutMs: 8000
+        });
+        if (!cancelled) {
+          setPromptTemplates(normalizePromptTemplates(payload));
+        }
+      } catch {
+        if (!cancelled) setPromptTemplates([]);
+      }
+    }
+
+    async function loadAssistantContext() {
+      try {
+        const payload = await apiGet('/assistant/context', {
+          params: { projectId, activeTab, limit: RECENT_ACTIVITY_LIMIT },
+          signal: controller.signal,
+          timeoutMs: 8000
+        });
+        if (!cancelled) {
+          setRecentActivities(normalizeActivities(payload));
+        }
+      } catch {
+        try {
+          const fallback = await apiGet('/system/recent-activities', {
+            params: { projectId, limit: RECENT_ACTIVITY_LIMIT },
+            signal: controller.signal,
+            timeoutMs: 8000
+          });
+          if (!cancelled) {
+            setRecentActivities(normalizeActivities(fallback, 'activity'));
+          }
+        } catch {
+          if (!cancelled) setRecentActivities([]);
+        }
+      }
+    }
+
+    loadPromptTemplates();
+    loadAssistantContext();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [activeTab, isOpen, selectedProject?.id]);
 
   // 滚动到底部
   useEffect(() => {
@@ -137,7 +438,7 @@ export default function AiAssistant({ activeTab, isOpen, onClose }) {
     const userMsg = {
       sender: 'user',
       text: query,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      time: currentTime()
     };
 
     setMessages(prev => [...prev, userMsg]);
@@ -145,41 +446,122 @@ export default function AiAssistant({ activeTab, isOpen, onClose }) {
     setIsTyping(true);
 
     try {
-      const recentMessages = messages.slice(-6).map((item) => ({
-        role: item.sender === 'ai' ? 'assistant' : 'user',
-        content: item.text
-      }));
       const response = await apiPost('/chat', {
         message: query,
-        context: {
-          active_tab: activeTab,
-          project_id: selectedProject?.id,
-          project_name: selectedProject?.name || selectedProject?.code,
-          messages: [...recentMessages, { role: 'user', content: query }]
-        }
+        context: buildAssistantContext(query)
       }, { timeoutMs: 15000 });
       const aiResponseText = response?.reply || response?.content || buildLocalFallbackReply(query);
       setIsTyping(false);
-      setMessages(prev => [...prev, {
-        sender: 'ai',
-        text: aiResponseText,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      }]);
+      appendAiMessage(aiResponseText);
     } catch (error) {
       setIsTyping(false);
-      setMessages(prev => [...prev, {
-        sender: 'ai',
-        text: buildLocalFallbackReply(query),
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-      }]);
-      window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: error?.message || 'AI 助手后端暂不可用，已使用本地兜底回复', type: 'warning' } }));
+      appendAiMessage(buildLocalFallbackReply(query));
+      showToast(error?.message || 'AI 助手后端暂不可用，已使用本地兜底回复', 'warning');
+    }
+  };
+
+  const copyTextToClipboard = async (text) => {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    document.execCommand('copy');
+    textarea.remove();
+  };
+
+  const handleCopyText = async (text, index) => {
+    try {
+      await copyTextToClipboard(text);
+      setCopiedIndex(index);
+      setTimeout(() => setCopiedIndex(null), 2000);
+    } catch (error) {
+      showToast(error?.message || '复制失败，请检查浏览器剪贴板权限', 'error');
     }
   };
 
   const handleCopyCode = (text, index) => {
-    navigator.clipboard.writeText(text);
-    setCopiedIndex(index);
-    setTimeout(() => setCopiedIndex(null), 2000);
+    handleCopyText(text, index);
+  };
+
+  const handleApplyPrompt = (template) => {
+    setInputValue(template.content);
+    showToast('已填入输入框，可编辑后发送', 'info');
+  };
+
+  const handleSendPrompt = (template) => {
+    handleSendMessage(template.content);
+  };
+
+  const handleSavePrompt = async () => {
+    const prompt = inputValue.trim();
+    if (!prompt) {
+      showToast('请先输入要保存的 Prompt', 'warning');
+      return;
+    }
+
+    const title = compactText(prompt, 24);
+    setIsSavingPrompt(true);
+    try {
+      const saved = await apiPost('/prompt-templates', {
+        scene: `assistant_common_${activeTab}_${Date.now()}`,
+        name: title,
+        content: prompt,
+        variables: [],
+        is_builtin: false
+      }, { timeoutMs: 10000 });
+      const normalized = normalizePromptTemplate(saved, 0, 'saved')
+        || normalizePromptTemplate({ name: title, content: prompt }, 0, 'saved');
+      setPromptTemplates(prev => mergePromptTemplates([normalized], prev));
+      showToast('已保存为常用 Prompt', 'success');
+    } catch (error) {
+      showToast(error?.message || '保存常用 Prompt 失败', 'error');
+    } finally {
+      setIsSavingPrompt(false);
+    }
+  };
+
+  const handleUseActivity = (activity) => {
+    setInputValue(`请基于这条最近操作继续分析：${activity.summary}`);
+    showToast('最近操作摘要已带入输入框', 'info');
+  };
+
+  const handleCreateDraft = async (draftType) => {
+    if (draftingType) return;
+
+    const action = DRAFT_ACTIONS.find((item) => item.type === draftType);
+    const prompt = inputValue.trim();
+    setDraftingType(draftType);
+    setIsTyping(true);
+
+    try {
+      const response = await apiPost('/assistant/drafts', {
+        type: draftType,
+        action: draftType,
+        message: prompt,
+        prompt,
+        context: buildAssistantContext(prompt || action?.label || draftType)
+      }, { timeoutMs: 12000 });
+      const draftPayload = typeof response === 'string'
+        ? response
+        : readField(response, ['draft', 'content', 'text', 'message', 'result']);
+      const draftText = typeof draftPayload === 'object'
+        ? readField(draftPayload, ['content', 'text', 'message']) || safeStringify(draftPayload)
+        : draftPayload;
+      appendAiMessage(draftText || buildLocalDraft(draftType, prompt));
+    } catch (error) {
+      appendAiMessage(buildLocalDraft(draftType, prompt));
+      showToast(error?.message || '草稿服务暂不可用，已生成本地兜底草稿', 'warning');
+    } finally {
+      setIsTyping(false);
+      setDraftingType(null);
+    }
   };
 
   // 简单的 Markdown 及代码高亮渲染器
@@ -321,15 +703,18 @@ export default function AiAssistant({ activeTab, isOpen, onClose }) {
       {
         sender: 'ai',
         text: "对话历史已清空。我是您的 AI 智能助理，请问现在有什么可以帮您？",
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        time: currentTime()
       }
     ]);
-    window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'AI 对话历史已重置', type: 'info' } }));
+    showToast('AI 对话历史已重置', 'info');
   };
+
+  const promptShortcuts = getPromptShortcuts();
+  const visibleRecentActivities = recentActivities.slice(0, 3);
 
   return (
     <div 
-      className={`fixed top-0 right-0 h-screen w-[360px] bg-[var(--bg-card)] border-l border-[var(--border-color)] shadow-2xl z-50 flex flex-col justify-between transition-transform duration-300 transform select-none ${
+      className={`fixed top-0 right-0 h-screen w-full max-w-[360px] bg-[var(--bg-card)] border-l border-[var(--border-color)] shadow-2xl z-50 flex flex-col justify-between transition-transform duration-300 transform select-none ${
         isOpen ? 'translate-x-0' : 'translate-x-full'
       }`}
       style={{
@@ -399,11 +784,33 @@ export default function AiAssistant({ activeTab, isOpen, onClose }) {
                 msg.sender === 'user'
                   ? 'rounded-tr-none'
                   : 'bg-[var(--border-color)]/30 text-[var(--text-primary)] border-[var(--border-color)] rounded-tl-none'
-              }`}
+              } min-w-0 break-words`}
             >
               {renderMessageContent(msg.text, idx)}
-              <div className="text-[8px] mt-1 text-right opacity-45 font-medium">
-                {msg.time}
+              <div className={`text-[8px] mt-1 font-medium ${
+                msg.sender === 'ai' ? 'flex items-center justify-between gap-2' : 'text-right'
+              }`}>
+                {msg.sender === 'ai' && (
+                  <button
+                    type="button"
+                    onClick={() => handleCopyText(msg.text, `message-${idx}`)}
+                    title="复制整条回复"
+                    className="inline-flex items-center gap-1 opacity-45 hover:opacity-100 transition-opacity cursor-pointer"
+                  >
+                    {copiedIndex === `message-${idx}` ? (
+                      <>
+                        <Check className="size-2.5 text-emerald-500" />
+                        <span className="text-emerald-500">已复制</span>
+                      </>
+                    ) : (
+                      <>
+                        <Clipboard className="size-2.5" />
+                        <span>复制</span>
+                      </>
+                    )}
+                  </button>
+                )}
+                <span className="shrink-0 opacity-45">{msg.time}</span>
               </div>
             </div>
           </div>
@@ -426,25 +833,106 @@ export default function AiAssistant({ activeTab, isOpen, onClose }) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* 底部推荐问题和输入框 */}
-      <div className="p-3 border-t border-[var(--border-color)] bg-[var(--bg-card)] space-y-2.5">
-        {/* 推荐问题面板 */}
+      {/* 底部 Prompt、上下文和输入框 */}
+      <div className="p-3 border-t border-[var(--border-color)] bg-[var(--bg-card)] space-y-2.5 max-h-[55vh] overflow-y-auto">
+        {/* 结构化草稿动作 */}
+        <div className="grid grid-cols-3 gap-1.5">
+          {DRAFT_ACTIONS.map((action) => {
+            const Icon = action.icon;
+            const isCurrentDraft = draftingType === action.type;
+            return (
+              <button
+                key={action.type}
+                type="button"
+                onClick={() => handleCreateDraft(action.type)}
+                disabled={Boolean(draftingType) || isTyping}
+                className="min-w-0 px-2 py-2 rounded-lg border border-[var(--border-color)] bg-[var(--border-color)]/15 hover:bg-[var(--border-color)]/45 text-[var(--text-primary)] transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                title={action.label}
+              >
+                <Icon className="size-3.5 mx-auto mb-1 text-[var(--accent-color)]" />
+                <span className="block text-[8.5px] font-bold truncate">{isCurrentDraft ? '生成中...' : action.label}</span>
+                <span className="block text-[7px] text-[var(--text-secondary)] truncate mt-0.5">{action.desc}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 常用 Prompt */}
         <div className="space-y-1.5 text-left">
-          <div className="text-[8px] font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center gap-1">
-            <Sparkles className="size-2.5 text-purple-500 animate-pulse" />
-            <span>智能推荐提问 (基于当前页面)</span>
+          <div className="text-[8px] font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center justify-between gap-2">
+            <span className="flex items-center gap-1 min-w-0">
+              <Sparkles className="size-2.5 text-purple-500 animate-pulse shrink-0" />
+              <span className="truncate">常用 Prompt</span>
+            </span>
+            <button
+              type="button"
+              onClick={handleSavePrompt}
+              disabled={isSavingPrompt || !inputValue.trim()}
+              title="保存当前输入为常用 Prompt"
+              className="inline-flex items-center gap-1 px-1.5 py-1 rounded border border-[var(--border-color)] hover:bg-[var(--border-color)]/40 text-[var(--text-primary)] transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              {isSavingPrompt ? <Check className="size-2.5 text-emerald-500" /> : <Save className="size-2.5" />}
+              <span>保存</span>
+            </button>
           </div>
           <div className="flex flex-col gap-1">
-            {getRecommendations().map((rec, idx) => (
-              <button 
-                key={idx}
-                onClick={() => handleSendMessage(rec.q)}
-                className="text-left w-full px-2.5 py-1.5 text-[9px] font-medium text-[var(--text-primary)] bg-[var(--border-color)]/20 hover:bg-[var(--border-color)]/50 rounded-lg border border-[var(--border-color)] transition-colors flex items-center justify-between group cursor-pointer"
+            {promptShortcuts.map((template) => (
+              <div
+                key={template.id}
+                className="flex items-stretch gap-1 min-w-0"
               >
-                <span className="truncate pr-2">{rec.text}</span>
-                <ArrowRight className="size-2.5 text-[var(--text-secondary)] opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleApplyPrompt(template)}
+                  className="text-left flex-1 min-w-0 px-2.5 py-1.5 text-[9px] font-medium text-[var(--text-primary)] bg-[var(--border-color)]/20 hover:bg-[var(--border-color)]/50 rounded-lg border border-[var(--border-color)] transition-colors cursor-pointer"
+                  title={template.content}
+                >
+                  <span className="block truncate">{template.title}</span>
+                  <span className="block truncate text-[7.5px] text-[var(--text-secondary)] mt-0.5">
+                    {template.source === 'remote' ? '填入 · 后端模板' : template.source === 'saved' ? '填入 · 刚保存' : '填入 · 本地预设'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSendPrompt(template)}
+                  disabled={isTyping}
+                  title="直接发送"
+                  className="px-2 rounded-lg border border-[var(--border-color)] bg-[var(--border-color)]/20 hover:bg-[var(--border-color)]/50 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed shrink-0"
+                >
+                  <ArrowRight className="size-3" />
+                </button>
+              </div>
             ))}
+          </div>
+        </div>
+
+        {/* 最近操作回溯 */}
+        <div className="space-y-1.5 text-left">
+          <div className="text-[8px] font-bold text-[var(--text-secondary)] uppercase tracking-wider flex items-center gap-1">
+            <MessageSquare className="size-2.5 text-[var(--accent-color)] shrink-0" />
+            <span className="truncate">最近操作</span>
+          </div>
+          <div className="flex flex-col gap-1">
+            {visibleRecentActivities.length ? (
+              visibleRecentActivities.map((activity) => (
+                <button
+                  key={activity.id}
+                  type="button"
+                  onClick={() => handleUseActivity(activity)}
+                  className="text-left w-full min-w-0 px-2.5 py-1.5 text-[9px] font-medium text-[var(--text-primary)] bg-[var(--border-color)]/15 hover:bg-[var(--border-color)]/45 rounded-lg border border-[var(--border-color)] transition-colors cursor-pointer"
+                  title={activity.summary}
+                >
+                  <span className="block truncate">{activity.title}</span>
+                  <span className="block truncate text-[7.5px] text-[var(--text-secondary)] mt-0.5">
+                    {activity.desc ? `带入 · ${activity.desc}` : activity.time ? `带入 · ${activity.time}` : '带入提问'}
+                  </span>
+                </button>
+              ))
+            ) : (
+              <div className="px-2.5 py-1.5 text-[8.5px] text-[var(--text-secondary)] bg-[var(--border-color)]/10 rounded-lg border border-dashed border-[var(--border-color)]">
+                暂无最近操作
+              </div>
+            )}
           </div>
         </div>
 

@@ -358,3 +358,17 @@
   - Prompt 管理 worker：`src/pages/LlmConfig.jsx`，必要时新增 `src/components/PromptTemplatePanel.jsx`，只做配置页 PromptTemplate 管理。
   - QA/文档 worker：`docs/orchestration/ACCEPTANCE.md`、`docs/orchestration/HANDOFF.md`、`docs/orchestration/ROUND21_REPORT.md`，负责验收记录和烟测清单。
 - R21 仍不得默认启用真实 LLM，不得保存或输出真实 `.env`、API key、token、cookie、Authorization。
+
+## R21 完成交接
+- R21 名称：AI 助手与 Prompt 闭环。
+- 后端新增/增强 `POST /api/v2/prompt-templates`、`DELETE /api/v2/prompt-templates/{templateId}`、`POST /api/v2/prompt-templates/{templateId}/test`、`GET /api/v2/assistant/context`、`POST /api/v2/assistant/drafts`。
+- `POST /api/v2/prompt-templates/{templateId}/test` 兼容 `variables` 嵌套与 flat payload；`/chat` fallback 会追加 assistant context 摘要；所有响应不调用真实 provider 且做敏感信息脱敏。
+- AI 助手已支持复制整条回复、读取/保存常用 Prompt、展示最近操作、把最近操作带入输入框，并生成测试点/澄清问题/缺陷备注草稿。
+- LLM 配置页 Prompt 模板管理面板已支持加载、新增、编辑、测试渲染、删除自定义模板；内置模板不可删除。
+- QA 修复已落地：前端 `/assistant/drafts` 发送 `message: prompt`；最近操作 normalize 兼容 `recent_activities.list` 与 `operation_logs.list`。
+- R21 验收证据见 `docs/orchestration/ROUND21_REPORT.md`；后端定向测试、R19/R20 回归、后端全量测试、前端构建和 Headless Chrome CDP 烟测均通过。
+- R21 残余风险：真实 LLM 仍默认关闭；Prompt 模板尚未做收藏排序/团队级模板权限；最近操作/operation logs 是摘要上下文；结构化草稿为 deterministic rules fallback。
+
+## R22 预备交接
+- 下一步进入 R22：需求库解析与确认闭环。
+- R22 应优先围绕 TXT/Markdown 基础解析增强、需求项编辑/合并/拆分/暂不入库、粒度质检、来源锚点和需求大脑可追溯摘要继续拆分子线程。

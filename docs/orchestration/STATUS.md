@@ -497,3 +497,20 @@
 - LLM 状态接口默认不探测外部 provider，真实连通性仍通过 LLM 配置页连接测试验证。
 - Topbar 目前挂载时读取一次 LLM 状态，配置变更后的自动刷新可在 R21/R后续体验优化中处理。
 - Dashboard 新聚合未做大数据量性能压测；当前本地 SQLite、契约测试和浏览器烟测均通过。
+
+## 第二轮 R21 完成状态
+- R21 名称：AI 助手与 Prompt 闭环。
+- 后端新增/增强 `POST /api/v2/prompt-templates`、`DELETE /api/v2/prompt-templates/{templateId}`、`POST /api/v2/prompt-templates/{templateId}/test`、`GET /api/v2/assistant/context`、`POST /api/v2/assistant/drafts`；Prompt 模板测试渲染兼容 `variables` 嵌套与 flat payload。
+- `/chat` fallback 会追加 assistant context 摘要；R21 所有响应不调用真实 provider 且做敏感信息脱敏。
+- 前端 AI 助手已支持复制整条回复、读取/保存常用 Prompt、展示最近操作、把最近操作带入输入框，并生成测试点/澄清问题/缺陷备注草稿。
+- LLM 配置页新增 Prompt 模板管理面板，支持加载/新增/编辑/测试渲染/删除自定义模板，内置模板不可删除。
+- QA 修复：前端 `/assistant/drafts` 已发送 `message: prompt`；最近操作 normalize 已兼容 `recent_activities.list` 与 `operation_logs.list`。
+- `docs/orchestration/ROUND21_REPORT.md` 已记录实现、验证和残余风险。
+- Round 21 主线程验收：`python -m compileall backend\aitest_platform` 通过；`python -m pytest backend\tests\test_round21_ai_prompt.py -q` 4 passed；`python -m pytest backend\tests\test_round19_dashboard_chat.py backend\tests\test_round20_dashboard_topbar.py -q` 6 passed；`cd backend; python -m pytest -q` 通过；`npm run build` 通过，仅 Vite chunk size warning；Headless Chrome CDP 烟测通过且 `window.__r21Errors` 为空。
+
+## 第二轮 R21 残余风险
+- 真实 LLM 仍默认关闭。
+- Prompt 模板只是基础 CRUD/测试渲染，尚未做收藏排序/团队级模板权限。
+- 最近操作/operation logs 是摘要上下文，不是全量审计回放。
+- 结构化草稿为 deterministic rules fallback，不等同真实 LLM 资产生成。
+- 下一步进入 R22：需求库解析与确认闭环。

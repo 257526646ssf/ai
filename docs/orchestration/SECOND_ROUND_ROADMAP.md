@@ -80,13 +80,15 @@
 
 ## 当前下一步
 
-立即进入 R20：
-- 后端增加 Dashboard 图表所需趋势、覆盖率、模块热力和 LLM 状态契约。
-- 前端替换 Dashboard 剩余关键静态图表数据。
-- Topbar LLM 状态从后端读取，不再固定显示 `已连接 / OpenAI GPT-4o`。
+立即进入 R22：
+- 增强 TXT/Markdown 需求解析与来源锚点。
+- 补齐需求项编辑、合并、拆分、暂不入库和粒度质检闭环。
+- 让需求大脑输出可追溯摘要与风险，继续保持真实 LLM 默认关闭和脱敏约束。
 
 ## 当前进展
 
 - R20 已完成并验收：Dashboard 执行趋势、需求覆盖率、模块热力图已改为后端事实驱动，Topbar LLM 状态已接 `/system/llm-status`。
 - R20 验收证据：`docs/orchestration/ROUND20_REPORT.md`。
-- 下一步进入 R21：AI 助手与 Prompt 闭环，按 `HANDOFF.md` 的 R21 预备交接继续拆分子线程。
+- R21 已完成并验收：AI 助手与 Prompt 闭环已落地，后端补齐 Prompt 模板 CRUD/测试渲染、assistant context、assistant drafts 和 `/chat` fallback context 摘要；前端补齐常用 Prompt、最近操作、复制回复、三类草稿按钮和 LLM 配置页 Prompt 模板管理面板。
+- R21 验收证据：`docs/orchestration/ROUND21_REPORT.md`。
+- 下一步进入 R22：需求库解析与确认闭环。

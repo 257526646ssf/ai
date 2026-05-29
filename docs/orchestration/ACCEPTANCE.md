@@ -363,3 +363,28 @@
 - QA subagent full backend regression: `cd backend; python -m pytest -q` passed, with FastAPI dependency warnings.
 - `npm run build`: passed, with only Vite chunk size warning.
 - Headless Chrome CDP smoke: rendered `LLM 状态 / 未启用 / round20-model`, `执行趋势`, `需求覆盖率`, `模块使用热力图`; no JS console error or browser error log.
+
+## 第二十一轮验收
+- [x] R21 名称为 AI 助手与 Prompt 闭环。
+- [x] `POST /api/v2/prompt-templates` 可新增 Prompt 模板。
+- [x] `DELETE /api/v2/prompt-templates/{templateId}` 可删除自定义 Prompt 模板，内置模板不可删除。
+- [x] `POST /api/v2/prompt-templates/{templateId}/test` 支持测试渲染，并兼容 `variables` 嵌套与 flat payload。
+- [x] `GET /api/v2/assistant/context` 可返回 AI 助手上下文。
+- [x] `POST /api/v2/assistant/drafts` 可生成测试点、澄清问题、缺陷备注草稿。
+- [x] `/chat` fallback 会追加 assistant context 摘要。
+- [x] R21 所有后端响应不调用真实 provider 且做敏感信息脱敏。
+- [x] AI 助手可复制整条回复、读取/保存常用 Prompt、展示最近操作、把最近操作带入输入框。
+- [x] AI 助手可生成测试点/澄清问题/缺陷备注草稿。
+- [x] LLM 配置页新增 Prompt 模板管理面板，支持加载/新增/编辑/测试渲染/删除自定义模板。
+- [x] 前端 `/assistant/drafts` 已发送 `message: prompt`。
+- [x] 最近操作 normalize 已兼容 `recent_activities.list` 与 `operation_logs.list`。
+
+## Round 21 Evidence
+- Added `backend/tests/test_round21_ai_prompt.py`.
+- `python -m compileall backend\aitest_platform`: passed.
+- `python -m pytest backend\tests\test_round21_ai_prompt.py -q`: passed, 4 tests.
+- `python -m pytest backend\tests\test_round19_dashboard_chat.py backend\tests\test_round20_dashboard_topbar.py -q`: passed, 6 tests.
+- `cd backend; python -m pytest -q`: passed.
+- `npm run build`: passed, with only Vite chunk size warning.
+- Headless Chrome CDP smoke: confirmed LLM 配置页 Prompt 面板、AI 助手常用 Prompt/最近操作/三类草稿按钮、生成测试点草稿；`window.__r21Errors` 为空。
+- Residual risks: real LLM remains disabled by default; Prompt templates are basic CRUD/test rendering only; recent activities/operation logs are summary context rather than full audit replay; structured drafts are deterministic rules fallback.
