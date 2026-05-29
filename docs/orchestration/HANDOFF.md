@@ -372,3 +372,14 @@
 ## R22 预备交接
 - 下一步进入 R22：需求库解析与确认闭环。
 - R22 应优先围绕 TXT/Markdown 基础解析增强、需求项编辑/合并/拆分/暂不入库、粒度质检、来源锚点和需求大脑可追溯摘要继续拆分子线程。
+
+## R22 完成交接
+- R22 名称：需求库解析与确认闭环。
+- 后端实现 TXT/Markdown 多 block 解析，重 parse 会替换旧 blocks；fallback extract 基于 blocks 生成多条可追溯需求项；split/merge/shelve/quality-check/brain analyze/get/traceability refresh 已 DB 化。
+- 闭环响应已脱敏，不回显 token、cookie、Authorization、secret。
+- Requirements 页面展示解析块和 source anchors；需求项编辑保存、确认、暂不入库、拆分、合并、粒度质检、需求大脑、追溯刷新已接后端，支持多选合并。
+- 前端已归一化 brain/source_refs 等返回形状，修复浏览器烟测中 `source_refs.slice is not a function` 崩溃。
+- R22 验收证据见 `docs/orchestration/ROUND22_REPORT.md`；定向测试 `backend/tests/test_round22_requirement_closure.py` 覆盖 parse/extract/edit/confirm/shelve/split/merge/quality/brain/traceability/redaction。
+- 验证结果：`python -m compileall backend\aitest_platform` 通过；R22 定向测试 7 passed；P0/R4/R14 回归 17 passed；后端全量 pytest 通过；`npm run build` 通过且仅 Vite chunk size warning；Headless Chrome CDP R22 烟测通过，`window.__r22Errors` 为空。
+- R22 残余风险：解析仍为规则化 TXT/Markdown，不覆盖 docx/pdf/xlsx 深解析；真实 LLM 默认关闭，需求大脑是 DB deterministic 摘要；split/merge lineage 用状态和响应表达，未新增正式血缘表；浏览器烟测使用本地临时 smoke 数据。
+- 下一步进入 R23：用例评审与质量规则。

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { 
   Folder, 
   FileText, 
@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, formatDateTime, pickList } from '../lib/api';
+import { apiGet, apiPost, apiRequest, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
 const mapRequirementStatus = (status) => {
@@ -60,6 +60,95 @@ const mapRequirementDocument = (doc) => {
   };
 };
 
+const getItemKey = (item) => String(item?.backendId || item?.id || '');
+
+const getBlockKey = (block) => String(block?.block_key || block?.id || block?.anchor_id || '');
+
+const pickArray = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : value.split(',').map(part => part.trim()).filter(Boolean);
+    } catch {
+      return value.split(',').map(part => part.trim()).filter(Boolean);
+    }
+  }
+  return [];
+};
+
+const firstDefined = (...values) => values.find(value => value !== undefined && value !== null);
+
+const toDisplayArray = (value) => {
+  if (value === undefined || value === null || value === '') return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return toDisplayArray(parsed);
+    } catch {
+      return [value];
+    }
+  }
+  if (typeof value !== 'object') return [value];
+
+  const entries = Object.entries(value);
+  const flattened = entries.flatMap(([key, entryValue]) => {
+    if (entryValue === undefined || entryValue === null || entryValue === '') return [];
+    if (Array.isArray(entryValue)) return entryValue.map(item => (typeof item === 'object' && item !== null ? { group: key, ...item } : { group: key, value: item }));
+    if (typeof entryValue === 'object') return [{ group: key, ...entryValue }];
+    return [{ group: key, value: entryValue }];
+  });
+
+  return flattened.length ? flattened : [value];
+};
+
+const toDisplayText = (value, fallback = '') => {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return fallback || String(value);
+  }
+};
+
+const readMetadata = (value) => {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
+  }
+};
+
+const normalizeBlock = (block, index = 0) => {
+  if (!block || typeof block !== 'object') {
+    return {
+      block_key: `BLOCK-${index + 1}`,
+      block_type: 'text',
+      section_path: '未分节',
+      line_start: undefined,
+      line_end: undefined,
+      raw_text: toDisplayText(block),
+      raw: block
+    };
+  }
+  const metadata = readMetadata(block.metadata_json || block.metadata || block.meta);
+  const blockKey = block.block_key || block.anchor_id || block.id || `BLOCK-${index + 1}`;
+  return {
+    block_key: String(blockKey),
+    block_type: block.block_type || block.type || 'paragraph',
+    section_path: block.section_path || block.heading_path || block.section || '未分节',
+    line_start: metadata.line_start ?? block.line_start ?? block.start_line,
+    line_end: metadata.line_end ?? block.line_end ?? block.end_line,
+    raw_text: block.raw_text || block.text || block.content || block.summary || '',
+    raw: block
+  };
+};
+
 const mapRequirementItem = (item) => {
   const statusMeta = mapRequirementStatus(item.status);
   const confidence = Number(item.confidence);
@@ -68,8 +157,13 @@ const mapRequirementItem = (item) => {
     backendId: item.id,
     title: item.title || `需求项 #${item.id}`,
     module: item.module || '未分组',
+    actor: item.actor || '',
+    goal: item.goal || '',
     priority: item.priority || 'P2',
     status: statusMeta.status,
+    rawStatus: item.status || 'draft',
+    granularityFlag: item.granularity_flag || item.granularityFlag || '',
+    sourceAnchorIds: pickArray(item.source_anchor_ids || item.sourceAnchorIds),
     rate: Number.isFinite(confidence) && confidence > 0 ? `${Math.round(confidence * 100)}%` : '0%',
     summary: item.summary,
     raw: item
@@ -89,6 +183,13 @@ export default function Requirements() {
   const [isCreatingLib, setIsCreatingLib] = useState(false);
   const [isCreatingDocument, setIsCreatingDocument] = useState(false);
   const [isGeneratingPoints, setIsGeneratingPoints] = useState(false);
+  const [parseBlocks, setParseBlocks] = useState([]);
+  const [selectedItemKeys, setSelectedItemKeys] = useState([]);
+  const [editDraft, setEditDraft] = useState(null);
+  const [itemQuality, setItemQuality] = useState({});
+  const [traceability, setTraceability] = useState({});
+  const [brainResult, setBrainResult] = useState(null);
+  const [actionLoading, setActionLoading] = useState('');
 
   // ==========================================================================
   // VIEW 1: 需求库列表页 (11-页)
@@ -156,10 +257,52 @@ export default function Requirements() {
   const docsList = remoteDocs.length ? remoteDocs : fallbackDocsList;
   const workbenchItems = remoteItems.length ? remoteItems : fallbackWorkbenchItems;
   const selectedBackendLibId = remoteLibs[selectedLibIndex]?.backendId;
+  const selectedDoc = remoteDocs.find(doc => String(doc.backendId) === String(selectedDocId)) || remoteDocs[0];
+  const blockLookup = useMemo(() => {
+    const lookup = new Map();
+    parseBlocks.forEach(block => lookup.set(getBlockKey(block), block));
+    return lookup;
+  }, [parseBlocks]);
+  const activeItemKey = getItemKey(activeItem);
+  const activeQuality = itemQuality[activeItemKey];
+  const activeTraceability = traceability[activeItemKey];
+  const activeAnchors = useMemo(() => {
+    const ids = activeItem?.sourceAnchorIds || [];
+    return ids.map(id => blockLookup.get(String(id))).filter(Boolean);
+  }, [activeItem, blockLookup]);
+  const brainRisks = toDisplayArray(brainResult?.risks || brainResult?.risk_items || brainResult?.riskItems);
+  const brainSourceRefs = toDisplayArray(firstDefined(brainResult?.source_refs, brainResult?.sourceRefs, brainResult?.sources, brainResult?.refs));
+  const activeSourceBlocks = toDisplayArray(activeTraceability?.source_blocks || activeTraceability?.sourceBlocks);
+  const activeTestPoints = toDisplayArray(activeTraceability?.test_points || activeTraceability?.testPoints);
+  const activeTestCases = toDisplayArray(activeTraceability?.test_cases || activeTraceability?.testCases);
+  const activeQualityIssues = toDisplayArray(activeQuality?.issues);
+  const activeQualityActions = toDisplayArray(activeQuality?.suggested_actions || activeQuality?.suggestedActions);
 
   const showToast = (message, type = 'success') => {
     window.dispatchEvent(new CustomEvent('show-toast', { detail: { message, type } }));
   };
+
+  const loadRequirementLibDetails = useCallback(async () => {
+    if (!selectedBackendLibId) {
+      setRemoteDocs([]);
+      setRemoteItems([]);
+      setSelectedItemKeys([]);
+      return;
+    }
+
+    const [docsPayload, itemsPayload] = await Promise.all([
+      apiGet(`/requirement-libs/${selectedBackendLibId}/documents`, { params: { page: 1, pageSize: 50 } }),
+      apiGet(`/requirement-libs/${selectedBackendLibId}/requirement-items`, { params: { page: 1, pageSize: 100 } })
+    ]);
+    const mappedDocs = pickList(docsPayload).map(mapRequirementDocument);
+    const mappedItems = pickList(itemsPayload).map(mapRequirementItem);
+    setRemoteDocs(mappedDocs);
+    setRemoteItems(mappedItems);
+    setSelectedItemKeys(prev => prev.filter(key => mappedItems.some(item => getItemKey(item) === key)));
+    if (mappedItems.length) {
+      setActiveItem(prev => (mappedItems.some(item => item.backendId === prev?.backendId) ? mappedItems.find(item => item.backendId === prev?.backendId) : mappedItems[0]));
+    }
+  }, [selectedBackendLibId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -206,42 +349,35 @@ export default function Requirements() {
 
   useEffect(() => {
     let cancelled = false;
-    if (!selectedBackendLibId) {
-      setRemoteDocs([]);
-      setRemoteItems([]);
-      return () => {
-        cancelled = true;
-      };
-    }
 
-    async function loadRequirementLibDetails() {
-      try {
-        const [docsPayload, itemsPayload] = await Promise.all([
-          apiGet(`/requirement-libs/${selectedBackendLibId}/documents`, { params: { page: 1, pageSize: 50 } }),
-          apiGet(`/requirement-libs/${selectedBackendLibId}/requirement-items`, { params: { page: 1, pageSize: 100 } })
-        ]);
-        if (cancelled) return;
-        const mappedDocs = pickList(docsPayload).map(mapRequirementDocument);
-        const mappedItems = pickList(itemsPayload).map(mapRequirementItem);
-        setRemoteDocs(mappedDocs);
-        setRemoteItems(mappedItems);
-        if (mappedItems.length) {
-          setActiveItem(prev => (mappedItems.some(item => item.backendId === prev?.backendId) ? prev : mappedItems[0]));
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setRemoteDocs([]);
-          setRemoteItems([]);
-          setRequirementsStatus({ loading: false, message: error?.message || '需求库详情同步失败，显示演示数据' });
-        }
+    loadRequirementLibDetails().catch(error => {
+      if (!cancelled) {
+        setRemoteDocs([]);
+        setRemoteItems([]);
+        setRequirementsStatus({ loading: false, message: error?.message || '需求库详情同步失败，显示演示数据' });
       }
-    }
+    });
 
-    loadRequirementLibDetails();
     return () => {
       cancelled = true;
     };
-  }, [selectedBackendLibId]);
+  }, [loadRequirementLibDetails]);
+
+  useEffect(() => {
+    if (!activeItem) {
+      setEditDraft(null);
+      return;
+    }
+    setEditDraft({
+      title: activeItem.title || '',
+      summary: activeItem.summary || '',
+      module: activeItem.module || '',
+      actor: activeItem.actor || '',
+      goal: activeItem.goal || '',
+      priority: activeItem.priority || 'P2',
+      status: activeItem.rawStatus || activeItem.raw?.status || 'draft'
+    });
+  }, [activeItem]);
 
   const handleCreateRequirementLib = async () => {
     if (!projectContext?.id) {
@@ -279,10 +415,12 @@ export default function Requirements() {
         source_type: 'text',
         raw_content: '用户可以登录系统；错误密码需要提示并记录失败次数；连续失败后账号应被锁定并产生安全提示。'
       });
-      await apiPost(`/requirement-documents/${document.id}/parse`, { parse_mode: 'standard' });
+      const parsed = await apiPost(`/requirement-documents/${document.id}/parse`, { parse_mode: 'standard' });
       const extracted = await apiPost(`/requirement-documents/${document.id}/extract-items`, { mode: 'frontend' });
+      setSelectedDocId(document.id);
+      setParseBlocks((parsed?.blocks || pickList(parsed)).map(normalizeBlock));
       setRemoteDocs(prev => [mapRequirementDocument({ ...document, parser_status: 'parsed' }), ...prev]);
-      const extractedItems = (extracted.items || []).map(mapRequirementItem);
+      const extractedItems = (extracted?.items || []).map(mapRequirementItem);
       setRemoteItems(prev => [...extractedItems, ...prev]);
       if (extractedItems.length) setActiveItem(extractedItems[0]);
       showToast('需求文档已导入、解析并提取需求项。');
@@ -307,6 +445,200 @@ export default function Requirements() {
     } finally {
       setIsGeneratingPoints(false);
     }
+  };
+
+  const refreshAfterAction = async () => {
+    try {
+      await loadRequirementLibDetails();
+    } catch (error) {
+      showToast(error?.message || '刷新需求项失败，请稍后重试。', 'error');
+    }
+  };
+
+  const handleSaveActiveItem = async () => {
+    if (!activeItem?.backendId || !editDraft) {
+      showToast('当前为演示需求项，无法保存到后端。', 'info');
+      return;
+    }
+    setActionLoading('save');
+    try {
+      const saved = await apiRequest(`/requirement-items/${activeItem.backendId}`, {
+        method: 'PATCH',
+        body: {
+          title: editDraft.title,
+          summary: editDraft.summary,
+          module: editDraft.module,
+          actor: editDraft.actor,
+          goal: editDraft.goal,
+          priority: editDraft.priority,
+          status: editDraft.status
+        }
+      });
+      const mapped = mapRequirementItem({ ...activeItem.raw, ...saved, ...editDraft, id: activeItem.backendId });
+      setRemoteItems(prev => prev.map(item => (item.backendId === activeItem.backendId ? mapped : item)));
+      setActiveItem(mapped);
+      showToast('需求项已保存。');
+    } catch (error) {
+      showToast(error?.message || '保存需求项失败。', 'error');
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const handleConfirmActiveItem = async () => {
+    if (!activeItem?.backendId) {
+      showToast('当前为演示需求项，无法确认入库。', 'info');
+      return;
+    }
+    setActionLoading('confirm');
+    try {
+      await apiPost(`/requirement-items/${activeItem.backendId}/confirm`, {});
+      await refreshAfterAction();
+      showToast('需求项已确认入库。');
+    } catch (error) {
+      showToast(error?.message || '确认需求项失败。', 'error');
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const handleShelveActiveItem = async () => {
+    if (!activeItem?.backendId) {
+      showToast('当前为演示需求项，无法搁置。', 'info');
+      return;
+    }
+    setActionLoading('shelve');
+    try {
+      await apiPost(`/requirement-items/${activeItem.backendId}/shelve`, {});
+      await refreshAfterAction();
+      showToast('需求项已暂不入库。', 'info');
+    } catch (error) {
+      showToast(error?.message || '搁置需求项失败。', 'error');
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const handleSplitActiveItem = async () => {
+    if (!activeItem?.backendId) {
+      showToast('当前为演示需求项，无法拆分。', 'info');
+      return;
+    }
+    const input = window.prompt('请输入 2 个子项，每行一个。格式：标题 | 摘要', `${activeItem.title} - 子项1 | ${activeItem.summary || ''}\n${activeItem.title} - 子项2 | ${activeItem.summary || ''}`);
+    const parts = (input || '')
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .map(line => {
+        const [title, ...summaryParts] = line.split('|');
+        return { title: title.trim(), summary: summaryParts.join('|').trim() };
+      })
+      .filter(part => part.title);
+    if (parts.length < 2) {
+      showToast('拆分至少需要 2 个子项。', 'info');
+      return;
+    }
+    setActionLoading('split');
+    try {
+      await apiPost(`/requirement-items/${activeItem.backendId}/split`, { parts });
+      await refreshAfterAction();
+      showToast(`已拆分为 ${parts.length} 个子项。`);
+    } catch (error) {
+      showToast(error?.message || '拆分需求项失败。', 'error');
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const handleMergeSelectedItems = async () => {
+    const selectedItems = workbenchItems.filter(item => selectedItemKeys.includes(getItemKey(item)) && item.backendId);
+    if (selectedItems.length < 2) {
+      showToast('请选择至少 2 个真实需求项后再合并。', 'info');
+      return;
+    }
+    const title = window.prompt('合并后的需求标题（可选）', selectedItems.map(item => item.title).join(' / '));
+    setActionLoading('merge');
+    try {
+      await apiPost('/requirement-items/merge', {
+        item_ids: selectedItems.map(item => item.backendId),
+        ...(title ? { title, summary: selectedItems.map(item => item.summary || item.title).join('\n') } : {})
+      });
+      setSelectedItemKeys([]);
+      await refreshAfterAction();
+      showToast(`已合并 ${selectedItems.length} 个需求项。`);
+    } catch (error) {
+      showToast(error?.message || '合并需求项失败。', 'error');
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const handleQualityCheckActiveItem = async () => {
+    if (!activeItem?.backendId) {
+      showToast('当前为演示需求项，无法进行后端质检。', 'info');
+      return;
+    }
+    setActionLoading('quality');
+    try {
+      const result = await apiPost(`/requirement-items/${activeItem.backendId}/quality-check`, {});
+      setItemQuality(prev => ({ ...prev, [activeItemKey]: result }));
+      if (result?.granularity_flag) {
+        setRemoteItems(prev => prev.map(item => (
+          item.backendId === activeItem.backendId ? { ...item, granularityFlag: result.granularity_flag } : item
+        )));
+        setActiveItem(prev => ({ ...prev, granularityFlag: result.granularity_flag }));
+      }
+      showToast(`粒度质检完成，评分 ${result?.score ?? '--'}。`);
+    } catch (error) {
+      showToast(error?.message || '粒度质检失败。', 'error');
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const handleBrainAnalyze = async () => {
+    if (!selectedBackendLibId) {
+      showToast('当前为演示需求库，无法调用需求大脑。', 'info');
+      return;
+    }
+    setActionLoading('brain');
+    try {
+      const analyzed = await apiPost(`/requirement-libs/${selectedBackendLibId}/brain/analyze`, {});
+      let latest = analyzed;
+      try {
+        latest = await apiGet(`/requirement-libs/${selectedBackendLibId}/brain`);
+      } catch {
+        latest = analyzed;
+      }
+      setBrainResult(latest);
+      showToast('需求大脑分析已更新。');
+    } catch (error) {
+      showToast(error?.message || '需求大脑接口暂不可用。', 'error');
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const handleRefreshTraceability = async () => {
+    if (!activeItem?.backendId) {
+      showToast('当前为演示需求项，无法刷新追溯关系。', 'info');
+      return;
+    }
+    setActionLoading('trace');
+    try {
+      const result = await apiPost(`/requirement-items/${activeItem.backendId}/traceability/refresh`, {});
+      setTraceability(prev => ({ ...prev, [activeItemKey]: result }));
+      showToast('追溯关系已刷新。');
+    } catch (error) {
+      showToast(error?.message || '追溯刷新失败。', 'error');
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const toggleSelectedItem = (item) => {
+    const key = getItemKey(item);
+    setSelectedItemKeys(prev => (prev.includes(key) ? prev.filter(value => value !== key) : [...prev, key]));
   };
 
   const renderVersionDiff = () => {
@@ -489,7 +821,7 @@ export default function Requirements() {
               <p className="text-[11px] text-[var(--text-secondary)] mt-1">集中管理各项目的需求文档与需求项，支持解析、确认与追踪。</p>
             </div>
             <div className="flex items-center gap-2">
-              <button 
+              <button
                 onClick={handleCreateRequirementDocument}
                 disabled={isCreatingDocument || !selectedBackendLibId}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] shadow-sm cursor-pointer"
@@ -773,6 +1105,13 @@ export default function Requirements() {
                 {isCreatingDocument ? '解析中...' : '导入并解析'}
               </button>
               <button 
+                onClick={handleBrainAnalyze}
+                disabled={actionLoading === 'brain' || !selectedBackendLibId}
+                className="px-3 py-1.5 rounded-lg border border-purple-500/25 bg-purple-500/10 hover:bg-purple-500/15 text-[11px] font-bold text-purple-600 dark:text-purple-300 cursor-pointer"
+              >
+                {actionLoading === 'brain' ? '分析中...' : '需求大脑'}
+              </button>
+              <button
                 onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'PDF格式分析报告生成中，请在浏览器下载！', type: 'success' } }))}
                 className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer"
               >
@@ -831,7 +1170,11 @@ export default function Requirements() {
                   </div>
                   <div className="space-y-2.5">
                     {docsList.map((doc, idx) => (
-                      <div key={idx} className="flex justify-between items-center text-[9.5px] border-b border-[var(--border-color)] pb-1.5 last:border-b-0">
+                      <div
+                        key={doc.backendId || idx}
+                        onClick={() => doc.backendId && setSelectedDocId(doc.backendId)}
+                        className={`flex justify-between items-center text-[9.5px] border-b border-[var(--border-color)] pb-1.5 last:border-b-0 ${doc.backendId ? 'cursor-pointer' : ''} ${selectedDoc?.backendId === doc.backendId ? 'text-[var(--accent-color)]' : ''}`}
+                      >
                         <div className="flex items-center gap-1.5 min-w-0">
                           <FileText className={`size-3.5 shrink-0 ${idx % 2 === 0 ? 'text-blue-500' : 'text-red-500'}`} />
                           <span className="font-bold text-[var(--text-primary)] truncate">{doc.name}</span>
@@ -844,11 +1187,44 @@ export default function Requirements() {
                     ))}
                   </div>
                 </div>
+
+                <div className="mt-3 pt-3 border-t border-[var(--border-color)]">
+                  <div className="flex justify-between items-center text-[9px] font-bold text-[var(--text-secondary)] mb-2">
+                    <span>Source anchors / 解析块 ({parseBlocks.length})</span>
+                    <span className="font-mono">{selectedDoc?.id || 'DOC'}</span>
+                  </div>
+                  <div className="space-y-1.5 max-h-[150px] overflow-y-auto pr-1">
+                    {parseBlocks.length ? parseBlocks.map((block) => (
+                      <div key={block.block_key} className="p-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[8px]">
+                        <div className="flex justify-between gap-2 font-bold text-[var(--text-primary)]">
+                          <span className="truncate">{block.section_path}</span>
+                          <span className="font-mono shrink-0">L{block.line_start || '-'}-{block.line_end || '-'}</span>
+                        </div>
+                        <div className="mt-1 text-[var(--text-secondary)] leading-snug line-clamp-2">
+                          [{block.block_type}] {block.raw_text || block.block_key}
+                        </div>
+                      </div>
+                    )) : (
+                      <div className="p-2 rounded-lg border border-dashed border-[var(--border-color)] text-[8.5px] text-[var(--text-secondary)] bg-[var(--bg-app)]/20">
+                        暂无解析块。接口未就绪或尚未执行文档解析时会保持空态。
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* 2. 需求项列表 */}
               <div className="theme-card rounded-xl p-4 shadow-soft text-left">
-                <h3 className="text-xs font-bold text-[var(--text-primary)] border-b border-[var(--border-color)] pb-2 mb-3">2. 需求项列表 ({workbenchItems.length})</h3>
+                <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-2 mb-3 gap-2">
+                  <h3 className="text-xs font-bold text-[var(--text-primary)]">2. 需求项列表 ({workbenchItems.length})</h3>
+                  <button
+                    onClick={handleMergeSelectedItems}
+                    disabled={actionLoading === 'merge' || selectedItemKeys.length < 2}
+                    className="px-2 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] text-[8.5px] font-bold text-[var(--text-primary)] disabled:opacity-50 whitespace-nowrap"
+                  >
+                    {actionLoading === 'merge' ? '合并中' : `合并(${selectedItemKeys.length})`}
+                  </button>
+                </div>
                 
                 <div className="flex gap-1.5 mb-3">
                   <div className="flex-1 flex items-center gap-1.5 px-2 py-1 rounded border border-[var(--border-color)] bg-[var(--border-color)]/30">
@@ -869,12 +1245,22 @@ export default function Requirements() {
                       }`}
                     >
                       <div className="flex items-center gap-2 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={selectedItemKeys.includes(getItemKey(item))}
+                          onChange={() => toggleSelectedItem(item)}
+                          onClick={(event) => event.stopPropagation()}
+                          className="rounded shrink-0"
+                        />
                         <span className="font-bold text-[var(--text-secondary)] shrink-0 font-mono">{item.id}</span>
                         <span className="font-bold text-[var(--text-primary)] truncate">{item.title}</span>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <span className="px-1.5 py-0.5 bg-[var(--border-color)] text-[var(--text-secondary)] rounded text-[8px]">{item.module}</span>
                         <span className="text-red-500 font-bold font-mono">{item.priority}</span>
+                        {item.granularityFlag && (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 text-[8px] max-w-[72px] truncate">{toDisplayText(item.granularityFlag)}</span>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -974,14 +1360,24 @@ export default function Requirements() {
               <div className="theme-card rounded-xl p-4 shadow-soft text-left space-y-2.5">
                 <h3 className="text-xs font-bold text-[var(--text-primary)] border-b border-[var(--border-color)] pb-2 flex items-center gap-1">
                   <Sparkles className="size-3.5 text-purple-600 animate-pulse" />
-                  <span>核心业务摘要 (由 AI 生成)</span>
+                  <span>核心业务摘要 / 风险追溯</span>
                 </h3>
                 <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed font-semibold">
-                  该需求描述了客服在会话中发送文本消息的能力，包括输入、发送、存储与展示的完整流程。需保证内容合规，支持表情与特殊字符，消息成功后台实时展示给用户，并记录到会话历史。
+                  {toDisplayText(firstDefined(brainResult?.summary, brainResult?.analysis_summary, brainResult?.analysisSummary), '该需求描述了客服在会话中发送文本消息的能力，包括输入、发送、存储与展示的完整流程。需保证内容合规，支持表情与特殊字符，消息成功后台实时展示给用户，并记录到会话历史。')}
                 </p>
                 <div className="text-[9px] space-y-1.5 font-bold text-[var(--text-secondary)]">
-                  <div>• 关键字段: <span className="font-mono">message_id, session_id, content, msg_type</span></div>
-                  <div>• 覆盖场景: 正向输入、拦截过滤、高并发重发、延迟校验</div>
+                  {brainRisks.slice(0, 3).map((risk, idx) => (
+                    <div key={idx}>• 风险: {toDisplayText(risk?.title || risk?.summary || risk?.message || risk?.value || risk, '--')}</div>
+                  ))}
+                  {!brainRisks.length && (
+                    <>
+                      <div>• 关键字段: <span className="font-mono">message_id, session_id, content, msg_type</span></div>
+                      <div>• 覆盖场景: 正向输入、拦截过滤、高并发重发、延迟校验</div>
+                    </>
+                  )}
+                  {brainSourceRefs.slice(0, 3).map((ref, idx) => (
+                    <div key={`ref-${idx}`} className="font-mono text-[8px]">source: {toDisplayText(ref?.block_key || ref?.section_path || ref?.id || ref?.value || ref, '--')}</div>
+                  ))}
                 </div>
               </div>
 
@@ -996,15 +1392,26 @@ export default function Requirements() {
                   <span className="text-[8.5px] font-mono text-[var(--text-secondary)]">{activeItem.id}</span>
                 </div>
 
-                <div className="mt-3.5">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-xs font-bold text-[var(--text-primary)]">{activeItem.title}</h3>
-                  </div>
-                  <div className="grid grid-cols-2 gap-y-1 gap-x-2 text-[9px] text-[var(--text-secondary)] mt-2.5 font-semibold">
-                    <div>模块: <span className="text-[var(--text-primary)]">{activeItem.module}</span></div>
-                    <div>优先级: <span className="text-red-500 font-bold font-mono">{activeItem.priority}</span></div>
-                    <div>创建人: <span className="text-[var(--text-primary)]">张明</span></div>
-                    <div>覆盖度: <span className="text-[var(--text-primary)]">{activeItem.rate}</span></div>
+                <div className="mt-3.5 space-y-2">
+                  <input
+                    value={editDraft?.title || ''}
+                    onChange={(event) => setEditDraft(prev => ({ ...(prev || {}), title: event.target.value }))}
+                    className="w-full rounded border border-[var(--border-color)] bg-[var(--bg-app)]/40 px-2 py-1.5 text-xs font-bold text-[var(--text-primary)] focus:outline-none"
+                  />
+                  <textarea
+                    value={editDraft?.summary || ''}
+                    onChange={(event) => setEditDraft(prev => ({ ...(prev || {}), summary: event.target.value }))}
+                    rows={3}
+                    placeholder="需求摘要"
+                    className="w-full resize-none rounded border border-[var(--border-color)] bg-[var(--bg-app)]/40 px-2 py-1.5 text-[9px] text-[var(--text-primary)] focus:outline-none"
+                  />
+                  <div className="grid grid-cols-2 gap-1.5 text-[9px] text-[var(--text-secondary)] font-semibold">
+                    <input value={editDraft?.module || ''} onChange={(event) => setEditDraft(prev => ({ ...(prev || {}), module: event.target.value }))} placeholder="模块" className="rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1 text-[var(--text-primary)] focus:outline-none" />
+                    <input value={editDraft?.priority || ''} onChange={(event) => setEditDraft(prev => ({ ...(prev || {}), priority: event.target.value }))} placeholder="优先级" className="rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1 text-red-500 font-mono focus:outline-none" />
+                    <input value={editDraft?.actor || ''} onChange={(event) => setEditDraft(prev => ({ ...(prev || {}), actor: event.target.value }))} placeholder="参与者" className="rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1 text-[var(--text-primary)] focus:outline-none" />
+                    <input value={editDraft?.goal || ''} onChange={(event) => setEditDraft(prev => ({ ...(prev || {}), goal: event.target.value }))} placeholder="目标" className="rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1 text-[var(--text-primary)] focus:outline-none" />
+                    <input value={editDraft?.status || ''} onChange={(event) => setEditDraft(prev => ({ ...(prev || {}), status: event.target.value }))} placeholder="status" className="rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1 text-[var(--text-primary)] focus:outline-none" />
+                    <div className="rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1 text-[var(--text-primary)] truncate">粒度: {toDisplayText(activeItem.granularityFlag, '未质检')}</div>
                   </div>
                 </div>
 
@@ -1013,7 +1420,8 @@ export default function Requirements() {
                   {[
                     { id: 'testpoints', label: '测试点' },
                     { id: 'questions', label: '待 clarified 问题 (2)' },
-                    { id: 'scope', label: '覆盖范围' }
+                    { id: 'scope', label: '覆盖范围' },
+                    { id: 'quality', label: '质检' }
                   ].map((tab) => (
                     <button
                       key={tab.id}
@@ -1035,7 +1443,7 @@ export default function Requirements() {
                     <div className="space-y-3">
                       <div>
                         <div className="text-[var(--text-primary)] font-bold">需求描述</div>
-                        <p className="text-[var(--text-secondary)] text-[8px] mt-0.5 leading-normal">客服在会话中输入文本内容并发送，系统将消息推送给用户并在会话窗口展示，同时记录到会话历史中。</p>
+                        <p className="text-[var(--text-secondary)] text-[8px] mt-0.5 leading-normal">{activeItem.summary || '客服在会话中输入文本内容并发送，系统将消息推送给用户并在会话窗口展示，同时记录到会话历史中。'}</p>
                       </div>
                       
                       <div className="space-y-1">
@@ -1050,6 +1458,29 @@ export default function Requirements() {
                             <span className="text-[var(--text-secondary)] font-semibold leading-tight">{std}</span>
                           </div>
                         ))}
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <div className="text-[var(--text-primary)] font-bold">来源锚点</div>
+                          <button onClick={handleRefreshTraceability} disabled={actionLoading === 'trace'} className="text-[8px] px-1.5 py-0.5 rounded bg-[var(--border-color)] text-[var(--text-primary)]">
+                            {actionLoading === 'trace' ? '刷新中' : '刷新追溯'}
+                          </button>
+                        </div>
+                        {(activeAnchors.length ? activeAnchors : activeSourceBlocks).slice(0, 3).map((block, idx) => {
+                          const normalized = normalizeBlock(block, idx);
+                          return (
+                            <div key={normalized.block_key || idx} className="p-2 rounded border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[8px]">
+                              <div className="flex justify-between gap-2 font-bold text-[var(--text-primary)]">
+                                <span className="truncate">{normalized.section_path}</span>
+                                <span className="font-mono shrink-0">L{normalized.line_start || '-'}-{normalized.line_end || '-'}</span>
+                              </div>
+                              <div className="text-[var(--text-secondary)] leading-snug line-clamp-2">{normalized.raw_text || normalized.block_key}</div>
+                            </div>
+                          );
+                        })}
+                        {!activeAnchors.length && !activeSourceBlocks.length && (
+                          <div className="p-2 rounded border border-dashed border-[var(--border-color)] text-[8px] text-[var(--text-secondary)]">暂无可映射 source_anchor_ids，解析或追溯接口返回后会在这里展示。</div>
+                        )}
                       </div>
                     </div>
                   )}
@@ -1083,6 +1514,43 @@ export default function Requirements() {
                         <div className="font-bold text-[var(--text-primary)]">测试用例建议</div>
                         <p className="text-[8px] leading-relaxed mt-0.5">正向用例：4个 | 反向异常：6个 | 极限边界：3个</p>
                       </div>
+                      {activeTraceability && (
+                        <div className="p-2 border border-[var(--border-color)] bg-[var(--bg-app)]/30 rounded-lg">
+                          <div className="font-bold text-[var(--text-primary)]">追溯覆盖</div>
+                          <p className="text-[8px] leading-relaxed mt-0.5">
+                            source blocks: {activeSourceBlocks.length} | test points: {activeTestPoints.length} | test cases: {activeTestCases.length} | coverage: {toDisplayText(activeTraceability.coverage, '--')}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {workbenchTab === 'quality' && (
+                    <div className="space-y-2">
+                      <button
+                        onClick={handleQualityCheckActiveItem}
+                        disabled={actionLoading === 'quality'}
+                        className="w-full py-1.5 rounded bg-[var(--accent-color)] text-white text-[9px] font-bold"
+                      >
+                        {actionLoading === 'quality' ? '质检中...' : '运行粒度质检'}
+                      </button>
+                      <div className="p-2 border border-[var(--border-color)] bg-[var(--bg-app)]/30 rounded-lg">
+                        <div className="flex justify-between font-bold text-[var(--text-primary)]">
+                          <span>Score</span>
+                          <span className="font-mono">{toDisplayText(activeQuality?.score, '--')}</span>
+                        </div>
+                        <div className="mt-1 text-[8px]">粒度标记: {toDisplayText(firstDefined(activeQuality?.granularity_flag, activeQuality?.granularityFlag, activeItem.granularityFlag), '未质检')}</div>
+                      </div>
+                      {activeQualityIssues.slice(0, 4).map((issue, idx) => (
+                        <div key={idx} className="p-2 border border-amber-500/20 bg-amber-500/5 rounded-lg text-[8px]">
+                          {toDisplayText(issue?.message || issue?.title || issue?.value || issue, '--')}
+                        </div>
+                      ))}
+                      {activeQualityActions.slice(0, 4).map((action, idx) => (
+                        <div key={`action-${idx}`} className="p-2 border border-emerald-500/20 bg-emerald-500/5 rounded-lg text-[8px] text-emerald-600 dark:text-emerald-400">
+                          {toDisplayText(action?.message || action?.title || action?.value || action, '--')}
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -1090,24 +1558,34 @@ export default function Requirements() {
 
               {/* 底部确认操作 */}
               <div className="border-t border-[var(--border-color)] pt-3.5 space-y-2 mt-4">
+                <button
+                  onClick={handleSaveActiveItem}
+                  disabled={actionLoading === 'save'}
+                  className="w-full py-2 border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[var(--text-primary)] text-[10px] font-bold rounded-lg cursor-pointer text-center transition-colors"
+                >
+                  {actionLoading === 'save' ? '保存中...' : '保存需求项编辑'}
+                </button>
                 <button 
-                  onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '该需求项已被标定为 [已确认] 状态，同步推送至测试资产管理中心！', type: 'success' } }))}
+                  onClick={handleConfirmActiveItem}
+                  disabled={actionLoading === 'confirm'}
                   className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold rounded-lg cursor-pointer text-center transition-colors"
                 >
-                  确认解析此需求项
+                  {actionLoading === 'confirm' ? '确认中...' : '确认解析此需求项'}
                 </button>
                 <div className="flex gap-2">
                   <button 
-                    onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '已标定为待确认。', type: 'info' } }))}
+                    onClick={handleShelveActiveItem}
+                    disabled={actionLoading === 'shelve'}
                     className="flex-1 py-1.5 border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--border-color)]/50 text-[9px] font-bold rounded-lg cursor-pointer text-center"
                   >
-                    标记为待确认
+                    {actionLoading === 'shelve' ? '搁置中' : '暂不入库'}
                   </button>
                   <button 
-                    onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '操作已锁定。', type: 'info' } }))}
-                    className="px-3 border border-[var(--border-color)] bg-[var(--bg-card)] text-slate-400 hover:bg-[var(--border-color)]/50 rounded-lg cursor-pointer text-center"
+                    onClick={handleSplitActiveItem}
+                    disabled={actionLoading === 'split'}
+                    className="px-3 border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--border-color)]/50 rounded-lg cursor-pointer text-center text-[9px] font-bold whitespace-nowrap"
                   >
-                    •••
+                    {actionLoading === 'split' ? '拆分中' : '拆分'}
                   </button>
                 </div>
               </div>

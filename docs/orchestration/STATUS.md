@@ -514,3 +514,12 @@
 - 最近操作/operation logs 是摘要上下文，不是全量审计回放。
 - 结构化草稿为 deterministic rules fallback，不等同真实 LLM 资产生成。
 - 下一步进入 R22：需求库解析与确认闭环。
+
+## 第二轮 R22 完成状态
+- R22 名称：需求库解析与确认闭环。
+- 后端实现：TXT/Markdown 多 block 解析，重 parse 替换旧 blocks；fallback extract 基于 blocks 生成多条可追溯需求项；DB 化 split/merge/shelve/quality-check/brain analyze/get/traceability refresh；闭环响应脱敏，不回显 token/cookie/Authorization/secret。
+- 前端实现：Requirements 页面展示解析块/source anchors；需求项编辑保存、确认、暂不入库、拆分、合并、粒度质检、需求大脑、追溯刷新接后端；多选合并；brain/source_refs 等返回形状归一化，修复浏览器烟测中 `source_refs.slice is not a function` 崩溃。
+- 测试：新增 `backend/tests/test_round22_requirement_closure.py`，覆盖 parse/extract/edit/confirm/shelve/split/merge/quality/brain/traceability/redaction。
+- 验证：`python -m compileall backend\aitest_platform` 通过；`python -m pytest backend\tests\test_round22_requirement_closure.py -q` 7 passed；`python -m pytest backend\tests\test_p0_acceptance.py backend\tests\test_round4_main_chain_llm.py backend\tests\test_round14_requirement_testcase_integration.py -q` 17 passed；`cd backend; python -m pytest -q` 全量通过；`npm run build` 通过，仅 Vite chunk size warning；Headless Chrome CDP 烟测通过，R22 专用项目进入需求库工作台，source anchors 可见，合并/质检/追溯/暂不入库/拆分按钮可见，点击质检和需求大脑结果可见，`window.__r22Errors` 为空。
+- 残余风险：解析仍为规则化 TXT/Markdown，不覆盖 docx/pdf/xlsx 深解析；真实 LLM 默认关闭，需求大脑是 DB deterministic 摘要；split/merge lineage 用状态和响应表达，未新增正式血缘表；浏览器烟测使用本地临时 smoke 数据。
+- 下一步进入 R23：用例评审与质量规则。

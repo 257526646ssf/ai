@@ -4,7 +4,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from aitest_platform.models import (
@@ -39,6 +39,13 @@ from aitest_platform.models import (
     TestPoint,
     TestRound,
 )
+from aitest_platform.services.requirement_parser import (
+    PARSER_NAME,
+    build_requirement_item_payloads,
+    content_hash,
+    parse_requirement_blocks,
+)
+from aitest_platform.services.requirement_quality import assess_requirement_quality
 
 
 class NotFoundError(ValueError):
@@ -111,28 +118,40 @@ class AitestRepository:
 
     def parse_requirement_document(self, document_id: int) -> GenerationJob:
         document = self._get(RequirementDocument, document_id)
+        raw_content = document.raw_content or document.name
+        parsed_blocks = parse_requirement_blocks(
+            raw_content,
+            document_id=document.id,
+            document_name=document.name,
+            source_type=document.source_type,
+        )
+
+        self.session.execute(delete(RequirementDocumentBlock).where(RequirementDocumentBlock.document_id == document.id))
+        for payload in parsed_blocks:
+            self.session.add(
+                RequirementDocumentBlock(
+                    document_id=document.id,
+                    block_key=payload["block_key"],
+                    block_type=payload["block_type"],
+                    raw_text=payload["raw_text"],
+                    normalized_text=payload["normalized_text"],
+                    order_no=payload["order_no"],
+                    section_path=payload.get("section_path"),
+                    metadata_json=payload["metadata_json"],
+                )
+            )
+
         document.parser_status = "parsed"
-        summary = self._summary(document.raw_content or document.name)
+        document.version += 1
+        summary = self._summary(raw_content)
         document.parser_metadata = {
             "summary": summary,
-            "parser": "placeholder",
+            "parser": PARSER_NAME,
             "parsed_at": self._now_iso(),
+            "block_count": len(parsed_blocks),
+            "content_hash": content_hash(raw_content)[:16],
         }
-
-        existing_blocks = self.session.scalar(
-            select(func.count()).select_from(RequirementDocumentBlock).where(RequirementDocumentBlock.document_id == document.id)
-        )
-        if not existing_blocks:
-            block = RequirementDocumentBlock(
-                document_id=document.id,
-                block_key=f"doc-{document.id}-blk-1",
-                block_type="paragraph",
-                raw_text=document.raw_content or document.name,
-                normalized_text=document.raw_content or document.name,
-                order_no=1,
-                metadata_json={"source_type": document.source_type},
-            )
-            self.session.add(block)
+        self.session.flush()
 
         job = self._create_job(
             project_id=document.project_id,
@@ -140,7 +159,7 @@ class AitestRepository:
             requirement_item_id=None,
             job_type="parse_document",
             input_payload={"document_id": document.id},
-            output_payload={"summary": summary, "status": "parsed"},
+            output_payload={"summary": summary, "status": "parsed", "block_count": len(parsed_blocks)},
         )
         self._log("requirement", "parse_document", "requirement_document", document.id, {"job_id": job.id})
         return job
@@ -166,13 +185,19 @@ class AitestRepository:
             )
 
         created_items: list[RequirementItem] = []
-        source_items = list(items) if items is not None else [self._placeholder_requirement_item(document, blocks)]
-        for payload in source_items:
+        source_items = list(items) if items is not None else build_requirement_item_payloads(document.name, blocks)
+        if not source_items:
+            source_items = [self._placeholder_requirement_item(document, blocks)]
+        item_sequence = self.session.scalar(select(func.count()).select_from(RequirementItem)) or 0
+        for offset, payload in enumerate(source_items, start=1):
+            anchors = payload.get("source_anchor_ids") or payload.get("source_anchors")
+            if not anchors and blocks:
+                anchors = [blocks[min(offset - 1, len(blocks) - 1)].block_key]
             item = RequirementItem(
                 project_id=document.project_id,
                 lib_id=document.lib_id,
                 document_id=document.id,
-                item_number=self._next_code("REQ", RequirementItem, "item_number"),
+                item_number=self._unique_code("REQ", RequirementItem, "item_number", item_sequence + offset),
                 title=payload.get("title") or document.name,
                 summary=payload.get("summary") or payload.get("description"),
                 module=payload.get("module"),
@@ -188,7 +213,7 @@ class AitestRepository:
                 status=payload.get("status", "draft"),
                 confidence=float(payload.get("confidence", 0.7)),
                 granularity_flag=payload.get("granularity_flag", "normal"),
-                source_anchor_ids=payload.get("source_anchor_ids") or [block.block_key for block in blocks[:1]],
+                source_anchor_ids=anchors or [block.block_key for block in blocks[:1]],
             )
             self.session.add(item)
             created_items.append(item)
@@ -213,6 +238,291 @@ class AitestRepository:
         self.session.flush()
         self._log("requirement", "confirm_item", "requirement_item", item.id, {"version": item.version})
         return item
+
+    def split_requirement_item(self, item_id: int, parts: Iterable[dict[str, Any]] | None = None) -> tuple[RequirementItem, list[RequirementItem], GenerationJob]:
+        item = self._get(RequirementItem, item_id)
+        source_parts = list(parts or [])
+        if not source_parts:
+            source_parts = [
+                {
+                    "title": f"{item.title} - split item",
+                    "summary": item.summary,
+                    "source_anchor_ids": item.source_anchor_ids,
+                }
+            ]
+
+        created_items: list[RequirementItem] = []
+        item_sequence = self.session.scalar(select(func.count()).select_from(RequirementItem)) or 0
+        for offset, payload in enumerate(source_parts, start=1):
+            child = RequirementItem(
+                project_id=item.project_id,
+                lib_id=item.lib_id,
+                document_id=item.document_id,
+                item_number=self._unique_code("REQ", RequirementItem, "item_number", item_sequence + offset),
+                title=str(payload.get("title") or payload.get("name") or f"{item.title} - part {offset}")[:255],
+                summary=payload.get("summary") or payload.get("description") or item.summary,
+                module=payload.get("module", item.module),
+                actor=payload.get("actor", item.actor),
+                goal=payload.get("goal", item.goal),
+                preconditions_json=payload.get("preconditions") or item.preconditions_json or [],
+                business_rules_json=payload.get("business_rules") or item.business_rules_json or [],
+                state_transitions_json=payload.get("state_transitions") or item.state_transitions_json or [],
+                exceptions_json=payload.get("exceptions") or item.exceptions_json or [],
+                permissions_json=payload.get("permissions") or item.permissions_json or [],
+                non_functional_json=payload.get("non_functional") or item.non_functional_json or [],
+                priority=payload.get("priority", item.priority),
+                status=payload.get("status", "draft"),
+                confidence=float(payload.get("confidence", item.confidence or 0.7)),
+                granularity_flag=payload.get("granularity_flag", "normal"),
+                source_anchor_ids=payload.get("source_anchor_ids") or payload.get("source_anchors") or item.source_anchor_ids,
+            )
+            self.session.add(child)
+            created_items.append(child)
+
+        item.status = "split"
+        item.version += 1
+        self.session.flush()
+        job = self._create_job(
+            project_id=item.project_id,
+            document_id=item.document_id,
+            requirement_item_id=item.id,
+            job_type="split_requirement_item",
+            input_payload={"requirement_item_id": item.id, "part_count": len(source_parts)},
+            output_payload={"source_item_id": item.id, "child_item_ids": [child.id for child in created_items]},
+        )
+        self._log("requirement", "split_item", "requirement_item", item.id, {"job_id": job.id, "child_count": len(created_items)})
+        return item, created_items, job
+
+    def merge_requirement_items(self, item_ids: Iterable[int], payload: dict[str, Any] | None = None) -> tuple[RequirementItem, list[RequirementItem], GenerationJob]:
+        payload = payload or {}
+        ids = list(dict.fromkeys(int(item_id) for item_id in item_ids))
+        if len(ids) < 2:
+            raise ValueError("at least two item_ids are required")
+        sources = list(
+            self.session.scalars(
+                select(RequirementItem)
+                .where(RequirementItem.id.in_(ids), RequirementItem.is_deleted.is_(False))
+                .order_by(RequirementItem.id)
+            )
+        )
+        if len(sources) != len(ids):
+            raise NotFoundError("one or more RequirementItem records were not found")
+        project_ids = {item.project_id for item in sources}
+        lib_ids = {item.lib_id for item in sources}
+        document_ids = {item.document_id for item in sources}
+        if len(project_ids) != 1 or len(lib_ids) != 1:
+            raise ValueError("items must belong to the same project and requirement library")
+
+        anchors = self._unique_values(anchor for item in sources for anchor in (item.source_anchor_ids or []))
+        priorities = [item.priority for item in sources]
+        modules = self._unique_values(item.module for item in sources if item.module)
+        summary = payload.get("summary") or "\n".join(f"- {item.title}: {item.summary or ''}".strip() for item in sources)[:2000]
+        merged = RequirementItem(
+            project_id=sources[0].project_id,
+            lib_id=sources[0].lib_id,
+            document_id=sources[0].document_id if len(document_ids) == 1 else sources[0].document_id,
+            item_number=self._next_code("REQ", RequirementItem, "item_number"),
+            title=str(payload.get("title") or f"Merged requirement: {sources[0].title}")[:255],
+            summary=summary,
+            module=str(payload.get("module") or ", ".join(modules))[:128] if modules or payload.get("module") else None,
+            actor=payload.get("actor") or sources[0].actor,
+            goal=payload.get("goal") or summary[:500],
+            preconditions_json=payload.get("preconditions") or [],
+            business_rules_json=payload.get("business_rules") or [{"merged_from": ids}],
+            state_transitions_json=payload.get("state_transitions") or [],
+            exceptions_json=payload.get("exceptions") or [],
+            permissions_json=payload.get("permissions") or [],
+            non_functional_json=payload.get("non_functional") or [],
+            priority=payload.get("priority") or self._highest_priority(priorities),
+            status=payload.get("status", "draft"),
+            confidence=float(payload.get("confidence", min((item.confidence for item in sources), default=0.7))),
+            granularity_flag=payload.get("granularity_flag", "normal"),
+            source_anchor_ids=anchors,
+        )
+        self.session.add(merged)
+        for source in sources:
+            source.status = "merged"
+            source.version += 1
+        self.session.flush()
+        job = self._create_job(
+            project_id=merged.project_id,
+            document_id=merged.document_id,
+            requirement_item_id=merged.id,
+            job_type="merge_requirement_items",
+            input_payload={"item_ids": ids},
+            output_payload={"merged_item_id": merged.id, "source_item_ids": ids},
+        )
+        self._log("requirement", "merge_items", "requirement_item", merged.id, {"job_id": job.id, "source_item_ids": ids})
+        return merged, sources, job
+
+    def shelve_requirement_item(self, item_id: int, reason: str | None = None) -> RequirementItem:
+        item = self._get(RequirementItem, item_id)
+        item.status = "shelved"
+        item.version += 1
+        self.session.flush()
+        self._log("requirement", "shelve_item", "requirement_item", item.id, {"reason": reason or "", "version": item.version})
+        return item
+
+    def quality_check_requirement_item(self, item_id: int) -> dict[str, Any]:
+        item = self._get(RequirementItem, item_id)
+        result = assess_requirement_quality(self._model_dict(item))
+        if item.granularity_flag != result["granularity_flag"]:
+            item.granularity_flag = result["granularity_flag"]
+            item.version += 1
+        self.session.flush()
+        self._log("requirement", "quality_check", "requirement_item", item.id, {"granularity_score": result["granularity_score"]})
+        return result
+
+    def analyze_requirement_brain(self, lib_id: int) -> tuple[RequirementLib, GenerationJob]:
+        lib = self._get(RequirementLib, lib_id)
+        items = list(
+            self.session.scalars(
+                select(RequirementItem)
+                .where(RequirementItem.lib_id == lib.id, RequirementItem.is_deleted.is_(False))
+                .order_by(RequirementItem.id)
+            )
+        )
+        documents = list(
+            self.session.scalars(
+                select(RequirementDocument)
+                .where(RequirementDocument.lib_id == lib.id, RequirementDocument.is_deleted.is_(False))
+                .order_by(RequirementDocument.id)
+            )
+        )
+        blocks = list(
+            self.session.scalars(
+                select(RequirementDocumentBlock)
+                .join(RequirementDocument, RequirementDocument.id == RequirementDocumentBlock.document_id)
+                .where(RequirementDocument.lib_id == lib.id, RequirementDocument.is_deleted.is_(False))
+                .order_by(RequirementDocumentBlock.document_id, RequirementDocumentBlock.order_no)
+            )
+        )
+        anchor_to_items: dict[str, list[int]] = {}
+        for item in items:
+            for anchor in item.source_anchor_ids or []:
+                anchor_to_items.setdefault(str(anchor), []).append(item.id)
+        status_counts = self._count_by(item.status for item in items)
+        flag_counts = self._count_by(item.granularity_flag for item in items)
+        risks = []
+        if status_counts.get("draft", 0):
+            risks.append({"level": "medium", "code": "unconfirmed_items", "count": status_counts["draft"]})
+        if flag_counts.get("too_coarse", 0) or flag_counts.get("too_small", 0) or flag_counts.get("needs_review", 0):
+            risks.append({"level": "medium", "code": "granularity_review_needed", "count": flag_counts.get("too_coarse", 0) + flag_counts.get("too_small", 0) + flag_counts.get("needs_review", 0)})
+        missing_anchor_count = sum(1 for item in items if not item.source_anchor_ids)
+        if missing_anchor_count:
+            risks.append({"level": "high", "code": "missing_source_anchors", "count": missing_anchor_count})
+        item_summaries = [
+            {
+                "id": item.id,
+                "item_number": item.item_number,
+                "title": item.title,
+                "summary": self._summary(item.summary or item.goal or item.title, 240),
+                "status": item.status,
+                "priority": item.priority,
+                "module": item.module,
+                "granularity_flag": item.granularity_flag,
+                "source_anchor_ids": item.source_anchor_ids or [],
+                "version": item.version,
+            }
+            for item in items
+        ]
+        block_summaries = [
+            {
+                "id": block.id,
+                "document_id": block.document_id,
+                "block_key": block.block_key,
+                "block_type": block.block_type,
+                "section_path": block.section_path,
+                "order_no": block.order_no,
+                "line_start": (block.metadata_json or {}).get("line_start"),
+                "line_end": (block.metadata_json or {}).get("line_end"),
+            }
+            for block in blocks
+        ]
+        summary = {
+            "lib_id": lib.id,
+            "summary": f"{lib.name}: {len(items)} requirement items from {len(documents)} documents and {len(blocks)} parsed blocks.",
+            "metrics": {
+                "document_count": len(documents),
+                "block_count": len(blocks),
+                "requirement_item_count": len(items),
+                "status_counts": status_counts,
+                "granularity_counts": flag_counts,
+            },
+            "items": item_summaries,
+            "requirement_items": item_summaries,
+            "source_blocks": block_summaries,
+            "blocks": block_summaries,
+            "risks": risks,
+            "relations": [
+                {"source_anchor": anchor, "requirement_item_ids": item_ids}
+                for anchor, item_ids in sorted(anchor_to_items.items())
+            ],
+            "source_refs": {
+                "document_ids": [document.id for document in documents],
+                "block_keys": [block.block_key for block in blocks],
+                "requirement_item_ids": [item.id for item in items],
+            },
+            "analyzed_at": self._now_iso(),
+            "provider_call_performed": False,
+            "llm_provider_called": False,
+        }
+        lib.brain_summary = summary
+        self.session.flush()
+        job = self._create_job(
+            project_id=lib.project_id,
+            document_id=None,
+            requirement_item_id=None,
+            job_type="requirement_brain_analyze",
+            input_payload={"lib_id": lib.id},
+            output_payload={"brain": summary},
+        )
+        self._log("requirement", "brain_analyze", "requirement_lib", lib.id, {"job_id": job.id})
+        return lib, job
+
+    def refresh_traceability(self, item_id: int) -> tuple[dict[str, Any], GenerationJob]:
+        item = self._get(RequirementItem, item_id)
+        source_blocks = self._source_blocks_for_item(item)
+        points = list(
+            self.session.scalars(
+                select(TestPoint)
+                .where(TestPoint.requirement_item_id == item.id, TestPoint.is_deleted.is_(False))
+                .order_by(TestPoint.id)
+            )
+        )
+        cases = list(
+            self.session.scalars(
+                select(TestCase)
+                .where(TestCase.requirement_item_id == item.id, TestCase.is_deleted.is_(False))
+                .order_by(TestCase.id)
+            )
+        )
+        covered_point_ids = {case.test_point_id for case in cases if case.test_point_id is not None}
+        coverage_rate = round(len(covered_point_ids) / len(points), 4) if points else 0
+        matrix = {
+            "requirement_item_id": item.id,
+            "source_block_keys": [block.block_key for block in source_blocks],
+            "test_point_ids": [point.id for point in points],
+            "test_case_ids": [case.id for case in cases],
+            "covered_test_point_ids": sorted(covered_point_ids),
+            "coverage_rate": coverage_rate,
+        }
+        job = self._create_job(
+            project_id=item.project_id,
+            document_id=item.document_id,
+            requirement_item_id=item.id,
+            job_type="refresh_traceability",
+            input_payload={"requirement_item_id": item.id},
+            output_payload={"coverage_matrix": matrix},
+        )
+        self._log("requirement", "refresh_traceability", "requirement_item", item.id, {"job_id": job.id, "coverage_rate": coverage_rate})
+        return {
+            "item": item,
+            "source_blocks": source_blocks,
+            "test_points": points,
+            "test_cases": cases,
+            "coverage_matrix": matrix,
+        }, job
 
     def update_requirement_item(self, item_id: int, **fields: Any) -> RequirementItem:
         item = self._get(RequirementItem, item_id)
@@ -1429,6 +1739,31 @@ class AitestRepository:
                 detail=detail or {},
             )
         )
+
+    def _source_blocks_for_item(self, item: RequirementItem) -> list[RequirementDocumentBlock]:
+        anchors = [str(anchor) for anchor in (item.source_anchor_ids or [])]
+        stmt = select(RequirementDocumentBlock).where(RequirementDocumentBlock.document_id == item.document_id)
+        if anchors:
+            stmt = stmt.where(RequirementDocumentBlock.block_key.in_(anchors))
+        return list(self.session.scalars(stmt.order_by(RequirementDocumentBlock.order_no)))
+
+    @staticmethod
+    def _unique_values(values: Iterable[Any]) -> list[Any]:
+        result: list[Any] = []
+        seen: set[str] = set()
+        for value in values:
+            if value in (None, ""):
+                continue
+            key = str(value)
+            if key not in seen:
+                seen.add(key)
+                result.append(value)
+        return result
+
+    @staticmethod
+    def _highest_priority(values: Iterable[str]) -> str:
+        rank = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+        return min((value for value in values if value), key=lambda value: rank.get(value, 99), default="P2")
 
     @staticmethod
     def _placeholder_requirement_item(document: RequirementDocument, blocks: list[RequirementDocumentBlock]) -> dict[str, Any]:

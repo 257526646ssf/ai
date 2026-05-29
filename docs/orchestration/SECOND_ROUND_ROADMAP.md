@@ -92,3 +92,11 @@
 - R21 已完成并验收：AI 助手与 Prompt 闭环已落地，后端补齐 Prompt 模板 CRUD/测试渲染、assistant context、assistant drafts 和 `/chat` fallback context 摘要；前端补齐常用 Prompt、最近操作、复制回复、三类草稿按钮和 LLM 配置页 Prompt 模板管理面板。
 - R21 验收证据：`docs/orchestration/ROUND21_REPORT.md`。
 - 下一步进入 R22：需求库解析与确认闭环。
+
+## 当前进展补充
+- R22 已完成并验收：需求库解析与确认闭环已落地。
+- 后端完成 TXT/Markdown 多 block 解析、重 parse 替换旧 blocks、基于 blocks 的 fallback extract 多需求项生成、DB 化 split/merge/shelve/quality-check/brain analyze/get/traceability refresh，并确保闭环响应脱敏，不回显 token/cookie/Authorization/secret。
+- 前端 Requirements 页面已展示解析块/source anchors，需求项编辑保存、确认、暂不入库、拆分、合并、多选合并、粒度质检、需求大脑、追溯刷新已接后端；brain/source_refs 返回形状已归一化，修复 `source_refs.slice is not a function` 崩溃。
+- R22 验收证据见 `docs/orchestration/ROUND22_REPORT.md`：R22 定向测试 7 passed，P0/R4/R14 回归 17 passed，后端全量 pytest 通过，`npm run build` 通过且仅 Vite chunk size warning，Headless Chrome CDP 烟测通过且 `window.__r22Errors` 为空。
+- R22 残余风险：规则化 TXT/Markdown 解析未覆盖 docx/pdf/xlsx 深解析；真实 LLM 默认关闭，需求大脑是 DB deterministic 摘要；split/merge lineage 未新增正式血缘表；浏览器烟测使用本地临时 smoke 数据。
+- 下一步进入 R23：用例评审与质量规则。

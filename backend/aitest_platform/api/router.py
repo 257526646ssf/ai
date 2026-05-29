@@ -185,6 +185,19 @@ def safe_summary_payload(value: Any) -> Any:
     return value
 
 
+def safe_requirement_closure_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: safe_requirement_closure_payload(item) for key, item in value.items() if not is_sensitive_key_name(key)}
+    if isinstance(value, list):
+        return [safe_requirement_closure_payload(item) for item in value]
+    if isinstance(value, str):
+        lowered = value.lower()
+        if any(marker in lowered for marker in ("authorization", "cookie", "token")):
+            return "***"
+        return redact_sensitive_text(value)
+    return value
+
+
 def to_int(value: str | int, name: str = "id") -> int:
     try:
         return int(value)
@@ -1101,7 +1114,12 @@ def parse_requirement_document(documentId: str, payload: WritePayload | None = N
             repo = AitestRepository(session)
             job = repo.parse_requirement_document(to_int(documentId, "documentId"))
             blocks = list(session.scalars(select(RequirementDocumentBlock).where(RequirementDocumentBlock.document_id == to_int(documentId, "documentId")).order_by(RequirementDocumentBlock.order_no)))
-            return {"document_id": to_int(documentId, "documentId"), "job": model_dict(job), "blocks": [model_dict(block) for block in blocks], "input": payload_dict(payload)}
+            return safe_requirement_closure_payload({
+                "document_id": to_int(documentId, "documentId"),
+                "job": model_dict(job),
+                "blocks": [model_dict(block) for block in blocks],
+                "input": safe_summary_payload(payload_dict(payload)),
+            })
         except Exception as exc:
             raise repo_error(exc)
 
@@ -1164,7 +1182,7 @@ def extract_requirement_items(documentId: str, payload: WritePayload | None = No
             )
             item_ids = (job.output_payload or {}).get("item_ids", [])
             items = list(session.scalars(select(RequirementItem).where(RequirementItem.id.in_(item_ids)).order_by(RequirementItem.id))) if item_ids else []
-            return {"document_id": to_int(documentId, "documentId"), "job": model_dict(job), "items": [model_dict(item) for item in items], "input": sanitize_payload(payload_dict(payload))}
+            return safe_requirement_closure_payload({"document_id": to_int(documentId, "documentId"), "job": model_dict(job), "items": [model_dict(item) for item in items], "input": safe_summary_payload(payload_dict(payload))})
         except HTTPException:
             raise
         except Exception as exc:
@@ -1197,17 +1215,141 @@ def confirm_requirement_item(itemId: str):
 
 
 @router.post("/requirement-items/{itemId}/split")
-def split_requirement_item(itemId: str, payload: WritePayload | None = None):
-    item = ensure_requirement_item_ref(itemId)
-    child = create("requirement_items", {**item, "parent_id": itemId, "title": f"{item.get('title', itemId)} - 拆分项", "status": "draft"})
-    return {"source": item, "children": [child], "input": payload_dict(payload)}
+def split_requirement_item_db(itemId: str, payload: WritePayload | None = None):
+    data = safe_summary_payload(payload_dict(payload))
+    raw_parts = data.get("parts") or data.get("items") or data.get("children")
+    if raw_parts is None:
+        parts = None
+    elif isinstance(raw_parts, list):
+        parts = [part if isinstance(part, dict) else {"title": str(part)} for part in raw_parts]
+    elif isinstance(raw_parts, dict):
+        parts = [raw_parts]
+    else:
+        parts = [{"title": str(raw_parts)}]
+    with session_scope() as session:
+        try:
+            source, children, job = AitestRepository(session).split_requirement_item(to_int(itemId, "itemId"), parts=parts)
+            return safe_requirement_closure_payload({
+                "source": model_dict(source),
+                "children": [model_dict(child) for child in children],
+                "job": model_dict(job),
+                "input": data,
+            })
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise repo_error(exc)
 
 
 @router.post("/requirement-items/merge")
-def merge_requirement_items(payload: WritePayload):
-    data = payload_dict(payload)
-    merged = create("requirement_items", {"title": data.get("title", "合并需求项"), "source_item_ids": data.get("item_ids", []), "status": "draft"})
-    return {"merged": merged}
+def merge_requirement_items_db(payload: WritePayload):
+    data = sanitize_payload(payload_dict(payload))
+    item_ids = parse_int_list(data.get("item_ids") or data.get("itemIds") or data.get("source_item_ids"), "item_ids")
+    with session_scope() as session:
+        try:
+            merged, sources, job = AitestRepository(session).merge_requirement_items(item_ids, payload=data)
+            return safe_requirement_closure_payload({
+                "merged": model_dict(merged),
+                "sources": [model_dict(item) for item in sources],
+                "job": model_dict(job),
+            })
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.post("/requirement-items/{itemId}/shelve")
+def shelve_requirement_item(itemId: str, payload: WritePayload | None = None):
+    data = safe_summary_payload(payload_dict(payload))
+    with session_scope() as session:
+        try:
+            item = AitestRepository(session).shelve_requirement_item(to_int(itemId, "itemId"), reason=data.get("reason"))
+            item_payload = model_dict(item)
+            return safe_requirement_closure_payload({**item_payload, "item": item_payload, "reason": data.get("reason")})
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.post("/requirement-items/{itemId}/quality-check")
+def quality_check_requirement_item(itemId: str):
+    with session_scope() as session:
+        try:
+            repo = AitestRepository(session)
+            result = repo.quality_check_requirement_item(to_int(itemId, "itemId"))
+            item = require_db_item(session, RequirementItem, itemId, "itemId")
+            quality = sanitize_payload(result)
+            return safe_requirement_closure_payload({
+                "item": model_dict(item),
+                "quality": quality,
+                "score": quality.get("granularity_score"),
+                "granularity_score": quality.get("granularity_score"),
+                "granularity_flag": quality.get("granularity_flag"),
+                "issues": quality.get("issues", []),
+                "suggested_actions": quality.get("suggested_actions", []),
+                "source_anchors": quality.get("source_anchors", []),
+                "provider_call_performed": quality.get("provider_call_performed", False),
+                "llm_provider_called": quality.get("llm_provider_called", False),
+            })
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.post("/requirement-libs/{libId}/brain/analyze")
+def analyze_requirement_brain_db(libId: str):
+    with session_scope() as session:
+        try:
+            lib, job = AitestRepository(session).analyze_requirement_brain(to_int(libId, "libId"))
+            brain = sanitize_payload(lib.brain_summary or {})
+            return safe_requirement_closure_payload({
+                **brain,
+                "brain": brain,
+                "items": brain.get("items", []),
+                "requirement_items": brain.get("requirement_items", brain.get("items", [])),
+                "source_blocks": brain.get("source_blocks", []),
+                "blocks": brain.get("blocks", brain.get("source_blocks", [])),
+                "job": model_dict(job),
+            })
+        except Exception as exc:
+            raise repo_error(exc)
+
+
+@router.get("/requirement-libs/{libId}/brain")
+def get_requirement_brain_db(libId: str):
+    with session_scope() as session:
+        lib = require_db_item(session, RequirementLib, libId, "libId")
+        return safe_requirement_closure_payload(
+            lib.brain_summary
+            or {
+                "lib_id": lib.id,
+                "summary": "",
+                "metrics": {},
+                "risks": [],
+                "relations": [],
+                "source_refs": {},
+                "provider_call_performed": False,
+                "llm_provider_called": False,
+            }
+        )
+
+
+@router.post("/requirement-items/{itemId}/traceability/refresh")
+def refresh_traceability_db(itemId: str):
+    with session_scope() as session:
+        try:
+            traceability, job = AitestRepository(session).refresh_traceability(to_int(itemId, "itemId"))
+            return safe_requirement_closure_payload({
+                "requirement_item_id": to_int(itemId, "itemId"),
+                "item": model_dict(traceability["item"]),
+                "source_blocks": [model_dict(block) for block in traceability["source_blocks"]],
+                "test_points": [model_dict(point) for point in traceability["test_points"]],
+                "test_cases": [model_dict(case) for case in traceability["test_cases"]],
+                "coverage_matrix": sanitize_payload(traceability["coverage_matrix"]),
+                "coverage": sanitize_payload(traceability["coverage_matrix"]),
+                "job": model_dict(job),
+            })
+        except Exception as exc:
+            raise repo_error(exc)
 
 
 @router.delete("/requirement-items/{itemId}")
@@ -1220,27 +1362,6 @@ def delete_requirement_item(itemId: str):
                 session.flush()
                 return {"deleted": True, "id": item.id}
     return delete("requirement_items", itemId)
-
-
-@router.post("/requirement-libs/{libId}/brain/analyze")
-def analyze_requirement_brain(libId: str):
-    ensure_requirement_lib_ref(libId)
-    brain = create("requirement_brains", {"lib_id": libId, "summary": "需求库分析占位结果。", "risks": [], "relations": []})
-    job = store.create_job("requirement_brain_analyze", {"lib_id": libId})
-    return {"brain": brain, "job": job}
-
-
-@router.get("/requirement-libs/{libId}/brain")
-def get_requirement_brain(libId: str):
-    ensure_requirement_lib_ref(libId)
-    return store.list("requirement_brains", filters={"lib_id": libId})
-
-
-@router.post("/requirement-items/{itemId}/traceability/refresh")
-def refresh_traceability(itemId: str):
-    ensure_requirement_item_ref(itemId)
-    job = store.create_job("refresh_traceability", {"requirement_item_id": itemId})
-    return {"requirement_item_id": itemId, "job": job, "coverage": coverage_matrix(itemId)}
 
 
 @router.get("/generation-jobs/{jobId}")

@@ -388,3 +388,25 @@
 - `npm run build`: passed, with only Vite chunk size warning.
 - Headless Chrome CDP smoke: confirmed LLM 配置页 Prompt 面板、AI 助手常用 Prompt/最近操作/三类草稿按钮、生成测试点草稿；`window.__r21Errors` 为空。
 - Residual risks: real LLM remains disabled by default; Prompt templates are basic CRUD/test rendering only; recent activities/operation logs are summary context rather than full audit replay; structured drafts are deterministic rules fallback.
+
+## 第二十二轮验收
+- [x] R22 名称为需求库解析与确认闭环。
+- [x] 后端支持 TXT/Markdown 多 block 解析，重 parse 替换旧 blocks。
+- [x] fallback extract 基于 blocks 生成多条可追溯需求项。
+- [x] split / merge / shelve / quality-check / brain analyze / get / traceability refresh 均为 DB 化闭环。
+- [x] 闭环响应脱敏，不回显 token / cookie / Authorization / secret。
+- [x] Requirements 页面展示解析块和 source anchors。
+- [x] 需求项编辑保存、确认、暂不入库、拆分、合并、粒度质检、需求大脑、追溯刷新已接后端。
+- [x] Requirements 页面支持多选合并。
+- [x] brain / source_refs 等返回形状已归一化，浏览器烟测中 `source_refs.slice is not a function` 崩溃已修复。
+- [x] R22 定向测试覆盖 parse / extract / edit / confirm / shelve / split / merge / quality / brain / traceability / redaction。
+
+## Round 22 Evidence
+- Added `backend/tests/test_round22_requirement_closure.py`.
+- `python -m compileall backend\aitest_platform`: passed.
+- `python -m pytest backend\tests\test_round22_requirement_closure.py -q`: 7 passed.
+- `python -m pytest backend\tests\test_p0_acceptance.py backend\tests\test_round4_main_chain_llm.py backend\tests\test_round14_requirement_testcase_integration.py -q`: 17 passed.
+- `cd backend; python -m pytest -q`: full suite passed.
+- `npm run build`: passed, with only Vite chunk size warning.
+- Headless Chrome CDP smoke: R22 专用项目进入需求库工作台，source anchors 可见，合并/质检/追溯/暂不入库/拆分按钮可见，点击质检和需求大脑结果可见，`window.__r22Errors` 为空。
+- Residual risks: 解析仍为规则化 TXT/Markdown，不覆盖 docx/pdf/xlsx 深解析；真实 LLM 默认关闭，需求大脑是 DB deterministic 摘要；split/merge lineage 用状态和响应表达，未新增正式血缘表；浏览器烟测使用本地临时 smoke 数据。
