@@ -328,3 +328,19 @@
 - `python -m compileall backend\aitest_platform`: passed.
 - `npm run build`: passed, with only Vite chunk size warning.
 - `python -m pytest backend\tests\test_round13_frontend_integration.py backend\tests\test_round11_exports.py -q`: passed, 11 tests, with 2 FastAPI dependency warnings.
+
+## 第十九轮验收
+- [x] `/projects/{projectId}/dashboard/daily-summary` 基于后端项目事实生成日报摘要，不再返回固定占位文案。
+- [x] `/projects/{projectId}/dashboard/weekly-summary` 基于后端项目事实生成周报摘要，不再返回固定占位文案。
+- [x] `/chat` 在真实 LLM 未启用时可读取 `project_id` 上下文，并返回包含当前项目事实的风险/待办/准出分析。
+- [x] AI 助手前端优先调用后端 `/chat`，并携带当前全局项目与页面上下文。
+- [x] AI 助手本地兜底不再包含固定 Bearer 示例或固定执行编号式模拟结论。
+
+## Round 19 Evidence
+- Added `backend/tests/test_round19_dashboard_chat.py`.
+- Covers dashboard daily/weekly quality summaries and chat fallback with backend project facts.
+- `python -m compileall backend\aitest_platform`: passed.
+- `python -m pytest backend\tests\test_round19_dashboard_chat.py -q`: passed, 2 tests, with 2 FastAPI dependency warnings.
+- `npm run build`: passed, with only Vite chunk size warning.
+- `cd backend; python -m pytest -q`: passed, with 2 FastAPI dependency warnings.
+- Browser smoke: Vite returned HTTP 200, Headless Edge rendered React DOM and the AI assistant backend-link status.

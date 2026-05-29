@@ -10,6 +10,8 @@ import {
   Clipboard,
   Check
 } from 'lucide-react';
+import { apiPost } from '../lib/api';
+import { useProjectContext } from '../lib/projectContext';
 
 export default function AiAssistant({ activeTab, isOpen, onClose }) {
   const [messages, setMessages] = useState([]);
@@ -17,6 +19,7 @@ export default function AiAssistant({ activeTab, isOpen, onClose }) {
   const [isTyping, setIsTyping] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(null);
   const messagesEndRef = useRef(null);
+  const { selectedProject } = useProjectContext();
 
   // Tab 对应的推荐问题
   const recommendations = {
@@ -114,11 +117,23 @@ export default function AiAssistant({ activeTab, isOpen, onClose }) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isTyping]);
 
-  const handleSendMessage = (textToSend) => {
+  const buildLocalFallbackReply = (query) => {
+    if (query.includes("通过率") || query.includes("质量") || query.includes("准出")) {
+      return `后端 AI 服务暂不可用，我先按当前页面做本地分析：请优先核对失败执行、阻塞执行、未关闭缺陷和最近报告的风险项。如果顶部已选中项目，恢复后端连接后我会自动基于该项目的真实执行、接口、自动化和性能数据重新生成结论。`;
+    }
+    if (query.includes("待办") || query.includes("待处理") || query.includes("风险")) {
+      return `后端 AI 服务暂不可用。本地兜底建议先处理三类事项：未关闭高严重缺陷、失败或阻塞执行记录、缺少最近报告归档的测试范围。恢复后端连接后，我会用项目事实数据重新排序待办优先级。`;
+    }
+    if (query.includes("Python") || query.includes("脚本") || query.includes("代码")) {
+      return `后端 AI 服务暂不可用。你可以先在接口测试或自动化中心生成对应项目资源，再让我基于后端保存的接口、环境和用例文件生成脚本建议。`;
+    }
+    return `后端 AI 服务暂不可用，我已收到“${query}”。请稍后重试，或先在当前页面完成数据同步；连接恢复后我会基于项目真实数据继续分析。`;
+  };
+
+  const handleSendMessage = async (textToSend) => {
     const query = textToSend || inputValue;
     if (!query.trim()) return;
 
-    // 添加用户消息
     const userMsg = {
       sender: 'user',
       text: query,
@@ -127,119 +142,38 @@ export default function AiAssistant({ activeTab, isOpen, onClose }) {
 
     setMessages(prev => [...prev, userMsg]);
     if (!textToSend) setInputValue('');
-    
-    // AI 思考状态
     setIsTyping(true);
 
-    // 模拟大模型响应
-    setTimeout(() => {
-      let aiResponseText = "";
-      
-      // 精细化的本地 AI 解答库
-      if (query.includes("通过率")) {
-        aiResponseText = `根据最新执行的回归任务 \`#EXEC-20250520-0089\` 的执行日志，用例通过率虽然从 84.4% 回升至 **87.6%**，但主要失败点仍集中在 **交易模块** 的扣款阶段，报错为 \`504 Gateway Timeout\`，推测是由模拟支付网关的延迟抖动导致的。建议：
-1. **排查开发环境网络拓扑**，核对三方支付回调接口在压测下的稳定性。
-2. 将对应接口的超时阈值临时调整至 3000ms。
-3. 安排对该用例进行重试，以确认是否为偶发网络瞬断。`;
-      } else if (query.includes("待办") || query.includes("待处理")) {
-        aiResponseText = `当前系统有 **6 个** 待办事项，按风险和优先级评估，我为您整理出最迫切的 3 项：
-
-| 待办名称 | 优先级 | 影响模块 | AI 风险评估与行动建议 |
-| :--- | :---: | :---: | :--- |
-| **评审需求说明书《用户权限管理》** | <span class="text-red-500 font-bold">高</span> | 用户权限 | 该需求涉及底层角色模型重构，若不及时确认，将导致 4 个后置测试计划延期。建议今天 14:00 前完成评审。 |
-| **修复缺陷 #BUG-20250519-011** | <span class="text-red-500 font-bold">高</span> | 交易扣款 | 属于高概率偶发的计算精度问题，可能引发财务对账异常。开发已定位，需在下午测试环境合版后立即验证。 |
-| **执行回归「版本 v2.3.0 上线回归」** | <span class="text-amber-500 font-bold">中</span> | 核心链路 | 包含 120 个冒烟用例，目前进度已完成 70%。建议启动 AI 自动化批量跑完全量，释放人工。 |`;
-      } else if (query.includes("解析") || query.includes("PRD")) {
-        aiResponseText = `我们的 **AI 解析引擎** 采用检索增强生成 (RAG) + 意图实体图谱技术：
-1. **文本结构化**：上传 Word/PDF 后，大模型首先进行章节断句和布局提取，识别出所有的功能性描述与非功能性约束。
-2. **意图特征提取**：利用 NLP 实体识别，精准抽取出操作主体（如客服）、动作（如发送文本）、客体（如会话记录）等。
-3. **拓扑关系链构建**：AI 依据业务名词的相关度，自动生成上下游依赖图（例如“发送文本”依赖“会话开启”，而制约“内容审核”）。
-4. **测试点与用例智能映射**：系统基于行业测试模板（等价类、边界值、安全性、异常流），对解析出来的每个测试点批量匹配用例。
-
-您可以点击上方**导入需求库**直接上传您的 PRD 文件体验！`;
-      } else if (query.includes("支付异常边界") || query.includes("用例") && query.includes("生成")) {
-        aiResponseText = `已针对退款接口的‘金额校验与状态流转’生成了以下 5 个边界异常用例：
-
-*   **TC-REFUND-001 (P0 / 异常流)**:
-    *   *输入值*：退款金额等于 0.00 元
-    *   *预期结果*：接口立即拦截并返回状态码 \`400 Bad Request\`，提示 \`退款金额必须大于零\`。
-*   **TC-REFUND-002 (P0 / 异常流)**:
-    *   *输入值*：退款金额大于订单实付金额 (e.g. 订单 100 元，申请退款 100.01 元)
-    *   *预期结果*：接口校验不通过，返回 \`退款金额不能超过可退最大额度\`，订单状态不发生改变。
-*   **TC-REFUND-003 (P1 / 异常流)**:
-    *   *输入值*：退款金额为负数 (e.g. -10.00 元)
-    *   *预期结果*：前端输入控制拦截；若绕过前端发送请求，网关或校验器返回格式错误，拒绝处理。
-*   **TC-REFUND-004 (P0 / 异常流)**:
-    *   *状态约束*：对已全额退款完成的订单再次发起退款请求
-    *   *预期结果*：系统报错提示 \`该订单已处于退款完成状态，无法重复发起\`，数据库无二次写入。
-*   **TC-REFUND-005 (P1 / 兼容性异常)**:
-    *   *并发约束*：高并发下同时对同一笔订单发起两次相同的退款请求
-    *   *预期结果*：利用分布式锁和数据库唯一幂等键拦截第二笔请求，防止重复退款，保障资金安全。
-
-您可以直接在用例库页面点击 **“+ 新建用例”** 或使用 **AI 生成策略** 将其一键导入！`;
-      } else if (query.includes("Python") || query.includes("脚本") || query.includes("代码")) {
-        aiResponseText = `为您编写了针对 \`/api/v1/order/create\` 接口测试的 Python 自动化测试脚本，基于 \`pytest\` 和 \`requests\` 库构建，并包含入参和断言校验：
-
-\`\`\`python
-import requests
-import pytest
-
-BASE_URL = "http://localhost:3000/api/v1"
-
-def test_create_order_success():
-    """测试正常情况下订单创建接口"""
-    url = f"{BASE_URL}/order/create"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer mock-jwt-token-zhangming"
-    }
-    payload = {
-        "goods_id": "GOODS-10029",
-        "quantity": 2,
-        "payment_type": "alipay",
-        "address_id": "ADDR-8827"
-    }
-    
-    # 发送 POST 请求
-    response = requests.post(url, json=payload, headers=headers, timeout=5)
-    
-    # 断言响应状态码
-    assert response.status_code == 200, f"期望 200, 实际得到 {response.status_code}"
-    
-    data = response.json()
-    # 断言返回字段结构
-    assert data.get("code") == 200, "接口业务 code 应为 200"
-    assert "data" in data, "返回值应包含 data 节点"
-    
-    order_data = data["data"]
-    assert "order_id" in order_data, "订单创建成功应返回 order_id"
-    assert order_data["status"] == "pending_payment", "新创建订单状态应为待支付"
-    print(f"\\n订单创建成功，ID: {order_data['order_id']}")
-\`\`\`
-
-您可以在**自动化中心**或**接口测试**中复制并直接执行此脚本。`;
-      } else if (query.includes("TPS") || query.includes("暴跌") || query.includes("性能")) {
-        aiResponseText = `并发量到 500 时 TPS 暴跌、响应时间飙升，这属于典型的**系统性能瓶颈或资源争抢**。根据以往的测试场景，建议您按以下步骤排查：
-1. **数据库连接池枯竭**：检查后端服务的连接池配置（如 HikariCP），500 并发下连接池满载，导致大量线程在 \`getConnection()\` 处等待超时。可增加最大连接数或优化慢 SQL。
-2. **JVM 频繁 Full GC**：压测期间大量临时对象产生且未被回收，引发 JVM 频繁 STW (Stop The World)。建议监控 GC 日志，增加 JVM 堆内存大小 (如 \`-Xmx4g -Xms4g\`)。
-3. **外部依赖服务阻塞**：我们的扣款接口依赖于三方模拟沙箱，该沙箱在高并发下有 2s 的固定延迟，建议对该三方依赖实施 **Mock 挡板测试** 以隔离外部干扰。
-4. **死锁与线程阻塞**：存在排他锁或同步代码块（synchronized），导致高并发下多线程串行等待。`;
-      } else {
-        // 通用应答
-        aiResponseText = `我已收到您关于“**${query}**”的问题。
-基于当前系统配置和 AI 引擎分析：
-1. 本次查询匹配到与 \`${activeTab}\` 相关的知识库节点。
-2. **行动指引**：在当前页面您可以方便地通过顶部导航栏或卡片中的动作按钮来启动对应的测试流程。
-3. 如果您需要我自动编写脚本、分析异常错误，或者为该页面自动生成一份执行报表，请明确告知我您的需求，我将为您输出具体的代码或配置建议。`;
-      }
-
+    try {
+      const recentMessages = messages.slice(-6).map((item) => ({
+        role: item.sender === 'ai' ? 'assistant' : 'user',
+        content: item.text
+      }));
+      const response = await apiPost('/chat', {
+        message: query,
+        context: {
+          active_tab: activeTab,
+          project_id: selectedProject?.id,
+          project_name: selectedProject?.name || selectedProject?.code,
+          messages: [...recentMessages, { role: 'user', content: query }]
+        }
+      }, { timeoutMs: 15000 });
+      const aiResponseText = response?.reply || response?.content || buildLocalFallbackReply(query);
       setIsTyping(false);
       setMessages(prev => [...prev, {
         sender: 'ai',
         text: aiResponseText,
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }]);
-    }, 1500);
+    } catch (error) {
+      setIsTyping(false);
+      setMessages(prev => [...prev, {
+        sender: 'ai',
+        text: buildLocalFallbackReply(query),
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      }]);
+      window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: error?.message || 'AI 助手后端暂不可用，已使用本地兜底回复', type: 'warning' } }));
+    }
   };
 
   const handleCopyCode = (text, index) => {
@@ -419,7 +353,9 @@ def test_create_order_success():
                 <span className="relative inline-flex rounded-full size-1.5 bg-emerald-500"></span>
               </span>
             </span>
-            <span className="text-[9px] text-[var(--text-secondary)] mt-1">已连接 • OpenAI GPT-4o</span>
+            <span className="text-[9px] text-[var(--text-secondary)] mt-1">
+              后端分析链路 • {selectedProject?.name || selectedProject?.code || '未选择项目'}
+            </span>
           </div>
         </div>
         

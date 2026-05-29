@@ -325,3 +325,15 @@
 
 ## 剩余需决策项
 - 正式 Alembic migration、Celery/Redis 异步队列、真实密钥加密存储会改变依赖、运行拓扑或迁移策略，未在本轮擅自引入；当前系统继续使用已有 schema-status、自检、脱敏和结构化 runner 降级能力。
+
+## 第十九轮完成状态
+- Dashboard 日报/周报摘要接口已从固定占位文案改为 Reporting Aggregator 事实聚合输出，返回 metrics、risk_level、risk_items、next_actions 和 source_refs。
+- `src/components/AiAssistant.jsx` 已从纯本地模拟改为优先调用 `/api/v2/chat`，并携带当前全局项目、页面和最近消息上下文。
+- `/chat` 在真实 LLM 未启用或不可用时，会基于当前项目后端事实生成风险、待办、准出或报告类降级回复。
+- 已移除 AI 助手内置的固定 Bearer 示例与固定执行编号式模拟结论。
+- `backend/tests/test_round19_dashboard_chat.py` 已覆盖日报/周报摘要和项目事实型 chat fallback。
+- `docs/orchestration/ROUND19_REPORT.md` 已记录实现、验证和残余风险。
+- Round 19 主线程验收：`python -m compileall backend\aitest_platform` 通过；`python -m pytest backend\tests\test_round19_dashboard_chat.py -q` 通过；`npm run build` 通过；`cd backend; python -m pytest -q` 全量通过；Headless Edge 烟测可渲染 AI 助手后端链路状态。
+
+## 剩余需决策项
+- 正式 Alembic migration、Celery/Redis 异步队列、真实密钥加密存储仍会改变依赖、运行拓扑或迁移策略，建议单独确认部署方案后再做。

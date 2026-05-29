@@ -80,6 +80,7 @@ from aitest_platform.services.exporting import (
 from aitest_platform.services.perf_runner import inspect_jmeter_dependency, run_jmeter_plan, sanitize_perf_payload
 from aitest_platform.services.reporting import (
     ReportingPayloadError,
+    build_aggregation_context,
     build_lightweight_conclusion,
     create_comprehensive_report as create_report_from_aggregator,
     create_performance_report,
@@ -649,18 +650,72 @@ def project_dashboard(projectId: str):
         }
 
 
+def _period_quality_summary(session: Any, project_id: int, period: str, request_payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    context = build_aggregation_context(session, project_id=project_id)
+    data = context["data_snapshot"]
+    metrics = data["summary_metrics"]
+    risks = data.get("risk_items") or []
+    project = data.get("project") or {}
+    period_label = "今日" if period == "daily" else "本周"
+    top_risks = risks[:5]
+    has_high_risk = any(item.get("level") == "high" for item in top_risks)
+    has_medium_risk = any(item.get("level") == "medium" for item in top_risks)
+    risk_level = "高" if has_high_risk else "中" if has_medium_risk else "低"
+    next_actions = _summary_next_actions(metrics, top_risks)
+    summary = (
+        f"{period_label}质量摘要：项目「{project.get('name') or project.get('code') or project_id}」"
+        f"当前累计需求项 {metrics['requirement_item_count']} 个、测试用例 {metrics['test_case_count']} 条、"
+        f"主链执行 {metrics['execution_count']} 次，通过率 {metrics['execution_pass_rate']}%。"
+        f"接口执行 {metrics['api_execution_count']} 次，通过率 {metrics['api_pass_rate']}%；"
+        f"自动化执行 {metrics['auto_execution_count']} 次，通过率 {metrics['auto_pass_rate']}%；"
+        f"性能结果 {metrics['perf_result_count']} 份。"
+        f"未关闭缺陷 {metrics['open_defect_count']} 个，综合风险等级为{risk_level}。"
+    )
+    return sanitize_payload(
+        {
+            "project_id": project_id,
+            "period": period,
+            "summary": summary,
+            "metrics": metrics,
+            "risk_level": risk_level,
+            "risk_items": top_risks,
+            "next_actions": next_actions,
+            "source_refs": context["source_refs_json"],
+            "generated_at": context["scope_snapshot"]["generated_at"],
+            "input": sanitize_payload(request_payload or {}),
+        }
+    )
+
+
+def _summary_next_actions(metrics: dict[str, Any], risks: list[dict[str, Any]]) -> list[str]:
+    actions: list[str] = []
+    if metrics.get("open_defect_count", 0):
+        actions.append(f"优先关闭或确认 {metrics['open_defect_count']} 个未关闭缺陷，补齐验证证据。")
+    if any(item.get("source") == "execution" for item in risks):
+        actions.append("复盘失败执行记录，确认失败是否已关联缺陷或重跑通过。")
+    if any(item.get("source") == "api_execution" for item in risks):
+        actions.append("检查接口执行失败的请求、响应快照和环境变量配置。")
+    if any(item.get("source") == "auto_execution" for item in risks):
+        actions.append("下载自动化 artifacts，定位失败脚本、截图或日志。")
+    if metrics.get("test_case_count", 0) == 0:
+        actions.append("先从需求项生成测试用例，再启动执行和报告归档。")
+    if not actions:
+        actions.append("当前未发现高风险事实，建议继续补充执行记录并生成最新报告。")
+    return actions[:5]
+
+
 @router.post("/projects/{projectId}/dashboard/daily-summary")
 def daily_summary(projectId: str, payload: WritePayload | None = None):
+    pid = to_int(projectId, "projectId")
     with session_scope() as session:
-        AitestRepository(session).get_project(to_int(projectId, "projectId"))
-    return {"project_id": projectId, "period": "daily", "summary": "今日执行与风险摘要占位。", "input": payload_dict(payload)}
+        return _period_quality_summary(session, pid, "daily", payload_dict(payload))
 
 
 @router.post("/projects/{projectId}/dashboard/weekly-summary")
 def weekly_summary(projectId: str, payload: WritePayload | None = None):
+    pid = to_int(projectId, "projectId")
     with session_scope() as session:
-        AitestRepository(session).get_project(to_int(projectId, "projectId"))
-    return {"project_id": projectId, "period": "weekly", "summary": "本周质量趋势摘要占位。", "input": payload_dict(payload)}
+        return _period_quality_summary(session, pid, "weekly", payload_dict(payload))
 
 
 @router.get("/projects/{projectId}/requirement-libs")
@@ -2646,13 +2701,89 @@ def test_prompt_template(templateId: str, payload: WritePayload | None = None):
         return {"template_id": template.id, "rendered": rendered, "input": data}
 
 
+def _context_project_id(context: dict[str, Any]) -> int | None:
+    raw = context.get("project_id") or context.get("projectId")
+    if raw is None and isinstance(context.get("project"), dict):
+        raw = context["project"].get("id")
+    if raw is None:
+        return None
+    try:
+        return to_int(raw, "project_id")
+    except HTTPException:
+        return None
+
+
+def _safe_chat_aggregation_context(session: Any, context: dict[str, Any]) -> dict[str, Any] | None:
+    project_id = _context_project_id(context)
+    if project_id is None:
+        return None
+    try:
+        return build_aggregation_context(session, project_id=project_id)
+    except Exception:
+        return None
+
+
+def _compact_chat_facts(aggregation_context: dict[str, Any] | None) -> dict[str, Any]:
+    if not aggregation_context:
+        return {}
+    data = aggregation_context.get("data_snapshot") or {}
+    return sanitize_payload(
+        {
+            "project": data.get("project") or {},
+            "metrics": data.get("summary_metrics") or {},
+            "risk_items": (data.get("risk_items") or [])[:5],
+            "execution_summary": data.get("execution_summary") or {},
+            "api_summary": data.get("api_summary") or {},
+            "automation_summary": data.get("automation_summary") or {},
+            "performance_summary": data.get("performance_summary") or {},
+            "source_refs": aggregation_context.get("source_refs_json") or {},
+        }
+    )
+
+
+def _build_chat_fallback_reply(message: str, context: dict[str, Any], aggregation_context: dict[str, Any] | None) -> str:
+    compact = _compact_chat_facts(aggregation_context)
+    project = compact.get("project") or {}
+    metrics = compact.get("metrics") or {}
+    risks = compact.get("risk_items") or []
+    query = message.lower()
+    active_tab = context.get("active_tab") or context.get("activeTab") or "当前页面"
+
+    if not metrics:
+        return (
+            f"我已收到你在「{active_tab}」中的问题。当前请求没有携带可追溯项目范围，"
+            "请先在顶部项目选择器选中项目，或在问题中补充项目 ID；随后我会基于后端执行、缺陷、接口、自动化和性能事实生成分析。"
+        )
+
+    project_name = project.get("name") or project.get("code") or f"项目 {project.get('id')}"
+    risk_lines = "；".join(f"{item.get('title')}：{item.get('detail')}" for item in risks[:3]) or "暂无高风险事实。"
+    base = (
+        f"基于后端事实数据，项目「{project_name}」当前有需求项 {metrics.get('requirement_item_count', 0)} 个、"
+        f"测试用例 {metrics.get('test_case_count', 0)} 条、主链执行 {metrics.get('execution_count', 0)} 次，"
+        f"主链通过率 {metrics.get('execution_pass_rate', 0)}%。接口通过率 {metrics.get('api_pass_rate', 0)}%，"
+        f"自动化通过率 {metrics.get('auto_pass_rate', 0)}%，未关闭缺陷 {metrics.get('open_defect_count', 0)} 个。"
+    )
+
+    if any(keyword in query for keyword in ("待办", "todo", "风险", "阻塞", "失败")):
+        return f"{base}\n\n优先级建议：{risk_lines}\n\n下一步：{'; '.join(_summary_next_actions(metrics, risks))}"
+    if any(keyword in query for keyword in ("日报", "周报", "报告", "总结", "summary")):
+        return f"{base}\n\n可写入报告的摘要：{risk_lines} 建议同步最新执行证据后生成综合报告并归档。"
+    if any(keyword in query for keyword in ("通过率", "质量", "准出", "上线")):
+        release_hint = "暂不建议直接放行，需先处理高风险项。" if any(item.get("level") == "high" for item in risks) else "当前风险整体可控，可继续推进后续验证。"
+        return f"{base}\n\n准出判断：{release_hint}\n风险依据：{risk_lines}"
+    return f"{base}\n\n针对你的问题「{message}」，建议先看这几项事实：{risk_lines}"
+
+
 def handle_chat_request(request: ChatRequest) -> dict[str, Any]:
     message = request.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="message is required")
     context = sanitize_llm_payload(sanitize_payload(request.context or {}))
-    fallback_reply = "Real LLM is disabled or unavailable, so this is a safe placeholder reply."
     with session_scope() as session:
+        aggregation_context = _safe_chat_aggregation_context(session, context)
+        if aggregation_context:
+            context = {**context, "project_facts": _compact_chat_facts(aggregation_context)}
+        fallback_reply = _build_chat_fallback_reply(message, context, aggregation_context)
         config = default_llm_config(session, context.get("config_id") or context.get("configId"))
         if config is None:
             return create("chat_messages", {"message": message, "context": context, "reply": fallback_reply, "status": "fallback", "reason": "No enabled LLM config found."})
@@ -2664,13 +2795,23 @@ def handle_chat_request(request: ChatRequest) -> dict[str, Any]:
             return sanitize_payload(sanitize_llm_payload(record))
 
         assert settings.base_url is not None and settings.api_key is not None and settings.model is not None
-        messages = [{"role": "user", "content": message}]
+        messages = [
+            {
+                "role": "system",
+                "content": "你是 AI 测试平台内的测试分析助手。优先使用上下文中的 project_facts 作答，不要输出密钥、token、cookie 或凭证。",
+            },
+            {"role": "user", "content": message},
+        ]
         if isinstance(context.get("messages"), list):
-            messages = [
+            history_messages = [
                 {"role": str(item.get("role", "user")), "content": str(item.get("content", ""))}
                 for item in context["messages"]
                 if isinstance(item, dict) and item.get("content")
-            ] or messages
+            ]
+            if history_messages:
+                messages = [messages[0], *history_messages]
+        if context.get("project_facts"):
+            messages.insert(1, {"role": "system", "content": json.dumps({"project_facts": context["project_facts"]}, ensure_ascii=False)})
         client = OpenAICompatibleClient(base_url=settings.base_url, api_key=settings.api_key)
         try:
             response, duration_ms = client.chat_completions(

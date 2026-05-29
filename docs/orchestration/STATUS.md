@@ -459,3 +459,21 @@
 ## 第十八轮残余风险
 - 正式 Alembic migration、Celery/Redis 异步队列、真实密钥加密存储仍属于生产基础设施决策项；本轮未擅自新增依赖或改变部署拓扑。
 - 历史趋势图还有部分静态曲线形态，但关键汇总数字、风险项、准出提示、runner 状态和下载入口已接后端事实。
+
+## 第十九轮范围
+- P0：Dashboard 日报/周报摘要改为后端事实聚合，不再返回固定占位文案。
+- P0：AI 助手前端优先调用 `/api/v2/chat`，携带当前全局项目和页面上下文。
+- P0：`/chat` 在真实 LLM 未启用时基于当前项目事实生成降级回复，覆盖风险、待办、准出和报告摘要类问题。
+- P0：新增 Round 19 合同测试覆盖摘要和聊天 fallback。
+
+## 第十九轮验收结果
+- `python -m compileall backend\aitest_platform`：通过。
+- `python -m pytest backend\tests\test_round19_dashboard_chat.py -q`：2 passed，2 warnings。
+- `npm run build`：通过，仅保留 Vite chunk size warning。
+- `cd backend; python -m pytest -q`：全量通过，仅保留 2 个 FastAPI 依赖 deprecation warnings。
+- 浏览器烟测通过：Vite 首页 200，Headless Edge 可渲染 React DOM，并展示 `测试大脑 AI 助手` 与 `后端分析链路`。
+
+## 第十九轮残余风险
+- 真实 LLM 调用仍默认关闭，需本地环境变量启用并注入运行时密钥。
+- 正式 Alembic migration、Celery/Redis 异步队列、真实密钥加密存储仍是生产基础设施决策项。
+- Dashboard 历史趋势图仍有部分静态曲线形态；关键摘要、风险、待办和 AI 助手回复已接后端事实。
