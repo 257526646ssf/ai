@@ -42,7 +42,7 @@
 | R29 | 2026-05-30 已验收 | P1 | 数据工厂与数据管理 | 已完成：接口参数测试数据生成、执行测试数据建议、备份状态提醒、存储空间统计、清理 dry-run/确认门、模块白名单、路径根目录限制和响应脱敏。验收证据见 `ROUND29_REPORT.md`。 |
 | R30 | 2026-05-30 已验收 | P1 | 文件与导出格式增强 | 已完成：统一 unsupported contract；无依赖 XLSX 导出 test-cases/defects；公式注入中和；二进制 docx/pdf/xlsx/xmind 导入硬边界；自动化/性能 artifact ZIP canonical path 校验、越界 skipped metadata 和文本脱敏；前端移除假下载并支持 TestCases CSV/Markdown/JSON/XLSX。PDF/Word/XMind 未做真实服务端生成。验收证据见 `ROUND30_REPORT.md`。 |
 | R31 | 2026-05-30 已完成 | 决策门 | 生产基础设施决策 | 已完成：明确 SQLite 本地优先为 R32 支持目标；PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储、Alembic 均 deferred / unsupported unless explicitly approved。未新增生产依赖。验收证据见 `ROUND31_REPORT.md`。 |
-| R32 | R31 决策后 | P0 | 第二轮总验收 | 待开始：全量测试、前端构建、核心浏览器流程、导出下载、secrets 扫描、远程分支校验、最终交付报告。不得在完成前标记为已验收。 |
+| R32 | 2026-05-30 已验收 | P0 | 第二轮总验收 | 已完成：后端编译、后端全量 pytest、R27-R31 重点合同回归、前端构建、核心浏览器导航、接口状态自检、unsupported 导出边界、R31 文档事实修正与最终交付报告。验收证据见 `ROUND32_REPORT.md`。 |
 
 ## 必须完成清单
 
@@ -181,6 +181,6 @@
 
 ## 当前进展补充：R31
 - R31 已完成文档收口：生产基础设施决策门已落地到 `DECISIONS.md` 和 `ROUND31_REPORT.md`。
-- 本轮未新增生产依赖、未改代码/测试、未实施生产基础设施。
+- 本轮未新增生产依赖、未实施生产基础设施；新增了只读 `infra-status` 接口和 R31 契约测试，用于固定当前 supported/deferred/unsupported 边界。
 - R32 支持目标继续是 SQLite 本地优先；PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储、Alembic 均保持 deferred / unsupported unless explicitly approved。
-- 下一步进入 R32：第二轮总验收；R32 尚未开始。
+- R32 已完成第二轮总验收；后续若继续推进，只剩 deferred / unsupported 边界对应的独立实施项。

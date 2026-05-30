@@ -639,12 +639,32 @@
 - [x] Alembic 正式迁移标记为 deferred / unsupported unless explicitly approved。
 - [x] `DECISIONS.md` 已记录原因、当前边界、触发条件和迁移准备。
 - [x] `ROUND31_REPORT.md` 已记录保护性状态、验证方式、风险和 R32 前证据缺口。
-- [x] 本轮未新增生产依赖，未修改代码或测试，未写入 secrets。
+- [x] 本轮未新增生产依赖，未写入 secrets，且只新增了保护性只读接口与契约测试。
 - [x] R32 未标记完成。
 
 ## Round 31 Evidence
 - 新增 `docs/orchestration/ROUND31_REPORT.md`。
 - 更新 `docs/orchestration/DECISIONS.md`、`docs/orchestration/STATUS.md`、`docs/orchestration/HANDOFF.md`、`docs/orchestration/ACCEPTANCE.md`、`docs/orchestration/SECOND_ROUND_ROADMAP.md` 和 `backend/README.md`。
 - 本轮验证命令：`git diff --check` 通过；仅出现 Git 行尾转换提示，无 whitespace error。
-- 未运行后端测试、前端构建或浏览器烟测，原因是 R31 只改文档且不改变运行时行为。
+- 已运行 `python -m compileall backend/aitest_platform` 和 `python -m pytest backend/tests/test_round31_infra_decisions.py -q`；后端全量回归、前端构建和浏览器烟测由 R32 总验收统一覆盖。
 - R32 待开始：第二轮总验收需要重新覆盖全量后端回归、前端构建、核心浏览器流程、导出下载、secrets 检查和最终交付报告。
+
+## 第三十二轮验收
+- [x] `python -m compileall backend/aitest_platform` 通过。
+- [x] `cd backend; python -m pytest -q` 通过。
+- [x] R27-R31 重点合同回归在隔离 SQLite 下通过。
+- [x] `npm run build` 通过。
+- [x] 核心浏览器导航通过，`console.error=0`，`pageerror=0`。
+- [x] `schema-status`、`runtime-dependencies`、`backup-status`、`storage-summary`、`infra-status`、`cleanup` dry-run 返回 200。
+- [x] unsupported 导出返回结构化 415，且不返回假文件字段。
+- [x] CSV/Markdown/JSON/XLSX 保持真实下载输出。
+- [x] deferred / unsupported 边界未被写成已实施能力。
+- [x] R31 文档事实错误已修正。
+
+## Round 32 Evidence
+- 新增 `docs/orchestration/ROUND32_REPORT.md`。
+- 修正 R31 文档事实状态，并同步 `STATUS.md`、`HANDOFF.md`、`ACCEPTANCE.md`、`SECOND_ROUND_ROADMAP.md`。
+- 后端全量验证：`cd backend; python -m pytest -q`。
+- 重点合同回归：R27-R31 组合在独立 `AITEST_DATABASE_PATH` 下通过。
+- 前端构建：`npm run build`。
+- 浏览器验证：Python Playwright + system Chrome，使用 `8001` 后端与 `VITE_API_BASE_URL=http://127.0.0.1:8001/api/v2` 前端。

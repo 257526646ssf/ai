@@ -622,6 +622,17 @@
 - deferred / unsupported unless explicitly approved：PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储、Alembic。
 - 原因：这些能力会引入部署、迁移、运维、安全和回滚复杂度；当前第二轮验收目标仍可在本地优先边界内完成。
 - 已同步文档：`docs/orchestration/DECISIONS.md` 增加 R31 决策矩阵；新增 `docs/orchestration/ROUND31_REPORT.md`；同步 `STATUS.md`、`HANDOFF.md`、`ACCEPTANCE.md`、`SECOND_ROUND_ROADMAP.md` 和 `backend/README.md`。
-- 保护性状态：未写入 secrets；未把 deferred 生产依赖写成已完成；未 commit/push。
+- 保护性状态：未写入 secrets；未把 deferred 生产依赖写成已完成；已新增只读 `infra-status` 接口和 R31 契约测试，并已提交推送。
 - 验证：`git diff --check` 通过；仅出现 Git 行尾转换提示，无 whitespace error。
-- 下一步进入 R32：第二轮总验收。R32 尚未开始，不能标记为完成。
+- 下一步进入 R32：第二轮总验收。
+
+## 第二轮 R32 完成状态
+- R32 名称：第二轮总验收。
+- 当前结论：第二轮已完成总验收，交付范围以 R20-R31 的实现与边界为准。
+- 后端验证：`python -m compileall backend/aitest_platform` 通过；`cd backend; python -m pytest -q` 通过。
+- 重点合同回归：在隔离 `AITEST_DATABASE_PATH` 下执行 R27-R31 合同组合通过，避免默认 SQLite 历史数据干扰。
+- 前端验证：`npm run build` 通过；仅有 Vite chunk size warning。
+- 浏览器验证：核心导航与关键入口通过；`console.error=0`、`pageerror=0`；`测试用例库` 可见 CSV/Markdown/JSON/XLSX，`系统设置` 可见 `CLEANUP` 和 `后端存储占用`。
+- 接口边界：`schema-status`、`runtime-dependencies`、`backup-status`、`storage-summary`、`infra-status`、`cleanup` dry-run 均返回 200；unsupported 导出返回结构化 415 且无假文件字段。
+- 外部进程说明：本机 `8000` 由既有 PID `4588` 占用，R32 验收改用 `8001`，未触碰外部进程。
+- 第二轮未实施边界：PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储、Alembic、PDF/Word/XMind 真生成、深度二进制导入解析均保持 deferred / unsupported。

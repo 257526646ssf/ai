@@ -486,15 +486,24 @@
 ## R31 预备交接
 - R31 已完成生产基础设施决策门文档收口。
 - R31 只完成 Alembic、PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储等生产基础设施的决策与取舍记录；未静默引入新依赖，未把决策项写成已实施。
-- R32 仍为未完成排期；不得把第二轮总验收写成已完成。
+- R32 总验收已完成，最终边界和验证结果见 `docs/orchestration/ROUND32_REPORT.md`。
 
 ## R31 完成交接
 - R31 名称：生产基础设施决策门。
-- 本轮只改文档，不改代码/测试，不新增生产依赖，不执行数据库迁移，不启动 PostgreSQL/Redis/MinIO 等外部服务。
+- 本轮未新增生产依赖，不执行数据库迁移，不启动 PostgreSQL/Redis/MinIO 等外部服务；同时新增了只读 `infra-status` 接口和 R31 契约测试，用于明确当前支持边界。
 - 决策矩阵已写入 `docs/orchestration/DECISIONS.md`；R31 报告见 `docs/orchestration/ROUND31_REPORT.md`。
 - R32 支持目标：继续以 SQLite 本地优先完成第二轮总验收；默认数据库仍为 `backend/data/aitest.sqlite3`，artifacts 仍为本地目录。
 - deferred / unsupported unless explicitly approved：PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储、Alembic。
 - 触发条件：只有在明确批准生产化部署、多用户并发、远程对象存储、平台内真实密钥托管或正式迁移链需求后，才进入对应实施方案。
 - 迁移准备：后续实施前需补依赖清单、迁移/回滚策略、配置矩阵、失败恢复、安全审计和本地 fallback。
 - 验证结果：`git diff --check` 通过；仅出现 Git 行尾转换提示，无 whitespace error。完整后端回归、前端构建和浏览器烟测留给 R32。
-- 下一步：R32 第二轮总验收，尚未开始。
+- 下一步：如需继续推进，只剩 deferred / unsupported 边界对应的独立实施项目，不属于本轮默认交付。
+
+## R32 完成交接
+- R32 名称：第二轮总验收。
+- 结论：R20-R31 的已实施能力已完成总验证，远程 `origin/new-ui-frontend` 应以 R32 最终提交为准。
+- 后端证据：编译通过、全量 pytest 通过、R27-R31 重点合同回归在隔离 SQLite 下通过。
+- 前端证据：`npm run build` 通过；核心页面导航与关键入口浏览器烟测通过。
+- 下载/导出边界：CSV/Markdown/JSON/XLSX 为真实输出；PDF/Word/XMind 保持 unsupported 或 HTML/Markdown 替代。
+- 安全边界：真实 cleanup 未执行，仅验证 dry-run 与确认门；真实生产基础设施依赖仍 deferred / unsupported unless explicitly approved。
+- 参考文档：`docs/orchestration/ROUND32_REPORT.md`、`docs/orchestration/DECISIONS.md`、`backend/README.md`。

@@ -1265,7 +1265,7 @@ export default function Performance() {
             onClick={handleExportCompareReport}
             className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[11px] font-bold text-[var(--text-primary)] cursor-pointer shadow-sm hover:bg-[var(--border-color)]/40"
           >
-            导出比对报告
+            查看导出替代方案
           </button>
         </div>
 

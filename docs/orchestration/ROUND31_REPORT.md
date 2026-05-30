@@ -2,7 +2,7 @@
 
 ## 轮次定位
 
-R31 是生产基础设施决策门，不是生产依赖实施轮次。本轮仅更新文档和决策口径，未新增代码、测试、数据库迁移、运行时服务或生产依赖。
+R31 是生产基础设施决策门，不是生产依赖实施轮次。本轮未新增 PostgreSQL、Celery、Redis、MinIO、S3、Alembic 或密钥库等生产依赖，也未实施生产基础设施；但新增了只读 `infra-status` 能力矩阵接口及其契约测试，用于明确当前支持边界。
 
 ## 决策结论
 
@@ -17,14 +17,15 @@ R31 是生产基础设施决策门，不是生产依赖实施轮次。本轮仅�
 - 未把未实施的生产依赖写成已完成能力。
 - 未写入 secrets、token、cookie、API key、私钥或真实凭证。
 - 未改变当前本地运行方式。
-- 未修改代码或测试。
-- 未执行 commit 或 push。
+- 已新增只读 `infra-status` 接口和 R31 契约测试。
+- 已完成提交并推送到 `origin/new-ui-frontend`。
 
 ## 验证
 
 - 文档一致性检查：R31 状态已同步到 `DECISIONS.md`、`STATUS.md`、`HANDOFF.md`、`ACCEPTANCE.md`、`SECOND_ROUND_ROADMAP.md` 和 `backend/README.md`。
 - 格式检查：`git diff --check` 通过；仅出现 Git 行尾转换提示，无 whitespace error。
-- 本轮不运行后端测试、前端构建或浏览器烟测，原因是 R31 不包含代码、测试或运行时行为改动。
+- 后端验证：`python -m compileall backend/aitest_platform` 通过；`python -m pytest backend/tests/test_round31_infra_decisions.py -q` 通过。
+- R32 总验收前，仍需再覆盖后端全量回归、前端构建和核心浏览器流程。
 
 ## 风险
 
