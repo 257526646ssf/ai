@@ -1,7 +1,7 @@
 # 后端实现状态
 
 ## 阶段
-- 当前阶段：截至 2026-05-30，Round 27 已验收；性能停止/中止、阈值判定、历史比对、JMeter 参数编辑、7 日趋势、报告风险建议和递归脱敏已完成。
+- 当前阶段：截至 2026-05-30，Round 28 已验收；报告模板管理、报告列表过滤排序、报告下钻、风险转待办、Markdown/HTML 强化、unsupported PDF/Word/docx 结构化返回和轻量结论类型已完成。
 - 日期说明：第二轮路线图中的旧时间窗口如与实际完成时间冲突，以各 Round 报告、验收记录和提交/测试证据为准。
 - 目标：在不改变前端视觉风格的前提下，实现需求文档与技术实现方案中的后端基础能力。
 - 主线程职责：拆解、派工、验收、进度统一；产品实现代码由子任务完成。
@@ -578,4 +578,16 @@
 - 浏览器关键词命中：阈值判定、性能历史比对、7日趋势 P95、JMeter 参数/模板参数、停止执行、报告建议/风险建议。
 - 残余风险：真实 JMeter 执行依赖本机工具和目标环境；阈值/风险建议为当前规则口径，后续可按项目 SLA 调整；趋势依赖已落库样本。
 - R27 验收证据见 `docs/orchestration/ROUND27_REPORT.md`。
-- 下一步进入 R28：报告中心增强。
+- 下一步已进入并完成 R28：报告中心增强。
+
+## 第二轮 R28 完成状态
+- R28 名称：报告中心增强。
+- 后端实现：report-templates CRUD 校验与默认唯一；综合报告按 `template_id`/`scope` 生成并冻结模板、章节、scope；报告列表过滤排序；report drilldown；report risks；风险转待办与 todo 列表/状态；Markdown/HTML 强化与 HTML escape/递归脱敏；PDF/Word/docx unsupported 结构化返回；轻量结论支持 `daily_report`、`test_submission_feedback`、`release_advice`、`risk_list`。
+- 前端实现：Reports 页移除 fallback/static AI 意见、固定默认报告和假分享；接真实报告列表、模板管理、筛选排序、下钻、风险转待办、下载和轻量结论类型。
+- QA：新增 `backend/tests/test_round28_report_center_enhancement.py`，13 passed。
+- 验证：`python -m compileall backend/aitest_platform` passed；R28 定向 13 passed；合同组合回归 passed；后端全量 `pytest -q` passed；`npm run build` passed；真实 Chrome Playwright 报告中心烟测 passed，`console.error=0`，`pageerror=0`。
+- 浏览器关键词/入口命中：风险转待办、Markdown、HTML、日报、提测反馈、上线建议、风险清单、管理报告模板/新建模板、查看下钻/下钻明细。
+- 端口已清理。
+- 残余风险：PDF/Word/docx 仍为 unsupported 结构化返回，未引入新导出依赖；轻量结论仍按当前报告聚合口径输出。
+- R28 验收证据见 `docs/orchestration/ROUND28_REPORT.md`。
+- 下一步进入 R29：数据工厂与数据管理。

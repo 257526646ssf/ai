@@ -42,6 +42,7 @@ from aitest_platform.models import (
     PromptTemplate,
     Project,
     Report,
+    ReportTodo,
     ReportTemplate,
     RequirementDocument,
     RequirementDocumentBlock,
@@ -132,9 +133,16 @@ from aitest_platform.services.reporting import (
     ReportingPayloadError,
     build_aggregation_context,
     build_lightweight_conclusion,
+    create_todo_from_report_risk,
     create_comprehensive_report as create_report_from_aggregator,
     create_performance_report,
+    enforce_single_default_template,
     export_report,
+    normalize_report_template_payload,
+    report_drilldown,
+    report_risks_payload,
+    report_template_public_dict,
+    update_report_todo,
 )
 from aitest_platform.services.restore_service import RestorePayloadError, restore_system_backup
 from aitest_platform.services.schedule_runner import run_api_schedule, run_due_api_schedules
@@ -3674,11 +3682,80 @@ def get_project_performance_trend(projectId: str, days: int = Query(7, ge=1, le=
         return project_performance_trend(session, project_id=project.id, days=days)
 
 
+def report_error_detail(message: str, *, field: str | None = None, error_code: str = "report_center_validation_failed") -> dict[str, Any]:
+    detail: dict[str, Any] = {"error_code": error_code, "message": message}
+    if field:
+        detail["field_errors"] = {field: message}
+    return detail
+
+
+def report_todo_public(todo: ReportTodo) -> dict[str, Any]:
+    data = model_dict(todo)
+    data["todo_id"] = todo.id
+    data["source_refs"] = data.get("source_refs_json") or {}
+    return sanitize_payload(data)
+
+
+def parse_report_datetime(value: Any, *, end_of_day: bool = False) -> datetime | None:
+    if value in (None, ""):
+        return None
+    text_value = str(value).strip()
+    try:
+        if len(text_value) == 10:
+            suffix = "T23:59:59.999999+00:00" if end_of_day else "T00:00:00+00:00"
+            return datetime.fromisoformat(text_value + suffix)
+        parsed = datetime.fromisoformat(text_value.replace("Z", "+00:00"))
+        return parsed
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=report_error_detail("invalid date range", field="date")) from exc
+
+
 @router.get("/projects/{projectId}/reports")
-def list_reports(projectId: str, page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+def list_reports(
+    projectId: str,
+    page_num: int = Query(1, alias="page"),
+    page_size: int = Query(20, alias="pageSize"),
+    report_type: str | None = Query(None, alias="type"),
+    q: str | None = None,
+    requirementItemId: str | None = None,
+    sourceDocumentId: str | None = None,
+    dateFrom: str | None = None,
+    dateTo: str | None = None,
+    sort: str | None = None,
+):
     with session_scope() as session:
         pid = to_int(projectId, "projectId")
-        return db_page(session, Report, page_num, page_size, Report.project_id == pid, order_by=Report.id.desc())
+        stmt = select(Report).where(Report.project_id == pid)
+        if report_type:
+            stmt = stmt.where(Report.type == report_type)
+        if q:
+            pattern = f"%{q}%"
+            stmt = stmt.where(or_(Report.name.like(pattern), Report.type.like(pattern), Report.content.like(pattern)))
+        start_at = parse_report_datetime(dateFrom)
+        end_at = parse_report_datetime(dateTo, end_of_day=True)
+        if start_at is not None:
+            stmt = stmt.where(Report.generated_at >= start_at)
+        if end_at is not None:
+            stmt = stmt.where(Report.generated_at <= end_at)
+        reports = list(session.scalars(stmt))
+        if requirementItemId:
+            item_id = to_int(requirementItemId, "requirementItemId")
+            reports = [report for report in reports if item_id in (report.requirement_item_ids_json or [])]
+        if sourceDocumentId:
+            document_id = to_int(sourceDocumentId, "sourceDocumentId")
+            reports = [report for report in reports if document_id in (report.source_document_ids_json or [])]
+        sort_key, _, sort_direction = (sort or "generated_at:desc").partition(":")
+        reverse = (sort_direction or "desc").lower() != "asc"
+        allowed_sort = {
+            "generated_at": lambda report: report.generated_at or datetime.min,
+            "id": lambda report: report.id,
+            "name": lambda report: report.name or "",
+            "type": lambda report: report.type or "",
+        }
+        reports.sort(key=allowed_sort.get(sort_key, allowed_sort["generated_at"]), reverse=reverse)
+        total = len(reports)
+        start = max(page_num - 1, 0) * page_size
+        return list_result(reports[start : start + page_size], page_num, page_size, total)
 
 
 @router.post("/reports/comprehensive")
@@ -3688,6 +3765,9 @@ def create_comprehensive_report(payload: WritePayload):
     if project_id is None:
         raise HTTPException(status_code=400, detail="project_id is required")
     item_ids = data.get("requirement_item_ids") or (data.get("scope") or {}).get("requirement_item_ids") or []
+    document_ids = data.get("source_document_ids") or data.get("sourceDocumentIds") or (data.get("scope") or {}).get("source_document_ids") or (data.get("scope") or {}).get("sourceDocumentIds") or []
+    module_types = data.get("module_types") or data.get("moduleTypes") or (data.get("scope") or {}).get("module_types") or (data.get("scope") or {}).get("moduleTypes") or []
+    time_range = data.get("time_range") or data.get("timeRange") or (data.get("scope") or {}).get("time_range") or (data.get("scope") or {}).get("timeRange")
     with session_scope() as session:
         try:
             report = create_report_from_aggregator(
@@ -3696,6 +3776,9 @@ def create_comprehensive_report(payload: WritePayload):
                 name=data.get("title") or data.get("name") or "综合测试报告",
                 report_type=data.get("type", "comprehensive"),
                 requirement_item_ids=[to_int(item_id, "requirement_item_id") for item_id in item_ids],
+                source_document_ids=[to_int(document_id, "source_document_id") for document_id in document_ids],
+                module_types=[str(module) for module in module_types],
+                time_range=time_range if isinstance(time_range, dict) else None,
                 template_id=to_int(data["template_id"], "template_id") if data.get("template_id") is not None else None,
                 related_scope=sanitize_payload(data.get("scope") or {"project_id": project_id, "requirement_item_ids": item_ids}),
             )
@@ -3703,7 +3786,7 @@ def create_comprehensive_report(payload: WritePayload):
             result["report"] = model_dict(report)
             return result
         except ReportingPayloadError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=report_error_detail(str(exc))) from exc
         except Exception as exc:
             raise repo_error(exc)
 
@@ -3723,33 +3806,134 @@ def download_report(reportId: str, format: str = Query("markdown")):
         report = session.get(Report, to_int(reportId, "reportId"))
         if report is None:
             raise HTTPException(status_code=404, detail=f"Report({reportId}) not found")
+        if (format or "").lower() in {"pdf", "word", "doc", "docx"}:
+            raise HTTPException(
+                status_code=415,
+                detail=report_error_detail(
+                    "unsupported export format; supported formats are markdown, html, json",
+                    field="format",
+                    error_code="unsupported_report_export_format",
+                ),
+            )
         try:
             return export_report(report, format)
         except ReportingPayloadError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise HTTPException(status_code=400, detail=report_error_detail(str(exc), field="format")) from exc
+
+
+@router.get("/reports/{reportId}/drilldown")
+def get_report_drilldown(reportId: str, section: str | None = None):
+    with session_scope() as session:
+        report = session.get(Report, to_int(reportId, "reportId"))
+        if report is None:
+            raise HTTPException(status_code=404, detail=f"Report({reportId}) not found")
+        try:
+            return report_drilldown(report, section or "")
+        except ReportingPayloadError as exc:
+            raise HTTPException(status_code=400, detail=report_error_detail(str(exc), field="section")) from exc
+
+
+@router.get("/reports/{reportId}/risks")
+def get_report_risks(reportId: str):
+    with session_scope() as session:
+        report = session.get(Report, to_int(reportId, "reportId"))
+        if report is None:
+            raise HTTPException(status_code=404, detail=f"Report({reportId}) not found")
+        return report_risks_payload(report)
+
+
+@router.post("/reports/{reportId}/risks/{riskKey}/todos")
+def create_report_risk_todo(reportId: str, riskKey: str, payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        report = session.get(Report, to_int(reportId, "reportId"))
+        if report is None:
+            raise HTTPException(status_code=404, detail=f"Report({reportId}) not found")
+        try:
+            todo, created = create_todo_from_report_risk(session, report, riskKey, sanitize_payload(data))
+            session.flush()
+            result = report_todo_public(todo)
+            result["created"] = created
+            return result
+        except ReportingPayloadError as exc:
+            raise HTTPException(status_code=400, detail=report_error_detail(str(exc), field="riskKey")) from exc
+
+
+@router.get("/report-todos")
+def list_report_todos(
+    page_num: int = Query(1, alias="page"),
+    page_size: int = Query(20, alias="pageSize"),
+    reportId: str | None = None,
+    riskKey: str | None = None,
+    status: str | None = None,
+    projectId: str | None = None,
+):
+    with session_scope() as session:
+        stmt = select(ReportTodo)
+        count_stmt = select(func.count()).select_from(ReportTodo)
+        criteria = []
+        if reportId:
+            criteria.append(ReportTodo.report_id == to_int(reportId, "reportId"))
+        if projectId:
+            criteria.append(ReportTodo.project_id == to_int(projectId, "projectId"))
+        if riskKey:
+            criteria.append(ReportTodo.risk_key == riskKey)
+        if status:
+            criteria.append(ReportTodo.status == status)
+        if criteria:
+            stmt = stmt.where(*criteria)
+            count_stmt = count_stmt.where(*criteria)
+        total = session.scalar(count_stmt) or 0
+        items = list(session.scalars(stmt.order_by(ReportTodo.id.desc()).offset((page_num - 1) * page_size).limit(page_size)))
+        records = [report_todo_public(item) for item in items]
+        return {"list": records, "todos": records, "total": total, "page": page_num, "pageSize": page_size}
+
+
+@router.patch("/report-todos/{todoId}")
+def patch_report_todo(todoId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        todo = require_db_item(session, ReportTodo, todoId, "todoId")
+        try:
+            update_report_todo(todo, sanitize_payload(data))
+            report = session.get(Report, todo.report_id)
+            if report is not None:
+                # Keep the report export snapshot aligned with report-derived todo state.
+                create_todo_from_report_risk(session, report, todo.risk_key)
+            session.flush()
+            return report_todo_public(todo)
+        except ReportingPayloadError as exc:
+            raise HTTPException(status_code=400, detail=report_error_detail(str(exc), field="status")) from exc
 
 
 @router.get("/report-templates")
-def list_report_templates(page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize")):
+def list_report_templates(page_num: int = Query(1, alias="page"), page_size: int = Query(20, alias="pageSize"), report_type: str | None = None):
     with session_scope() as session:
-        return db_page(session, ReportTemplate, page_num, page_size, order_by=ReportTemplate.id.desc())
+        stmt = select(ReportTemplate)
+        count_stmt = select(func.count()).select_from(ReportTemplate)
+        if report_type:
+            stmt = stmt.where(ReportTemplate.report_type == report_type)
+            count_stmt = count_stmt.where(ReportTemplate.report_type == report_type)
+        items = list(session.scalars(stmt.order_by(ReportTemplate.id.desc()).offset((page_num - 1) * page_size).limit(page_size)))
+        return {"list": [report_template_public_dict(item) for item in items], "total": session.scalar(count_stmt) or 0, "page": page_num, "pageSize": page_size}
 
 
 @router.post("/report-templates")
 def create_report_template(payload: WritePayload):
     data = payload_dict(payload)
     with session_scope() as session:
-        template = ReportTemplate(
-            name=data.get("name") or "Report Template",
-            report_type=data.get("report_type") or data.get("type") or "comprehensive",
-            sections=data.get("sections") or ["overview", "coverage", "executions", "defects"],
-            is_default=bool(data.get("is_default", data.get("enabled", False))),
-            template_version=data.get("template_version", "v1"),
-        )
-        session.add(template)
-        session.flush()
-        r2_log(session, "report_template", "create", template.id)
-        return model_dict(template)
+        try:
+            fields = normalize_report_template_payload(data)
+            template = ReportTemplate(**fields)
+            session.add(template)
+            session.flush()
+            enforce_single_default_template(session, template)
+            session.flush()
+            r2_log(session, "report_template", "create", template.id)
+            return report_template_public_dict(template)
+        except ReportingPayloadError as exc:
+            field = "supported_formats" if "supported_formats" in str(exc) else "sections"
+            raise HTTPException(status_code=400, detail=report_error_detail(str(exc), field=field)) from exc
 
 
 @router.patch("/report-templates/{templateId}")
@@ -3759,10 +3943,18 @@ def update_report_template(templateId: str, payload: WritePayload):
         data["report_type"] = data["type"]
     with session_scope() as session:
         template = require_db_item(session, ReportTemplate, templateId, "templateId")
-        update_columns(template, data, ("name", "report_type", "sections", "is_default", "template_version"))
-        session.flush()
-        r2_log(session, "report_template", "update", template.id)
-        return model_dict(template)
+        try:
+            fields = normalize_report_template_payload(data, template)
+            for key, value in fields.items():
+                setattr(template, key, value)
+            session.flush()
+            enforce_single_default_template(session, template)
+            session.flush()
+            r2_log(session, "report_template", "update", template.id)
+            return report_template_public_dict(template)
+        except ReportingPayloadError as exc:
+            field = "supported_formats" if "supported_formats" in str(exc) else "sections"
+            raise HTTPException(status_code=400, detail=report_error_detail(str(exc), field=field)) from exc
 
 
 @router.delete("/report-templates/{templateId}")

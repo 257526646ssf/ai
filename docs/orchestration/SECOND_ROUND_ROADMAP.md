@@ -38,7 +38,7 @@
 | R25 | 2026-06-07 ~ 2026-06-10 | P0 | 接口测试增强 | 支持 OpenAPI YAML/HAR 基础解析，补保存调试为用例、环境变量优先级、场景变量映射增强、Mock 服务基础能力、前后置脚本受控执行。 |
 | R26 | 2026-06-10 ~ 2026-06-12 | P0 | 自动化中心增强 | 补候选筛选、在线文件编辑、代码保存、Playwright 模板增强、执行日志/截图/trace 展示、Artifacts 预览。 |
 | R27 | 2026-05-30 已验收；原窗口 2026-06-12 ~ 2026-06-14 | P0 | 性能测试增强 | 已完成：中止/停止执行接口、阈值判定、历史对比、JMeter 模板参数编辑、性能趋势聚合、报告风险建议。验收证据见 `ROUND27_REPORT.md`。 |
-| R28 | 2026-05-30 起 | P0 | 报告中心增强 | 待开始：补模板管理闭环、报告下钻、风险项转待办、Markdown/HTML 强化；PDF/Word 若无新增依赖批准，先提供 HTML/Markdown 生产级替代。 |
+| R28 | 2026-05-30 已验收 | P0 | 报告中心增强 | 已完成：report-templates CRUD 校验与默认唯一、综合报告模板/scope 冻结、报告列表过滤排序、下钻、风险转待办、Markdown/HTML 强化、unsupported PDF/Word/docx 结构化返回、轻量结论类型。验收证据见 `ROUND28_REPORT.md`。 |
 | R29 | R28 验收后 | P1 | 数据工厂与数据管理 | 待开始：补接口参数测试数据生成、执行测试数据建议、自动备份提醒、存储空间统计、按模块清理安全门。 |
 | R30 | R29 验收后 | P1 | 文件与导出格式增强 | 待开始：评估并实现 `.xlsx`、PDF、Word、XMind 的本地安全导出；若依赖未批准，保留 Markdown/CSV/HTML/ZIP 完整替代。 |
 | R31 | R30 验收后 | 决策门 | 生产基础设施 | 待决策：Alembic、PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储。默认不静默引入，需在 `DECISIONS.md` 明确选择后实施。 |
@@ -84,9 +84,9 @@
 
 ## 当前下一步
 
-立即进入 R28：报告中心增强。
-- 补模板管理闭环、报告下钻、风险项转待办。
-- 强化 Markdown/HTML 报告输出；PDF/Word 若无新增依赖批准，先保留为后续评估项。
+立即进入 R29：数据工厂与数据管理。
+- 补接口参数测试数据生成、执行测试数据建议、自动备份提醒、存储空间统计、按模块清理安全门。
+- R30-R32 仍保持未完成排期，分别等待文件与导出格式增强、生产基础设施决策和第二轮总验收。
 - 继续保持脱敏、本地优先和结构化失败约束。
 
 ## 当前进展
@@ -150,4 +150,13 @@
 - R27 验收证据见 `docs/orchestration/ROUND27_REPORT.md`：`python -m compileall backend/aitest_platform` passed；R27 定向 10 passed；合同组合回归 passed；后端全量 `pytest -q` passed；`npm run build` passed；真实 Chrome Playwright 烟测 passed，`console.error=0`，`pageerror=0`。
 - R27 浏览器关键词命中：阈值判定、性能历史比对、7日趋势 P95、JMeter 参数/模板参数、停止执行、报告建议/风险建议。
 - R27 残余风险：真实 JMeter 执行依赖本机工具和目标环境；阈值/风险建议为当前规则口径，后续可按项目 SLA 调整；趋势依赖已落库样本。
-- 下一步进入 R28：报告中心增强。
+- 下一步已进入并完成 R28：报告中心增强。
+
+## 当前进展补充：R28
+- R28 已完成文档收口：报告中心增强已落地并验收。
+- 后端完成 report-templates CRUD 校验与默认唯一；综合报告按 `template_id`/`scope` 生成并冻结模板、章节、scope；报告列表过滤排序；report drilldown；report risks；风险转待办与 todo 列表/状态；Markdown/HTML 强化与 HTML escape/递归脱敏；PDF/Word/docx unsupported 结构化返回；轻量结论支持 `daily_report`、`test_submission_feedback`、`release_advice`、`risk_list`。
+- 前端 Reports 页已移除 fallback/static AI 意见、固定默认报告和假分享；已接真实报告列表、模板管理、筛选排序、下钻、风险转待办、下载和轻量结论类型。
+- R28 验收证据见 `docs/orchestration/ROUND28_REPORT.md`：`python -m compileall backend/aitest_platform` passed；R28 定向 13 passed；合同组合回归 passed；后端全量 `pytest -q` passed；`npm run build` passed；真实 Chrome Playwright 报告中心烟测 passed，`console.error=0`，`pageerror=0`。
+- R28 浏览器入口命中：风险转待办、Markdown、HTML、日报、提测反馈、上线建议、风险清单、管理报告模板/新建模板、查看下钻/下钻明细。
+- R28 残余风险：PDF/Word/docx 仍为 unsupported 结构化返回，未引入新导出依赖；轻量结论仍按当前报告聚合口径输出。
+- 下一步进入 R29：数据工厂与数据管理。R29-R32 保持未完成排期。

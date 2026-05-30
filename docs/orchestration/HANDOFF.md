@@ -444,7 +444,17 @@
 - 浏览器关键词命中：阈值判定、性能历史比对、7日趋势 P95、JMeter 参数/模板参数、停止执行、报告建议/风险建议。
 - R27 残余风险：真实 JMeter 执行依赖本机工具和目标环境；阈值/风险建议为当前规则口径，后续可按项目 SLA 调整；趋势依赖已落库样本。
 
-## R28 预备交接
-- 下一步进入 R28：报告中心增强。
-- 建议优先围绕模板管理闭环、报告下钻、风险项转待办、Markdown/HTML 强化继续拆分 worker。
-- PDF/Word 若没有新增依赖批准，先提供 HTML/Markdown 生产级替代；继续保持本地优先、结构化失败、敏感信息脱敏和不静默新增生产依赖的约束。
+## R28 完成交接
+- R28 名称：报告中心增强。
+- 后端已完成 report-templates CRUD 校验与默认唯一；综合报告按 `template_id`/`scope` 生成并冻结模板、章节、scope；报告列表过滤排序；report drilldown；report risks；风险转待办与 todo 列表/状态；Markdown/HTML 强化与 HTML escape/递归脱敏；PDF/Word/docx unsupported 结构化返回；轻量结论支持 `daily_report`、`test_submission_feedback`、`release_advice`、`risk_list`。
+- 前端 Reports 页已移除 fallback/static AI 意见、固定默认报告和假分享；已接真实报告列表、模板管理、筛选排序、下钻、风险转待办、下载和轻量结论类型。
+- R28 验收证据见 `docs/orchestration/ROUND28_REPORT.md`；定向测试 `backend/tests/test_round28_report_center_enhancement.py` 为 13 passed。
+- 验证结果：`python -m compileall backend/aitest_platform` passed；合同组合回归 passed；后端全量 `pytest -q` passed；`npm run build` passed；真实 Chrome Playwright 报告中心烟测 passed，`console.error=0`，`pageerror=0`。
+- 浏览器入口命中：风险转待办、Markdown、HTML、日报、提测反馈、上线建议、风险清单、管理报告模板/新建模板、查看下钻/下钻明细。
+- 端口已清理。
+- R28 残余风险：PDF/Word/docx 仍为 unsupported 结构化返回，未引入新导出依赖；轻量结论仍按当前报告聚合口径输出。
+
+## R29 预备交接
+- 下一步进入 R29：数据工厂与数据管理。
+- 建议优先围绕接口参数测试数据生成、执行测试数据建议、自动备份提醒、存储空间统计和按模块清理安全门继续拆分 worker。
+- R29-R32 仍为未完成排期；不得把 R30 文件格式增强、R31 生产基础设施或 R32 总验收写成已完成。

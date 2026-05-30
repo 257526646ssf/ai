@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from aitest_platform.db import Base
@@ -467,6 +467,23 @@ class Report(Base):
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ReportTodo(TimestampMixin, Base):
+    __tablename__ = "report_todo"
+    __table_args__ = (UniqueConstraint("report_id", "risk_key", name="uq_report_todo_report_risk"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("project_app.id"), nullable=False, index=True)
+    report_id: Mapped[int] = mapped_column(ForeignKey("report.id"), nullable=False, index=True)
+    risk_key: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="todo", nullable=False, index=True)
+    source_refs_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    risk_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    assignee: Mapped[str | None] = mapped_column(String(128))
+    due_at: Mapped[str | None] = mapped_column(String(64))
+
+
 class LlmConfig(TimestampMixin, Base):
     __tablename__ = "llm_config"
 
@@ -533,6 +550,7 @@ Index("idx_requirement_lib_project_name", RequirementLib.project_id, Requirement
 Index("idx_requirement_item_lib_status", RequirementItem.lib_id, RequirementItem.status)
 Index("idx_test_round_project_status", TestRound.project_id, TestRound.status)
 Index("idx_report_project_type", Report.project_id, Report.type)
+Index("idx_report_todo_project_status", ReportTodo.project_id, ReportTodo.status)
 Index("idx_api_case_lib_endpoint", ApiTestCase.lib_id, ApiTestCase.endpoint_id)
 Index("idx_api_execution_lib_status", ApiExecution.lib_id, ApiExecution.status)
 Index("idx_auto_file_project_path", AutoCaseFile.auto_project_id, AutoCaseFile.file_path)

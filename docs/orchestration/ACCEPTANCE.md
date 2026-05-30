@@ -543,3 +543,32 @@
 - Root `npm run build`: passed.
 - Real Chrome Playwright smoke: passed; console.error=0; pageerror=0; visible keywords included 阈值判定、性能历史比对、7日趋势 P95、JMeter 参数/模板参数、停止执行、报告建议/风险建议.
 - Residual risks: 真实 JMeter 执行依赖本机工具和目标环境；阈值/风险建议为当前规则口径，后续可按项目 SLA 调整；趋势依赖已落库样本。
+
+## 第二十八轮验收
+- [x] R28 名称为报告中心增强。
+- [x] report-templates 支持 CRUD 校验与默认唯一。
+- [x] 综合报告可按 `template_id` 和 `scope` 生成，并冻结模板、章节和 scope。
+- [x] 报告列表支持过滤和排序。
+- [x] report drilldown 已可查询。
+- [x] report risks 已可查询。
+- [x] 风险项支持转待办，todo 列表和状态可查询/更新。
+- [x] Markdown/HTML 输出已强化，HTML 输出做 escape。
+- [x] 报告快照和嵌套数据继续递归脱敏，不回显 token / cookie / Authorization / secret。
+- [x] PDF/Word/docx 在未引入新依赖时返回 unsupported 结构化响应。
+- [x] 轻量结论支持 `daily_report`、`test_submission_feedback`、`release_advice`、`risk_list`。
+- [x] Reports 页已移除 fallback/static AI 意见、固定默认报告和假分享。
+- [x] Reports 页已接真实报告列表、模板管理、筛选排序、下钻、风险转待办、下载和轻量结论类型。
+- [x] R28 定向测试、合同组合回归、完整后端回归、前端构建和真实 Chrome Playwright 报告中心烟测均已验证通过。
+
+## Round 28 Evidence
+- Added `backend/tests/test_round28_report_center_enhancement.py`.
+- Enhanced `backend/aitest_platform/api/router.py`, `backend/aitest_platform/models.py`, `backend/aitest_platform/services/reporting.py`, and `src/pages/Reports.jsx`.
+- `python -m compileall backend/aitest_platform`: passed.
+- `python -m pytest backend/tests/test_round28_report_center_enhancement.py -q`: 13 passed.
+- Contract combination regression: passed.
+- Full backend `pytest -q`: passed.
+- Root `npm run build`: passed.
+- Real Chrome Playwright report center smoke: passed; console.error=0; pageerror=0.
+- Browser smoke hit entries for 风险转待办、Markdown、HTML、日报、提测反馈、上线建议、风险清单、管理报告模板/新建模板、查看下钻/下钻明细.
+- Cleanup: ports were cleaned.
+- Residual risks: PDF/Word/docx remain unsupported structured responses until an export dependency decision is made; lightweight conclusions follow the current report aggregation rules.
