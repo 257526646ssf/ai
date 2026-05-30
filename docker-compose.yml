@@ -1,0 +1,43 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: aitest-backend-local
+    environment:
+      AITEST_DATABASE_URL: ${AITEST_DATABASE_URL:-sqlite:///./data/aitest.sqlite3}
+      AITEST_API_PREFIX: ${AITEST_API_PREFIX:-/api/v2}
+      AITEST_BACKUP_DIR: ${AITEST_BACKUP_DIR:-./data/backups}
+      AITEST_LOG_LEVEL: ${AITEST_LOG_LEVEL:-INFO}
+      AITEST_ENABLE_REAL_LLM: ${AITEST_ENABLE_REAL_LLM:-false}
+      AITEST_ENABLE_REAL_BROWSER_RUNNER: ${AITEST_ENABLE_REAL_BROWSER_RUNNER:-false}
+      AITEST_ENABLE_REAL_JMETER: ${AITEST_ENABLE_REAL_JMETER:-false}
+      AITEST_LLM_PROVIDER: ${AITEST_LLM_PROVIDER:-}
+      AITEST_LLM_BASE_URL: ${AITEST_LLM_BASE_URL:-}
+      AITEST_LLM_API_KEY: ${AITEST_LLM_API_KEY:-}
+      AITEST_LLM_MODEL: ${AITEST_LLM_MODEL:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/backend/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v2}
+    container_name: aitest-frontend-local
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v2}
+    ports:
+      - "3000:3000"

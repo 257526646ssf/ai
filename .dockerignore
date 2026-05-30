@@ -1,0 +1,14 @@
+*
+!.dockerignore
+!Dockerfile.frontend
+!package.json
+!package-lock.json
+!vite.config.js
+!tailwind.config.js
+!postcss.config.js
+!index.html
+!avatar_zhang.png
+!public/
+!public/**
+!src/
+!src/**

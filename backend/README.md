@@ -76,6 +76,42 @@ OpenAPI should be available at:
 http://127.0.0.1:8000/docs
 ```
 
+## Docker
+
+For local single-user deployment, the repository now includes:
+
+- `backend/Dockerfile`
+- `backend/.dockerignore`
+- `Dockerfile.frontend`
+- `.dockerignore`
+- `docker-compose.yml`
+
+From `D:\codex-project\新ui-前端`:
+
+```powershell
+docker compose up -d --build
+```
+
+After startup:
+
+```text
+Frontend: http://127.0.0.1:3000
+Backend:  http://127.0.0.1:8000
+Docs:     http://127.0.0.1:8000/docs
+```
+
+Stop the stack with:
+
+```powershell
+docker compose down
+```
+
+The compose file keeps SQLite and local artifacts persisted through:
+
+```text
+./backend/data:/app/backend/data
+```
+
 ## Schema Status
 
 `GET /api/v2/system/schema-status` checks the SQLAlchemy model metadata against the current database engine without Alembic or destructive changes. It reports missing tables, missing columns, extra table count, a metadata hash schema version, and a redacted database type. For SQLite responses include only `database_url_type: "sqlite"` and whether the configured database file exists; the full local path is not returned. Introspection failures are returned as structured `status: "error"` payloads instead of HTTP 500 responses.
