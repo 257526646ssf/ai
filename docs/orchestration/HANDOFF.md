@@ -457,7 +457,7 @@
 ## R29 预备交接
 - 下一步进入 R29：数据工厂与数据管理。
 - 建议优先围绕接口参数测试数据生成、执行测试数据建议、自动备份提醒、存储空间统计和按模块清理安全门继续拆分 worker。
-- R29-R32 仍为未完成排期；不得把 R30 文件格式增强、R31 生产基础设施或 R32 总验收写成已完成。
+- 当前历史节点曾要求 R29-R32 不得提前标记完成；截至 R31 文档收口后，R29-R31 已完成，R32 总验收仍不得写成已完成。
 
 ## R29 完成交接
 - R29 名称：数据工厂与数据管理。
@@ -484,6 +484,17 @@
 - R30 残余风险：PDF/Word/XMind 未做真实服务端生成；本轮未新增生产依赖；docx/pdf/xlsx/xmind 导入只建立硬边界，不做深度解析。
 
 ## R31 预备交接
-- 下一步进入 R31：生产基础设施决策。
-- R31 应只做 Alembic、PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储等生产基础设施的决策与取舍记录；不得静默引入新依赖或把决策项写成已实施。
-- R31-R32 仍为未完成排期；不得把第二轮总验收写成已完成。
+- R31 已完成生产基础设施决策门文档收口。
+- R31 只完成 Alembic、PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储等生产基础设施的决策与取舍记录；未静默引入新依赖，未把决策项写成已实施。
+- R32 仍为未完成排期；不得把第二轮总验收写成已完成。
+
+## R31 完成交接
+- R31 名称：生产基础设施决策门。
+- 本轮只改文档，不改代码/测试，不新增生产依赖，不执行数据库迁移，不启动 PostgreSQL/Redis/MinIO 等外部服务。
+- 决策矩阵已写入 `docs/orchestration/DECISIONS.md`；R31 报告见 `docs/orchestration/ROUND31_REPORT.md`。
+- R32 支持目标：继续以 SQLite 本地优先完成第二轮总验收；默认数据库仍为 `backend/data/aitest.sqlite3`，artifacts 仍为本地目录。
+- deferred / unsupported unless explicitly approved：PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储、Alembic。
+- 触发条件：只有在明确批准生产化部署、多用户并发、远程对象存储、平台内真实密钥托管或正式迁移链需求后，才进入对应实施方案。
+- 迁移准备：后续实施前需补依赖清单、迁移/回滚策略、配置矩阵、失败恢复、安全审计和本地 fallback。
+- 验证结果：`git diff --check` 通过；仅出现 Git 行尾转换提示，无 whitespace error。完整后端回归、前端构建和浏览器烟测留给 R32。
+- 下一步：R32 第二轮总验收，尚未开始。

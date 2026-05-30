@@ -133,6 +133,7 @@ from aitest_platform.services.file_formats import (
     detect_unsupported_import_format,
     unsupported_import_detail,
 )
+from aitest_platform.services.infra_status import get_infra_status
 from aitest_platform.services.perf_runner import inspect_jmeter_dependency, run_jmeter_plan, sanitize_perf_payload
 from aitest_platform.services.perf_analysis import (
     PerfPayloadError,
@@ -4928,6 +4929,11 @@ def system_runtime_dependencies():
         "perf_runner": {"jmeter": inspect_jmeter_dependency()},
         "checked_at": now_iso(),
     }
+
+
+@router.get("/system/infra-status")
+def system_infra_status():
+    return get_infra_status()
 
 
 @router.get("/system/operation-logs")

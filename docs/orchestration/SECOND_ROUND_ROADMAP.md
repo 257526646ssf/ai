@@ -41,8 +41,8 @@
 | R28 | 2026-05-30 已验收 | P0 | 报告中心增强 | 已完成：report-templates CRUD 校验与默认唯一、综合报告模板/scope 冻结、报告列表过滤排序、下钻、风险转待办、Markdown/HTML 强化、unsupported PDF/Word/docx 结构化返回、轻量结论类型。验收证据见 `ROUND28_REPORT.md`。 |
 | R29 | 2026-05-30 已验收 | P1 | 数据工厂与数据管理 | 已完成：接口参数测试数据生成、执行测试数据建议、备份状态提醒、存储空间统计、清理 dry-run/确认门、模块白名单、路径根目录限制和响应脱敏。验收证据见 `ROUND29_REPORT.md`。 |
 | R30 | 2026-05-30 已验收 | P1 | 文件与导出格式增强 | 已完成：统一 unsupported contract；无依赖 XLSX 导出 test-cases/defects；公式注入中和；二进制 docx/pdf/xlsx/xmind 导入硬边界；自动化/性能 artifact ZIP canonical path 校验、越界 skipped metadata 和文本脱敏；前端移除假下载并支持 TestCases CSV/Markdown/JSON/XLSX。PDF/Word/XMind 未做真实服务端生成。验收证据见 `ROUND30_REPORT.md`。 |
-| R31 | R30 验收后 | 决策门 | 生产基础设施 | 待决策：Alembic、PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储。默认不静默引入，需在 `DECISIONS.md` 明确选择后实施。 |
-| R32 | R31 决策后 | P0 | 第二轮总验收 | 待开始：全量测试、前端构建、核心浏览器流程、导出下载、secrets 扫描、远程分支校验、最终交付报告。 |
+| R31 | 2026-05-30 已完成 | 决策门 | 生产基础设施决策 | 已完成：明确 SQLite 本地优先为 R32 支持目标；PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储、Alembic 均 deferred / unsupported unless explicitly approved。未新增生产依赖。验收证据见 `ROUND31_REPORT.md`。 |
+| R32 | R31 决策后 | P0 | 第二轮总验收 | 待开始：全量测试、前端构建、核心浏览器流程、导出下载、secrets 扫描、远程分支校验、最终交付报告。不得在完成前标记为已验收。 |
 
 ## 必须完成清单
 
@@ -84,9 +84,9 @@
 
 ## 当前下一步
 
-立即进入 R31：生产基础设施决策。
-- R30 文件与导出格式增强已完成并验收；PDF/Word/XMind 未做真实服务端生成，本轮未新增生产依赖。
-- R31-R32 仍保持未完成排期，分别等待生产基础设施决策和第二轮总验收。
+立即进入 R32：第二轮总验收。
+- R31 生产基础设施决策门已完成；本轮未新增生产依赖，未实施 PostgreSQL/Redis/MinIO/Alembic 或真实密钥加密存储。
+- R32 仍未开始，等待全量验收、前端构建、核心浏览器流程、导出下载、secrets 检查和最终交付报告。
 - 继续保持脱敏、本地优先和结构化失败约束。
 
 ## 当前进展
@@ -177,4 +177,10 @@
 - R30 验收证据见 `docs/orchestration/ROUND30_REPORT.md`：`python -m compileall backend\aitest_platform` 通过；R30 定向 36 passed；合同回归组合 64 passed；后端全量通过；`npm run build` 通过；真实 Chrome 烟测通过，`console.error=0`，`pageerror=0`。
 - R30 冒烟事实：TestCases 四种真实下载均可用；XLSX 为真实 ZIP workbook；unsupported 不返回假文件字段；artifact 越界条目进入 skipped metadata。
 - R30 残余风险：PDF/Word/XMind 未做真实服务端生成；本轮未新增生产依赖；docx/pdf/xlsx/xmind 导入只建立硬边界，不做深度解析。
-- 下一步进入 R31：生产基础设施决策。R31-R32 保持未完成排期。
+- R31 生产基础设施决策门已完成；下一步进入 R32：第二轮总验收。R32 保持未完成排期。
+
+## 当前进展补充：R31
+- R31 已完成文档收口：生产基础设施决策门已落地到 `DECISIONS.md` 和 `ROUND31_REPORT.md`。
+- 本轮未新增生产依赖、未改代码/测试、未实施生产基础设施。
+- R32 支持目标继续是 SQLite 本地优先；PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储、Alembic 均保持 deferred / unsupported unless explicitly approved。
+- 下一步进入 R32：第二轮总验收；R32 尚未开始。

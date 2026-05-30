@@ -7,7 +7,21 @@ The first-round acceptance target is a runnable `/api/v2` subset for projects, r
 
 - Default mode: local-first FastAPI service.
 - Default database: SQLite at `backend/data/aitest.sqlite3`.
-- Formal deployment can later switch to PostgreSQL, but P0 tests must run offline without real LLM, browser runner, JMeter, or external network calls.
+- Formal deployment can later switch to PostgreSQL only after explicit approval and a migration plan; P0 tests must run offline without real LLM, browser runner, JMeter, or external network calls.
+
+## Infrastructure Support Matrix
+
+R31 is a decision gate, not a production infrastructure implementation. No production dependency was added for R31.
+
+| Capability | Current support | Notes |
+|---|---|---|
+| SQLite local-first | Supported target for R32 acceptance | Default database remains `backend/data/aitest.sqlite3`. Keep tests and local smoke flows runnable offline. |
+| Local artifacts | Supported target for R32 acceptance | Default artifact storage remains `backend/data/artifacts/`. |
+| PostgreSQL / pgvector | Deferred / unsupported unless explicitly approved | Requires a separate deployment, migration, backup, and rollback plan before implementation. |
+| Celery / Redis | Deferred / unsupported unless explicitly approved | Requires a separate task state, retry, timeout, cancellation, worker health, and local fallback design. |
+| MinIO / S3 | Deferred / unsupported unless explicitly approved | Requires a storage adapter, bucket/path policy, credential handling, lifecycle rules, and failure recovery. |
+| Encrypted real-secret storage | Deferred / unsupported unless explicitly approved | Real API keys must stay in local environment variables or runtime-only inputs; do not store plaintext secrets in code, docs, logs, or the database. |
+| Alembic migrations | Deferred / unsupported unless explicitly approved | Current schema checks use SQLAlchemy metadata and `/api/v2/system/schema-status`; formal migration chains require a separate baseline and rollback plan. |
 
 ## Install
 

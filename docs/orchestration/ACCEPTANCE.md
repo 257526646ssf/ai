@@ -627,3 +627,24 @@
 - 真实 Chrome 烟测：passed；TestCases CSV/Markdown/JSON/XLSX 均为真实下载；XLSX 为真实 ZIP workbook；unsupported 响应不返回假文件字段；artifact 越界条目进入 skipped；console.error=0；pageerror=0。
 - 端口说明：本机 8000 已被 PID 4588 占用，验收使用 8001，未触碰外部进程。
 - 残余风险：PDF/Word/XMind 未做真实服务端生成；本轮未新增生产依赖；docx/pdf/xlsx/xmind 导入当前只建立硬边界，不做深度解析。
+
+## 第三十一轮验收
+- [x] R31 名称为生产基础设施决策门。
+- [x] R31 明确为决策门，不是生产依赖实施轮次。
+- [x] SQLite 本地优先被记录为 R32 总验收支持目标。
+- [x] PostgreSQL/pgvector 标记为 deferred / unsupported unless explicitly approved。
+- [x] Celery/Redis 标记为 deferred / unsupported unless explicitly approved。
+- [x] MinIO/S3 标记为 deferred / unsupported unless explicitly approved。
+- [x] 真实密钥加密存储标记为 deferred / unsupported unless explicitly approved。
+- [x] Alembic 正式迁移标记为 deferred / unsupported unless explicitly approved。
+- [x] `DECISIONS.md` 已记录原因、当前边界、触发条件和迁移准备。
+- [x] `ROUND31_REPORT.md` 已记录保护性状态、验证方式、风险和 R32 前证据缺口。
+- [x] 本轮未新增生产依赖，未修改代码或测试，未写入 secrets。
+- [x] R32 未标记完成。
+
+## Round 31 Evidence
+- 新增 `docs/orchestration/ROUND31_REPORT.md`。
+- 更新 `docs/orchestration/DECISIONS.md`、`docs/orchestration/STATUS.md`、`docs/orchestration/HANDOFF.md`、`docs/orchestration/ACCEPTANCE.md`、`docs/orchestration/SECOND_ROUND_ROADMAP.md` 和 `backend/README.md`。
+- 本轮验证命令：`git diff --check` 通过；仅出现 Git 行尾转换提示，无 whitespace error。
+- 未运行后端测试、前端构建或浏览器烟测，原因是 R31 只改文档且不改变运行时行为。
+- R32 待开始：第二轮总验收需要重新覆盖全量后端回归、前端构建、核心浏览器流程、导出下载、secrets 检查和最终交付报告。

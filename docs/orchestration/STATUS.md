@@ -1,7 +1,7 @@
 # 后端实现状态
 
 ## 阶段
-- 当前阶段：截至 2026-05-30，Round 30 已验收；文件与导出格式增强已完成，下一步进入 R31 生产基础设施决策。
+- 当前阶段：截至 2026-05-30，Round 31 已完成；生产基础设施决策门已收口，下一步进入 R32 第二轮总验收。
 - 日期说明：第二轮路线图中的旧时间窗口如与实际完成时间冲突，以各 Round 报告、验收记录和提交/测试证据为准。
 - 目标：在不改变前端视觉风格的前提下，实现需求文档与技术实现方案中的后端基础能力。
 - 主线程职责：拆解、派工、验收、进度统一；产品实现代码由子任务完成。
@@ -613,4 +613,15 @@
 - 端口说明：本机 8000 被既有 PID 4588 占用，验收使用 8001，未触碰外部进程。
 - R30 验收证据见 `docs/orchestration/ROUND30_REPORT.md`。
 - 残余风险：PDF/Word/XMind 未做真实服务端生成；本轮未新增生产依赖；docx/pdf/xlsx/xmind 导入只建立硬边界，不做深度解析。
-- 下一步进入 R31：生产基础设施决策。R31-R32 保持未完成排期。
+- R30 后进入 R31：生产基础设施决策门；当前已完成 R31 文档收口，R32 仍未开始。
+
+## 第二轮 R31 完成状态
+- R31 名称：生产基础设施决策门。
+- 本轮性质：只做决策记录和文档同步，不实施生产基础设施，不新增代码、测试、数据库迁移、运行时服务或生产依赖。
+- 决策结论：R32 总验收继续以 SQLite 本地优先作为支持目标；当前默认数据库仍为 `backend/data/aitest.sqlite3`，artifacts 仍默认使用本地目录 `backend/data/artifacts/`。
+- deferred / unsupported unless explicitly approved：PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储、Alembic。
+- 原因：这些能力会引入部署、迁移、运维、安全和回滚复杂度；当前第二轮验收目标仍可在本地优先边界内完成。
+- 已同步文档：`docs/orchestration/DECISIONS.md` 增加 R31 决策矩阵；新增 `docs/orchestration/ROUND31_REPORT.md`；同步 `STATUS.md`、`HANDOFF.md`、`ACCEPTANCE.md`、`SECOND_ROUND_ROADMAP.md` 和 `backend/README.md`。
+- 保护性状态：未写入 secrets；未把 deferred 生产依赖写成已完成；未 commit/push。
+- 验证：`git diff --check` 通过；仅出现 Git 行尾转换提示，无 whitespace error。
+- 下一步进入 R32：第二轮总验收。R32 尚未开始，不能标记为完成。
