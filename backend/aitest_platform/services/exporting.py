@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Iterable
+from xml.sax.saxutils import escape as xml_escape
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -24,6 +25,7 @@ from aitest_platform.models import (
     TestCase,
 )
 from aitest_platform.services.perf_analysis import render_jmeter_script
+from aitest_platform.services.file_formats import UnsupportedFormatError, is_unsupported_export_format, unsupported_export_detail
 
 SENSITIVE_MARKERS = (
     "authorization",
@@ -37,6 +39,10 @@ SENSITIVE_MARKERS = (
     "git_auth",
 )
 TEXT_ARTIFACT_SUFFIXES = {".css", ".csv", ".html", ".js", ".json", ".log", ".md", ".txt", ".xml", ".yaml", ".yml"}
+TABULAR_EXPORT_FORMATS = {"markdown", "csv", "json", "xlsx"}
+PERF_RESULT_EXPORT_FORMATS = {"json", "html"}
+XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+FORMULA_PREFIXES = ("=", "+", "-", "@")
 
 
 class ExportPayloadError(ValueError):
@@ -52,7 +58,7 @@ def export_test_cases(
     case_type: str | None = None,
     output_format: str = "markdown",
 ) -> dict[str, Any]:
-    fmt = _normalize_format(output_format, {"markdown", "csv", "json"})
+    fmt = _normalize_format(output_format, TABULAR_EXPORT_FORMATS)
     stmt = select(TestCase).where(TestCase.is_deleted.is_(False))
     if project_id is not None:
         stmt = stmt.where(TestCase.project_id == project_id)
@@ -76,7 +82,7 @@ def export_defects(
     status: str | None = None,
     output_format: str = "markdown",
 ) -> dict[str, Any]:
-    fmt = _normalize_format(output_format, {"markdown", "csv", "json"})
+    fmt = _normalize_format(output_format, TABULAR_EXPORT_FORMATS)
     stmt = select(Defect)
     if project_id is not None:
         stmt = stmt.where(Defect.project_id == project_id)
@@ -133,30 +139,23 @@ def build_auto_execution_artifacts_zip(session: Session, *, execution_id: int) -
         raise ExportPayloadError(f"AutoExecution({execution_id}) not found")
 
     artifacts = sanitize_export_payload(execution.artifacts or {})
-    artifact_dir = artifacts.get("artifact_dir") if isinstance(artifacts, dict) else None
-    root = Path(str(artifact_dir)).resolve() if artifact_dir else None
+    included_files, skipped_files = _collect_artifact_files(artifacts)
     manifest = {
         "execution_id": execution.id,
         "status": execution.status,
         "summary": sanitize_export_payload(execution.summary or {}),
         "duration_ms": execution.duration_ms,
         "artifacts": artifacts,
+        "included_artifacts": sanitize_export_payload(included_files),
+        "skipped_artifacts": sanitize_export_payload(skipped_files),
     }
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-        for item in _artifact_entries(artifacts):
-            path_value = item.get("path")
-            if not path_value:
-                continue
-            source = Path(str(path_value)).resolve()
-            if root is not None and not _path_is_relative_to(source, root):
-                continue
-            if not source.exists() or not source.is_file():
-                continue
-            archive_name = _safe_zip_path(item.get("relative_path") or source.name)
-            archive.writestr(f"artifacts/{archive_name}", _artifact_archive_bytes(source))
+        for item in included_files:
+            source = Path(str(item["path"]))
+            archive.writestr(f"artifacts/{item['archive_name']}", _artifact_archive_bytes(source))
 
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
     return {
@@ -164,7 +163,8 @@ def build_auto_execution_artifacts_zip(session: Session, *, execution_id: int) -
         "filename": f"auto-execution-{execution.id}-artifacts.zip",
         "mime_type": "application/zip",
         "content_base64": encoded,
-        "file_count": len(_artifact_entries(artifacts)) + 1,
+        "file_count": len(included_files) + 1,
+        "skipped_count": len(skipped_files),
     }
 
 
@@ -174,8 +174,7 @@ def build_perf_result_artifacts_zip(session: Session, *, result_id: int) -> dict
         raise ExportPayloadError(f"PerfResult({result_id}) not found")
 
     artifacts = sanitize_export_payload(result.artifacts or {})
-    artifact_dir = artifacts.get("artifact_dir") if isinstance(artifacts, dict) else None
-    root = Path(str(artifact_dir)).resolve() if artifact_dir else None
+    included_files, skipped_files = _collect_artifact_files(artifacts)
     manifest = {
         "result_id": result.id,
         "plan_id": result.plan_id,
@@ -184,31 +183,16 @@ def build_perf_result_artifacts_zip(session: Session, *, result_id: int) -> dict
         "summary_data": sanitize_export_payload(result.summary_data or {}),
         "duration": result.duration,
         "artifacts": artifacts,
+        "included_artifacts": sanitize_export_payload(included_files),
+        "skipped_artifacts": sanitize_export_payload(skipped_files),
     }
 
-    file_count = 1
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-        for item in _artifact_entries(artifacts):
-            path_value = item.get("path")
-            if not path_value:
-                continue
-            source = Path(str(path_value)).resolve()
-            if root is not None and not _path_is_relative_to(source, root):
-                continue
-            if source.is_file():
-                archive_name = _safe_zip_path(item.get("relative_path") or source.name)
-                archive.writestr(f"artifacts/{archive_name}", source.read_bytes())
-                file_count += 1
-            elif source.is_dir():
-                for child in sorted(path for path in source.rglob("*") if path.is_file()):
-                    if root is not None and not _path_is_relative_to(child.resolve(), root):
-                        continue
-                    relative = child.relative_to(source).as_posix()
-                    archive_name = _safe_zip_path(f"{source.name}/{relative}")
-                    archive.writestr(f"artifacts/{archive_name}", child.read_bytes())
-                    file_count += 1
+        for item in included_files:
+            source = Path(str(item["path"]))
+            archive.writestr(f"artifacts/{item['archive_name']}", _artifact_archive_bytes(source))
 
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
     return {
@@ -217,7 +201,8 @@ def build_perf_result_artifacts_zip(session: Session, *, result_id: int) -> dict
         "filename": f"perf-result-{result.id}-artifacts.zip",
         "mime_type": "application/zip",
         "content_base64": encoded,
-        "file_count": file_count,
+        "file_count": len(included_files) + 1,
+        "skipped_count": len(skipped_files),
     }
 
 
@@ -235,7 +220,7 @@ def export_perf_script(session: Session, *, plan_id: int) -> dict[str, Any]:
 
 
 def export_perf_result(session: Session, *, plan_id: int, result_id: int | None = None, output_format: str = "json") -> dict[str, Any]:
-    fmt = _normalize_format(output_format, {"json", "html"})
+    fmt = _normalize_format(output_format, PERF_RESULT_EXPORT_FORMATS)
     plan = _require_active(session, PerfPlan, plan_id, "PerfPlan")
     stmt = select(PerfResult).where(PerfResult.plan_id == plan.id)
     if result_id is not None:
@@ -322,6 +307,15 @@ def _tabular_export(filename: str, fmt: str, rows: list[dict[str, Any]], title: 
     elif fmt == "csv":
         content = _render_csv(safe_rows, columns)
         mime_type = "text/csv; charset=utf-8"
+    elif fmt == "xlsx":
+        content_base64 = base64.b64encode(_render_xlsx(safe_rows, columns, title=title)).decode("ascii")
+        return {
+            "filename": filename,
+            "content_base64": content_base64,
+            "mime_type": XLSX_MIME_TYPE,
+            "format": fmt,
+            "count": len(safe_rows),
+        }
     else:
         content = _render_markdown(title, safe_rows, columns)
         mime_type = "text/markdown; charset=utf-8"
@@ -339,8 +333,91 @@ def _render_csv(rows: list[dict[str, Any]], columns: tuple[tuple[str, str], ...]
     writer = csv.DictWriter(output, fieldnames=[label for _, label in columns], extrasaction="ignore")
     writer.writeheader()
     for row in rows:
-        writer.writerow({label: _cell(row.get(key)) for key, label in columns})
+        writer.writerow({label: _spreadsheet_cell(row.get(key)) for key, label in columns})
     return output.getvalue()
+
+
+def _render_xlsx(rows: list[dict[str, Any]], columns: tuple[tuple[str, str], ...], *, title: str) -> bytes:
+    sheet_rows = [[label for _, label in columns]]
+    sheet_rows.extend([[_spreadsheet_cell(row.get(key)) for key, _ in columns] for row in rows])
+    sheet_xml = _xlsx_sheet_xml(sheet_rows)
+    workbook_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="{_xml_attr(_sheet_name(title))}" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", _xlsx_content_types())
+        archive.writestr("_rels/.rels", _xlsx_root_relationships())
+        archive.writestr("docProps/app.xml", _xlsx_app_props())
+        archive.writestr("docProps/core.xml", _xlsx_core_props())
+        archive.writestr("xl/workbook.xml", workbook_xml)
+        archive.writestr("xl/_rels/workbook.xml.rels", _xlsx_workbook_relationships())
+        archive.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+    return buffer.getvalue()
+
+
+def _xlsx_sheet_xml(rows: list[list[str]]) -> str:
+    xml_rows: list[str] = []
+    for row_index, row in enumerate(rows, start=1):
+        cells: list[str] = []
+        for column_index, value in enumerate(row, start=1):
+            ref = f"{_excel_column_name(column_index)}{row_index}"
+            cells.append(f'<c r="{ref}" t="inlineStr"><is><t>{_xml_text(value)}</t></is></c>')
+        xml_rows.append(f'<row r="{row_index}">{"".join(cells)}</row>')
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    {''.join(xml_rows)}
+  </sheetData>
+</worksheet>"""
+
+
+def _xlsx_content_types() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"""
+
+
+def _xlsx_root_relationships() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>"""
+
+
+def _xlsx_workbook_relationships() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"""
+
+
+def _xlsx_app_props() -> str:
+    return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>AI Test Platform</Application>
+</Properties>"""
+
+
+def _xlsx_core_props() -> str:
+    created = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:creator>AI Test Platform</dc:creator>
+  <dcterms:created xsi:type="dcterms:W3CDTF">{created}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">{created}</dcterms:modified>
+</cp:coreProperties>"""
 
 
 def _render_markdown(title: str, rows: list[dict[str, Any]], columns: tuple[tuple[str, str], ...]) -> str:
@@ -425,6 +502,110 @@ def _artifact_entries(artifacts: Any) -> list[dict[str, Any]]:
     return list(unique.values())
 
 
+def _collect_artifact_files(artifacts: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    entries = _artifact_entries(artifacts)
+    root = _artifact_root(artifacts)
+    included: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for entry in entries:
+        source = _canonical_path(entry.get("path"))
+        if source is None:
+            skipped.append(_skipped_artifact(entry, "invalid_path"))
+            continue
+        if root is None:
+            skipped.append(_skipped_artifact(entry, "missing_artifact_root", canonical_path=str(source)))
+            continue
+        if not _path_is_relative_to(source, root):
+            skipped.append(_skipped_artifact(entry, "outside_artifact_root", canonical_path=str(source)))
+            continue
+        if source.is_file():
+            if not _artifact_relative_path_allowed(entry):
+                skipped.append(_skipped_artifact(entry, "relative_path_outside_artifact_root", canonical_path=str(source)))
+                continue
+            archive_name = _artifact_archive_name(source, root, entry)
+            marker = (str(source), archive_name)
+            if marker not in seen:
+                seen.add(marker)
+                included.append(_included_artifact(source, archive_name, entry, root))
+            continue
+        if source.is_dir():
+            for child in sorted(path for path in source.rglob("*") if path.is_file()):
+                child_source = _canonical_path(child)
+                if child_source is None or not _path_is_relative_to(child_source, root):
+                    skipped.append(_skipped_artifact({"path": str(child)}, "outside_artifact_root"))
+                    continue
+                archive_name = _safe_zip_path(child_source.relative_to(root).as_posix())
+                marker = (str(child_source), archive_name)
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                included.append(_included_artifact(child_source, archive_name, entry, root))
+            continue
+        skipped.append(_skipped_artifact(entry, "not_found", canonical_path=str(source)))
+
+    return included, skipped
+
+
+def _artifact_root(artifacts: Any) -> Path | None:
+    if not isinstance(artifacts, dict):
+        return None
+    for key in ("artifact_dir", "artifact_root", "root_dir"):
+        value = artifacts.get(key)
+        if value:
+            return _canonical_path(value)
+    return None
+
+
+def _canonical_path(value: Any) -> Path | None:
+    if value in (None, ""):
+        return None
+    try:
+        return Path(str(value)).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _artifact_archive_name(source: Path, root: Path, entry: dict[str, Any]) -> str:
+    relative_path = entry.get("relative_path")
+    if relative_path:
+        return _safe_zip_path(str(relative_path))
+    return _safe_zip_path(source.relative_to(root).as_posix())
+
+
+def _artifact_relative_path_allowed(entry: dict[str, Any]) -> bool:
+    relative_path = entry.get("relative_path")
+    if relative_path in (None, ""):
+        return True
+    path = PurePosixPath(str(relative_path).replace("\\", "/"))
+    return not path.is_absolute() and ".." not in path.parts and ":" not in path.parts[0]
+
+
+def _included_artifact(source: Path, archive_name: str, entry: dict[str, Any], root: Path) -> dict[str, Any]:
+    try:
+        size_bytes = source.stat().st_size
+    except OSError:
+        size_bytes = 0
+    return {
+        "kind": entry.get("kind") or entry.get("type") or entry.get("artifact_type"),
+        "path": str(source),
+        "relative_path": source.relative_to(root).as_posix(),
+        "archive_name": archive_name,
+        "size_bytes": size_bytes,
+    }
+
+
+def _skipped_artifact(entry: dict[str, Any], reason: str, *, canonical_path: str | None = None) -> dict[str, Any]:
+    return {
+        "reason": reason,
+        "kind": entry.get("kind") or entry.get("type") or entry.get("artifact_type"),
+        "path": entry.get("path"),
+        "relative_path": entry.get("relative_path"),
+        "canonical_path": canonical_path,
+    }
+
+
 def _render_perf_result_html(payload: dict[str, Any]) -> str:
     plan = payload.get("plan") or {}
     result = payload.get("result") or {}
@@ -482,7 +663,9 @@ def _html_escape(value: Any) -> str:
 
 
 def _normalize_format(value: str | None, allowed: set[str]) -> str:
-    fmt = (value or "markdown").lower()
+    fmt = (value or "markdown").strip().lower()
+    if is_unsupported_export_format(fmt):
+        raise UnsupportedFormatError(unsupported_export_detail(fmt, allowed))
     if fmt not in allowed:
         raise ExportPayloadError(f"format must be one of: {', '.join(sorted(allowed))}")
     return fmt
@@ -509,7 +692,7 @@ def _require_active(session: Session, model: type[Any], item_id: int, label: str
 
 
 def _filename(prefix: str, fmt: str) -> str:
-    ext = {"markdown": "md", "csv": "csv", "json": "json"}[fmt]
+    ext = {"markdown": "md", "csv": "csv", "json": "json", "xlsx": "xlsx"}[fmt]
     return f"{prefix}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.{ext}"
 
 
@@ -520,6 +703,39 @@ def _cell(value: Any) -> str:
     if isinstance(value, (list, dict)):
         return json.dumps(value, ensure_ascii=False)
     return str(value)
+
+
+def _spreadsheet_cell(value: Any) -> str:
+    text = _cell(value)
+    if text.startswith(FORMULA_PREFIXES):
+        return "'" + text
+    return text
+
+
+def _excel_column_name(index: int) -> str:
+    letters = ""
+    current = index
+    while current:
+        current, remainder = divmod(current - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters or "A"
+
+
+def _sheet_name(value: str) -> str:
+    clean = "".join(ch if ch not in "[]:*?/\\'" else " " for ch in str(value or "Sheet1")).strip()
+    return (clean[:31] or "Sheet1")
+
+
+def _xml_text(value: Any) -> str:
+    return xml_escape(_strip_invalid_xml_chars(str(value or "")), {'"': "&quot;"})
+
+
+def _xml_attr(value: Any) -> str:
+    return _xml_text(value)
+
+
+def _strip_invalid_xml_chars(value: str) -> str:
+    return "".join(ch for ch in value if ch in "\t\n\r" or ord(ch) >= 32)
 
 
 def _escape_markdown(value: str) -> str:
@@ -565,9 +781,10 @@ def _is_sensitive_key(key: str) -> bool:
 
 def _redact_sensitive_text(value: str) -> str:
     redacted = value
-    lowered = redacted.lower()
-    if any(pattern in lowered for pattern in ("bearer ", "basic ", "api_key=", "token=", "password=", "secret=", "authorization:")):
-        return "***"
+    redacted = re.sub(r"(?im)^\s*authorization\s*:\s*.*$", "***", redacted)
+    redacted = re.sub(r"(?im)^\s*cookie\s*:\s*.*$", "***", redacted)
+    redacted = re.sub(r"(?i)\b(?:bearer|basic)\s+[^\s,;}\]\"']+", "***", redacted)
+    redacted = re.sub(r"(?i)\b(?:api[_-]?key|token|cookie|password|secret)(\s*[:=]\s*)[^\s,;}\]\"']+", "***", redacted)
     for marker in ("sk-round11-fake-secret",):
         redacted = redacted.replace(marker, "***")
     redacted = re.sub(r"(?i)round\d+-[a-z0-9_-]*secret[a-z0-9_-]*", "***", redacted)

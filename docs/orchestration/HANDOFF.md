@@ -471,6 +471,19 @@
 - R29 残余风险：数据生成与建议按当前本地规则和现有数据口径输出；存储统计和备份提醒基于当前本地 SQLite/artifacts 文件布局。
 
 ## R30 预备交接
-- 下一步进入 R30：文件与导出格式增强。
-- R30 应围绕 `.xlsx`、PDF、Word、XMind 的本地安全导出能力继续评估和拆分；如需要新增生产依赖，应先按项目依赖规则说明原因、替代方案和风险。
-- R30-R32 仍为未完成排期；不得把生产基础设施决策或第二轮总验收写成已完成。
+- R30 已完成并验收，预备交接关闭。
+
+## R30 完成交接
+- R30 名称：文件与导出格式增强。
+- 后端已完成统一 unsupported contract、无依赖 XLSX 导出 test-cases/defects、公式注入中和、二进制 docx/pdf/xlsx/xmind 导入硬边界。
+- 后端已完成自动化/性能 artifact ZIP canonical path 校验；越界文件不进入 ZIP，记录为 skipped metadata；文本类 artifact 内容继续脱敏。
+- 前端已移除假下载/假成功；TestCases 支持 CSV、Markdown、JSON、XLSX 四种真实下载；PDF、Word、XMind 未开放真实服务端生成并提示未开放；Reports/Performance 使用 HTML/Markdown 替代；统一下载 helper 处理 unsupported、空内容和真实文件下载。
+- R30 验收证据见 `docs/orchestration/ROUND30_REPORT.md`；定向测试 `backend/tests/test_round30_file_export_formats.py` 为 36 passed。
+- 验证结果：`python -m compileall backend\aitest_platform` 通过；R30 定向 36 passed；合同回归组合 64 passed；后端全量通过；`npm run build` 通过；真实 Chrome 烟测通过，TestCases 四种真实下载、XLSX 真实 ZIP workbook、unsupported 不返回假文件字段、artifact 越界 skipped，`console.error=0`，`pageerror=0`。
+- 端口说明：本机 8000 被既有 PID 4588 占用，验收使用 8001，未触碰外部进程。
+- R30 残余风险：PDF/Word/XMind 未做真实服务端生成；本轮未新增生产依赖；docx/pdf/xlsx/xmind 导入只建立硬边界，不做深度解析。
+
+## R31 预备交接
+- 下一步进入 R31：生产基础设施决策。
+- R31 应只做 Alembic、PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储等生产基础设施的决策与取舍记录；不得静默引入新依赖或把决策项写成已实施。
+- R31-R32 仍为未完成排期；不得把第二轮总验收写成已完成。

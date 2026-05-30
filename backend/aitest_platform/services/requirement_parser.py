@@ -4,14 +4,30 @@ import hashlib
 import re
 from typing import Any
 
+from aitest_platform.services.file_formats import UnsupportedFormatError, detect_unsupported_import_format, unsupported_import_detail
+
 
 PARSER_NAME = "markdown-text-rules-v1"
+SUPPORTED_REQUIREMENT_IMPORT_FORMATS = {"markdown", "text"}
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.+?)\s*$")
 
 
+def ensure_supported_requirement_source(*, document_name: str, source_type: str) -> None:
+    unsupported_format = detect_unsupported_import_format({"source_type": source_type, "name": document_name})
+    if unsupported_format is not None:
+        raise UnsupportedFormatError(
+            unsupported_import_detail(
+                unsupported_format,
+                SUPPORTED_REQUIREMENT_IMPORT_FORMATS,
+                error_code="unsupported_requirement_document_format",
+            )
+        )
+
+
 def parse_requirement_blocks(content: str | None, *, document_id: int, document_name: str, source_type: str) -> list[dict[str, Any]]:
+    ensure_supported_requirement_source(document_name=document_name, source_type=source_type)
     text = content if content not in (None, "") else document_name
     lines = text.splitlines() or [text]
     blocks: list[dict[str, Any]] = []

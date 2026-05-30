@@ -16,8 +16,21 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, downloadTextFile, formatDateTime, pickList } from '../lib/api';
+import { apiGet, apiPost, downloadExportedFile, formatDownloadError, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
+
+const SUPPORTED_CASE_EXPORT_FORMATS = [
+  { id: 'csv', label: 'CSV' },
+  { id: 'markdown', label: 'Markdown' },
+  { id: 'json', label: 'JSON' },
+  { id: 'xlsx', label: 'XLSX' }
+];
+
+const UNSUPPORTED_CASE_EXPORT_FORMATS = [
+  { id: 'pdf', label: 'PDF' },
+  { id: 'word', label: 'Word' },
+  { id: 'xmind', label: 'XMind' }
+];
 
 const mapCaseStatus = (status) => {
   const normalized = String(status || '').toLowerCase();
@@ -347,6 +360,11 @@ export default function TestCases() {
   };
 
   const handleExportCases = async (format) => {
+    if (!SUPPORTED_CASE_EXPORT_FORMATS.some(item => item.id === format)) {
+      showToast('PDF / Word / XMind 导出未开放；请使用 Markdown 或 HTML 替代，不会生成假下载文件。', 'info');
+      return;
+    }
+
     if (!projectContext?.id && !selectedRequirementItem?.backendId) {
       window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '后端数据尚未同步，暂不能导出真实用例。', type: 'error' } }));
       return;
@@ -361,14 +379,13 @@ export default function TestCases() {
           format
         }
       });
-      downloadTextFile({
-        filename: exported.filename,
-        content: exported.content,
-        mimeType: exported.mime_type
+      downloadExportedFile(exported, {
+        format,
+        defaultFilename: `test-cases.${format === 'markdown' ? 'md' : format}`
       });
-      window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '测试用例文件已开始下载。', type: 'success' } }));
+      window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: `${format.toUpperCase()} 测试用例文件已开始下载。`, type: 'success' } }));
     } catch (error) {
-      window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: error?.message || '测试用例导出失败。', type: 'error' } }));
+      window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: formatDownloadError(error, '测试用例导出失败。'), type: 'error' } }));
     } finally {
       setIsExportingCases(false);
     }
@@ -1436,23 +1453,29 @@ export default function TestCases() {
               {/* 导出与分享 */}
               <div className="theme-card rounded-xl p-4 shadow-soft text-left space-y-2.5">
                 <h3 className="text-xs font-bold text-[var(--text-primary)] border-b border-[var(--border-color)] pb-2">数据报表分发</h3>
-                <div className="grid grid-cols-2 gap-2 text-center text-[10px] font-bold text-[var(--text-primary)]">
-                  <button
-                    onClick={() => handleExportCases('csv')}
-                    disabled={isExportingCases}
-                    className="flex items-center justify-center gap-1 p-2 border border-[var(--border-color)] rounded-lg hover:bg-[var(--border-color)]/30 cursor-pointer bg-[var(--bg-card)] transition-colors"
-                  >
-                    <Download className="size-3.5 text-[var(--text-secondary)]" />
-                    <span>{isExportingCases ? '导出中' : '导出 CSV'}</span>
-                  </button>
-                  <button
-                    onClick={() => handleExportCases('markdown')}
-                    disabled={isExportingCases}
-                    className="flex items-center justify-center gap-1 p-2 border border-[var(--border-color)] rounded-lg hover:bg-[var(--border-color)]/30 cursor-pointer bg-[var(--bg-card)] transition-colors"
-                  >
-                    <Download className="size-3.5 text-[var(--text-secondary)]" />
-                    <span>{isExportingCases ? '导出中' : '导出 Markdown'}</span>
-                  </button>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-[10px] font-bold text-[var(--text-primary)]">
+                  {SUPPORTED_CASE_EXPORT_FORMATS.map(format => (
+                    <button
+                      key={format.id}
+                      onClick={() => handleExportCases(format.id)}
+                      disabled={isExportingCases}
+                      className="flex min-h-[34px] items-center justify-center gap-1 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] p-2 transition-colors hover:bg-[var(--border-color)]/30 disabled:opacity-60"
+                    >
+                      <Download className="size-3.5 shrink-0 text-[var(--text-secondary)]" />
+                      <span className="leading-tight">{isExportingCases ? '导出中' : format.label}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center text-[9px] font-bold text-[var(--text-secondary)]">
+                  {UNSUPPORTED_CASE_EXPORT_FORMATS.map(format => (
+                    <button
+                      key={format.id}
+                      onClick={() => handleExportCases(format.id)}
+                      className="min-h-[32px] rounded-lg border border-dashed border-[var(--border-color)] bg-[var(--border-color)]/10 px-2 py-1.5 leading-tight"
+                    >
+                      {format.label} 未开放，使用 Markdown/HTML 替代
+                    </button>
+                  ))}
                 </div>
               </div>
 

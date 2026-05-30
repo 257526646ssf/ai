@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, apiRequest, downloadTextFile, formatDateTime, pickList } from '../lib/api';
+import { apiGet, apiPost, apiRequest, downloadExportedFile, formatDownloadError, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
 const DEMO_PROJECT_NAME = 'AI 测试演示项目';
@@ -873,7 +873,7 @@ export default function Execution() {
 
   const handleExportDefects = async () => {
     if (!projectContext?.id) {
-      showToast('已成功导出 5 个活动缺陷至 CSV 文件。', 'success');
+      showToast('当前没有真实项目，无法导出后端缺陷 CSV；已取消假下载。', 'info');
       return;
     }
 
@@ -882,14 +882,13 @@ export default function Execution() {
       const exported = await apiGet('/defects/export', {
         params: { projectId: projectContext.id, format: 'csv' }
       });
-      downloadTextFile({
-        filename: exported.filename || `defects-${projectContext.id}.csv`,
-        content: exported.content || '',
-        mimeType: exported.mime_type || 'text/csv;charset=utf-8'
+      downloadExportedFile(exported, {
+        format: 'csv',
+        defaultFilename: `defects-${projectContext.id}.csv`
       });
       showToast('缺陷 CSV 文件已开始下载。', 'success');
     } catch (error) {
-      showToast(error?.message || '后端不可用，暂无法导出真实缺陷列表。', 'error');
+      showToast(formatDownloadError(error, '后端不可用，暂无法导出真实缺陷列表。'), 'error');
     } finally {
       setIsExportingDefects(false);
     }

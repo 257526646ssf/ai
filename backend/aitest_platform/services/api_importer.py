@@ -7,9 +7,12 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
+from aitest_platform.services.file_formats import detect_unsupported_import_format, unsupported_import_detail
+
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "options", "head"}
 SENSITIVE_KEY_PARTS = ("authorization", "api_key", "api-key", "apikey", "token", "cookie", "secret", "password")
+SUPPORTED_API_IMPORT_FORMATS = {"curl", "har", "manual", "openapi", "postman", "swagger"}
 SENSITIVE_TEXT_PATTERN = re.compile(
     r"(?i)(authorization|api[_-]?key|token|cookie|secret|password)(\s*[:=]\s*)(Bearer\s+)?[^\s,;}\"]+"
 )
@@ -17,6 +20,13 @@ SENSITIVE_TEXT_PATTERN = re.compile(
 
 class ApiImportError(ValueError):
     pass
+
+
+class ApiImportUnsupportedFormatError(ApiImportError):
+    def __init__(self, detail: dict[str, Any], *, status_code: int = 415) -> None:
+        self.detail = detail
+        self.status_code = status_code
+        super().__init__(str(detail.get("message") or "Unsupported API import format"))
 
 
 @dataclass(frozen=True)
@@ -29,6 +39,15 @@ class ApiImportResult:
 
 def parse_api_import_payload(payload: dict[str, Any]) -> ApiImportResult:
     data = payload if isinstance(payload, dict) else {}
+    unsupported_format = detect_unsupported_import_format(data)
+    if unsupported_format is not None:
+        raise ApiImportUnsupportedFormatError(
+            unsupported_import_detail(
+                unsupported_format,
+                SUPPORTED_API_IMPORT_FORMATS,
+                error_code="unsupported_api_import_format",
+            )
+        )
     source = _source_type(data)
     generate_cases = bool(data.get("generate_cases") or data.get("create_cases") or data.get("create_test_cases"))
 
@@ -73,7 +92,10 @@ def sanitize_import_payload(value: Any) -> Any:
     return value
 
 
-def safe_import_error_detail(exc: Exception) -> dict[str, str]:
+def safe_import_error_detail(exc: Exception) -> dict[str, Any]:
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, dict):
+        return sanitize_import_payload(detail)
     message = str(sanitize_import_payload({"error": str(exc)}).get("error") or "Invalid API import payload")
     return {"code": "invalid_api_import", "message": message[:500]}
 

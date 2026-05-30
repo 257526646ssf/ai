@@ -128,6 +128,11 @@ from aitest_platform.services.execution_defect_loop import (
     sanitize_loop_payload,
     status_bucket,
 )
+from aitest_platform.services.file_formats import (
+    UnsupportedFormatError,
+    detect_unsupported_import_format,
+    unsupported_import_detail,
+)
 from aitest_platform.services.perf_runner import inspect_jmeter_dependency, run_jmeter_plan, sanitize_perf_payload
 from aitest_platform.services.perf_analysis import (
     PerfPayloadError,
@@ -288,6 +293,27 @@ def repo_error(exc: Exception) -> HTTPException:
     if isinstance(exc, NotFoundError):
         return HTTPException(status_code=404, detail=str(exc))
     return HTTPException(status_code=500, detail=exc.__class__.__name__)
+
+
+def unsupported_format_http(exc: Exception) -> HTTPException:
+    detail = getattr(exc, "detail", None)
+    if not isinstance(detail, dict):
+        detail = {"error_code": "unsupported_format", "message": str(exc)}
+    return HTTPException(status_code=int(getattr(exc, "status_code", 415)), detail=detail)
+
+
+def unsupported_requirement_import_http(data: dict[str, Any]) -> HTTPException | None:
+    fmt = detect_unsupported_import_format(data)
+    if fmt is None:
+        return None
+    return HTTPException(
+        status_code=415,
+        detail=unsupported_import_detail(
+            fmt,
+            {"markdown", "text"},
+            error_code="unsupported_requirement_document_format",
+        ),
+    )
 
 
 def db_page(session, model: Any, page_num: int, page_size: int, *criteria: Any, order_by: Any | None = None) -> dict[str, Any]:
@@ -1145,6 +1171,9 @@ def list_requirement_lib_items(libId: str, page_num: int = Query(1, alias="page"
 @router.post("/projects/{projectId}/requirement-documents")
 def create_requirement_document(projectId: str, payload: WritePayload):
     data = payload_dict(payload)
+    unsupported = unsupported_requirement_import_http(data)
+    if unsupported is not None:
+        raise unsupported
     with session_scope() as session:
         try:
             document = AitestRepository(session).create_requirement_document(
@@ -1197,6 +1226,8 @@ def parse_requirement_document(documentId: str, payload: WritePayload | None = N
                 "blocks": [model_dict(block) for block in blocks],
                 "input": safe_summary_payload(payload_dict(payload)),
             })
+        except UnsupportedFormatError as exc:
+            raise unsupported_format_http(exc) from exc
         except Exception as exc:
             raise repo_error(exc)
 
@@ -1262,6 +1293,8 @@ def extract_requirement_items(documentId: str, payload: WritePayload | None = No
             return safe_requirement_closure_payload({"document_id": to_int(documentId, "documentId"), "job": model_dict(job), "items": [model_dict(item) for item in items], "input": safe_summary_payload(payload_dict(payload))})
         except HTTPException:
             raise
+        except UnsupportedFormatError as exc:
+            raise unsupported_format_http(exc) from exc
         except Exception as exc:
             raise repo_error(exc)
 
@@ -1682,6 +1715,8 @@ def export_test_cases_endpoint(
                 case_type=case_type or caseType,
                 output_format=format,
             )
+        except UnsupportedFormatError as exc:
+            raise unsupported_format_http(exc) from exc
         except ExportPayloadError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2298,6 +2333,8 @@ def export_defects_endpoint(projectId: str | None = None, project_id: str | None
                 status=status,
                 output_format=format,
             )
+        except UnsupportedFormatError as exc:
+            raise unsupported_format_http(exc) from exc
         except ExportPayloadError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -2479,7 +2516,7 @@ def import_api_documents(libId: str, payload: WritePayload):
     try:
         import_result = parse_api_import_payload(data)
     except ApiImportError as exc:
-        raise HTTPException(status_code=400, detail=safe_import_error_detail(exc)) from exc
+        raise HTTPException(status_code=int(getattr(exc, "status_code", 400)), detail=safe_import_error_detail(exc)) from exc
     with session_scope() as session:
         lib = require_db_item(session, ApiTestLib, libId, "libId")
         response = _persist_imported_apis(session, lib, import_result, "import_document")
@@ -2499,7 +2536,7 @@ def import_apis(libId: str, payload: WritePayload):
     try:
         import_result = parse_api_import_payload(data)
     except ApiImportError as exc:
-        raise HTTPException(status_code=400, detail=safe_import_error_detail(exc)) from exc
+        raise HTTPException(status_code=int(getattr(exc, "status_code", 400)), detail=safe_import_error_detail(exc)) from exc
     with session_scope() as session:
         lib = require_db_item(session, ApiTestLib, libId, "libId")
         return _persist_imported_apis(session, lib, import_result, "import")
@@ -3658,6 +3695,8 @@ def download_perf_result(planId: str, resultId: str, format: str = Query("json")
                 result_id=None if str(resultId).lower() == "latest" else to_int(resultId, "resultId"),
                 output_format=format,
             )
+        except UnsupportedFormatError as exc:
+            raise unsupported_format_http(exc) from exc
         except ExportPayloadError as exc:
             raise HTTPException(status_code=404 if "not found" in str(exc).lower() else 400, detail=str(exc)) from exc
 
@@ -3842,17 +3881,10 @@ def download_report(reportId: str, format: str = Query("markdown")):
         report = session.get(Report, to_int(reportId, "reportId"))
         if report is None:
             raise HTTPException(status_code=404, detail=f"Report({reportId}) not found")
-        if (format or "").lower() in {"pdf", "word", "doc", "docx"}:
-            raise HTTPException(
-                status_code=415,
-                detail=report_error_detail(
-                    "unsupported export format; supported formats are markdown, html, json",
-                    field="format",
-                    error_code="unsupported_report_export_format",
-                ),
-            )
         try:
             return export_report(report, format)
+        except UnsupportedFormatError as exc:
+            raise unsupported_format_http(exc) from exc
         except ReportingPayloadError as exc:
             raise HTTPException(status_code=400, detail=report_error_detail(str(exc), field="format")) from exc
 

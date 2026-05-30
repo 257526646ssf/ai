@@ -15,12 +15,23 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, apiRequest, downloadBase64File, downloadTextFile, formatDateTime, pickList } from '../lib/api';
+import { apiGet, apiPost, apiRequest, downloadExportedFile, formatDownloadError, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
 const showToast = (message, type = 'success') => {
   window.dispatchEvent(new CustomEvent('show-toast', { detail: { message, type } }));
 };
+
+const SUPPORTED_PERF_RESULT_FORMATS = [
+  { id: 'json', label: 'JSON' },
+  { id: 'html', label: 'HTML' },
+  { id: 'markdown', label: 'Markdown' }
+];
+
+const UNSUPPORTED_REPORT_FORMATS = [
+  { id: 'pdf', label: 'PDF' },
+  { id: 'word', label: 'Word' }
+];
 
 const DEFAULT_TARGET_APIS = [
   { method: 'POST', url: '/api/v1/auth/login', weight: 30 },
@@ -863,13 +874,21 @@ export default function Performance() {
         showToast('当前方案还没有 JMX 脚本，请先生成脚本。', 'info');
         return;
       }
-      downloadTextFile({ filename: payload.filename, content: payload.content, mimeType: payload.mime_type || payload.mimeType });
+      downloadExportedFile(payload, {
+        defaultFilename: `perf-plan-${planId}.jmx`,
+        defaultMimeType: 'application/xml;charset=utf-8'
+      });
     } catch (error) {
-      showToast(`JMX 下载失败：${error.message || error}`, 'error');
+      showToast(formatDownloadError(error, 'JMX 下载失败。'), 'error');
     }
   };
 
   const handleExportPerfResult = async (format = 'json') => {
+    if (!SUPPORTED_PERF_RESULT_FORMATS.some(item => item.id === format)) {
+      showToast('PDF / Word 性能报告未开放；请使用 HTML 或 Markdown 替代，不会生成假下载文件。', 'info');
+      return;
+    }
+
     const planId = perfExecution?.planId || activePlan?.backendId;
     const resultId = perfExecution?.id || activePlan?.latestResult?.id || 'latest';
     if (!planId) {
@@ -878,10 +897,22 @@ export default function Performance() {
     }
     try {
       const payload = await apiGet(`/perf-plans/${planId}/results/${resultId}/download`, { params: { format }, timeoutMs: 15000 });
-      downloadTextFile({ filename: payload.filename, content: payload.content, mimeType: payload.mime_type || payload.mimeType });
+      downloadExportedFile(payload, {
+        format,
+        defaultFilename: `perf-result-${resultId}.${format === 'markdown' ? 'md' : format}`
+      });
+      showToast(`性能结果 ${format.toUpperCase()} 已开始下载。`);
     } catch (error) {
-      showToast(`性能结果导出失败：${error.message || error}`, 'error');
+      showToast(formatDownloadError(error, '性能结果导出失败。'), 'error');
     }
+  };
+
+  const handleExportCompareReport = () => {
+    if (!activePlan?.backendId || compareRows.length < 2) {
+      showToast('当前没有可导出的真实历史比对报告；请先产生至少 2 次后端性能结果。', 'info');
+      return;
+    }
+    showToast('历史比对报告 PDF/Word 导出未开放；请使用性能结果 HTML/Markdown 或报告中心 Markdown/HTML 替代，不会生成假文件。', 'info');
   };
 
   const handleDownloadPerfArtifacts = async () => {
@@ -892,13 +923,12 @@ export default function Performance() {
     }
     try {
       const payload = await apiGet(`/perf-results/${resultId}/artifacts/download`, { timeoutMs: 15000 });
-      downloadBase64File({
-        filename: payload.filename,
-        contentBase64: payload.content_base64,
-        mimeType: payload.mime_type || payload.mimeType
+      downloadExportedFile(payload, {
+        defaultFilename: `perf-artifacts-${resultId}.zip`,
+        defaultMimeType: 'application/zip'
       });
     } catch (error) {
-      showToast(`性能 artifacts 下载失败：${error.message || error}`, 'error');
+      showToast(formatDownloadError(error, '性能 artifacts 下载失败。'), 'error');
     }
   };
 
@@ -943,7 +973,7 @@ export default function Performance() {
     return (
       <div className="space-y-4 text-left animate-[fadeIn_0.2s_ease-out] w-full">
         {/* 面包屑 */}
-        <div className="flex justify-between items-center">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <button 
               onClick={() => setViewMode('list')}
@@ -1232,8 +1262,8 @@ export default function Performance() {
             </div>
           </div>
           <button 
-            onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '多维性能比对报告已成功导出。', type: 'success' } }))}
-            className="px-3 py-1.5 rounded-lg accent-btn text-[11px] font-bold text-white cursor-pointer shadow-sm"
+            onClick={handleExportCompareReport}
+            className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[11px] font-bold text-[var(--text-primary)] cursor-pointer shadow-sm hover:bg-[var(--border-color)]/40"
           >
             导出比对报告
           </button>
@@ -1712,7 +1742,7 @@ export default function Performance() {
         // ==========================================================================
         <div className="space-y-4 text-left">
           {/* 返回 */}
-          <div className="flex justify-between items-center">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <button 
               onClick={() => setViewMode('list')}
               className="flex items-center gap-1 px-2.5 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] text-[10px] text-[var(--text-primary)] hover:bg-[var(--border-color)]/50 transition-colors shadow-sm cursor-pointer"
@@ -1721,7 +1751,7 @@ export default function Performance() {
               <span>返回列表</span>
             </button>
             
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <button 
                 onClick={handleRetest}
                 disabled={isRunning}
@@ -1737,20 +1767,25 @@ export default function Performance() {
                 <Download className="size-3.5" />
                 <span>下载 JMX</span>
               </button>
-              <button
-                onClick={() => handleExportPerfResult('json')}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors"
-              >
-                <Download className="size-3.5" />
-                <span>JSON</span>
-              </button>
-              <button
-                onClick={() => handleExportPerfResult('html')}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors"
-              >
-                <Download className="size-3.5" />
-                <span>HTML</span>
-              </button>
+              {SUPPORTED_PERF_RESULT_FORMATS.map(format => (
+                <button
+                  key={format.id}
+                  onClick={() => handleExportPerfResult(format.id)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors"
+                >
+                  <Download className="size-3.5" />
+                  <span>{format.label}</span>
+                </button>
+              ))}
+              {UNSUPPORTED_REPORT_FORMATS.map(format => (
+                <button
+                  key={format.id}
+                  onClick={() => handleExportPerfResult(format.id)}
+                  className="px-3 py-1.5 rounded-lg border border-dashed border-[var(--border-color)] bg-[var(--border-color)]/10 text-[10px] font-bold text-[var(--text-secondary)]"
+                >
+                  {format.label} 未开放，用 HTML/Markdown 替代
+                </button>
+              ))}
               <button
                 onClick={handleDownloadPerfArtifacts}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors"

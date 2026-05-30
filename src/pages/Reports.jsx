@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, apiRequest, downloadTextFile, formatDateTime, pickList } from '../lib/api';
+import { apiGet, apiPost, apiRequest, downloadExportedFile, formatDownloadError, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
 const SUPPORTED_DOWNLOAD_FORMATS = [
@@ -785,7 +785,7 @@ export default function Reports() {
 
   const handleDownloadReport = async (format) => {
     if (!SUPPORTED_DOWNLOAD_FORMATS.some(item => item.id === format)) {
-      showToast('后端报告下载当前只声明支持 Markdown / HTML / JSON，PDF/Word 未开放，不会生成假文件。', 'info');
+      showToast('PDF / Word 报告未开放；请使用 HTML 或 Markdown 替代，不会生成假下载文件。', 'info');
       return;
     }
     if (!selectedReport?.id || !isNumericId(selectedReport.id)) {
@@ -796,14 +796,13 @@ export default function Reports() {
     setIsDownloadingReport(true);
     try {
       const exported = await apiGet(`/reports/${selectedReport.id}/download`, { params: { format } });
-      downloadTextFile({
-        filename: exported.filename,
-        content: exported.content,
-        mimeType: exported.mime_type
+      downloadExportedFile(exported, {
+        format,
+        defaultFilename: `report-${selectedReport.id}.${format === 'markdown' ? 'md' : format}`
       });
       showToast(`${format.toUpperCase()} 报告已开始下载。`);
     } catch (error) {
-      showToast(error?.message || '报告下载失败。', 'error');
+      showToast(formatDownloadError(error, '报告下载失败。'), 'error');
     } finally {
       setIsDownloadingReport(false);
     }
@@ -1408,7 +1407,7 @@ export default function Reports() {
                   onClick={() => handleDownloadReport(format.id)}
                   className="rounded-lg border border-dashed border-[var(--border-color)] bg-[var(--border-color)]/10 px-2 py-1.5 text-[9px] font-bold text-[var(--text-secondary)]"
                 >
-                  {format.label} 未开放
+                  {format.label} 未开放，用 HTML/Markdown 替代
                 </button>
               ))}
             </div>
@@ -1594,7 +1593,7 @@ export default function Reports() {
               onClick={() => handleDownloadReport(format.id)}
               className="rounded-lg border border-dashed border-[var(--border-color)] bg-[var(--border-color)]/10 px-3 py-1.5 text-[10px] font-bold text-[var(--text-secondary)]"
             >
-              {format.label} 未开放
+              {format.label} 未开放，用 HTML/Markdown 替代
             </button>
           ))}
         </div>

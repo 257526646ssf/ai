@@ -599,3 +599,31 @@
 - Real cleanup was not executed because dry-run would affect 849 artifact files; this was kept inside the safety boundary.
 - Port note: local 8000 was already occupied by `python -m http.server 8000` PID 4588, so acceptance used 8001 and did not touch non-current processes.
 - Residual risks: data generation and suggestions are based on current local rules/data; storage statistics and backup reminders use the current local SQLite/artifacts layout.
+
+## 第三十轮验收
+- [x] R30 名称为文件与导出格式增强。
+- [x] 后端统一 unsupported contract，不再为未支持格式返回假文件字段。
+- [x] 后端无新增生产依赖支持 test-cases/defects 的 XLSX 导出。
+- [x] CSV/XLSX 导出已做公式注入中和。
+- [x] docx/pdf/xlsx/xmind 导入已建立二进制格式硬边界。
+- [x] 自动化/性能 artifact ZIP 已做 canonical path 校验。
+- [x] artifact 越界文件不进入 ZIP，并记录 skipped metadata。
+- [x] artifact 文本内容继续脱敏。
+- [x] 前端已移除假下载/假成功。
+- [x] TestCases 支持 CSV、Markdown、JSON、XLSX 四种真实下载。
+- [x] PDF、Word、XMind 未开放真实服务端生成，前端展示未开放提示。
+- [x] Reports/Performance 使用 HTML/Markdown 作为当前替代下载格式。
+- [x] 统一下载 helper 处理 unsupported、空内容和真实下载。
+- [x] R30 定向测试、合同回归组合、后端全量、前端构建和真实 Chrome 烟测均已验证通过。
+
+## Round 30 Evidence
+- 新增 `backend/tests/test_round30_file_export_formats.py`。
+- R30 范围的后端导出、导入边界、artifact ZIP 安全和前端下载处理已完成；详见 `docs/orchestration/ROUND30_REPORT.md`。
+- `python -m compileall backend\aitest_platform`: passed.
+- R30 定向测试：36 passed。
+- 合同回归组合：64 passed。
+- 后端全量回归：passed。
+- 根目录 `npm run build`: passed。
+- 真实 Chrome 烟测：passed；TestCases CSV/Markdown/JSON/XLSX 均为真实下载；XLSX 为真实 ZIP workbook；unsupported 响应不返回假文件字段；artifact 越界条目进入 skipped；console.error=0；pageerror=0。
+- 端口说明：本机 8000 已被 PID 4588 占用，验收使用 8001，未触碰外部进程。
+- 残余风险：PDF/Word/XMind 未做真实服务端生成；本轮未新增生产依赖；docx/pdf/xlsx/xmind 导入当前只建立硬边界，不做深度解析。

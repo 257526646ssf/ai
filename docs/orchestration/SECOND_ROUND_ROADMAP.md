@@ -40,7 +40,7 @@
 | R27 | 2026-05-30 已验收；原窗口 2026-06-12 ~ 2026-06-14 | P0 | 性能测试增强 | 已完成：中止/停止执行接口、阈值判定、历史对比、JMeter 模板参数编辑、性能趋势聚合、报告风险建议。验收证据见 `ROUND27_REPORT.md`。 |
 | R28 | 2026-05-30 已验收 | P0 | 报告中心增强 | 已完成：report-templates CRUD 校验与默认唯一、综合报告模板/scope 冻结、报告列表过滤排序、下钻、风险转待办、Markdown/HTML 强化、unsupported PDF/Word/docx 结构化返回、轻量结论类型。验收证据见 `ROUND28_REPORT.md`。 |
 | R29 | 2026-05-30 已验收 | P1 | 数据工厂与数据管理 | 已完成：接口参数测试数据生成、执行测试数据建议、备份状态提醒、存储空间统计、清理 dry-run/确认门、模块白名单、路径根目录限制和响应脱敏。验收证据见 `ROUND29_REPORT.md`。 |
-| R30 | R29 验收后 | P1 | 文件与导出格式增强 | 待开始：评估并实现 `.xlsx`、PDF、Word、XMind 的本地安全导出；若依赖未批准，保留 Markdown/CSV/HTML/ZIP 完整替代。 |
+| R30 | 2026-05-30 已验收 | P1 | 文件与导出格式增强 | 已完成：统一 unsupported contract；无依赖 XLSX 导出 test-cases/defects；公式注入中和；二进制 docx/pdf/xlsx/xmind 导入硬边界；自动化/性能 artifact ZIP canonical path 校验、越界 skipped metadata 和文本脱敏；前端移除假下载并支持 TestCases CSV/Markdown/JSON/XLSX。PDF/Word/XMind 未做真实服务端生成。验收证据见 `ROUND30_REPORT.md`。 |
 | R31 | R30 验收后 | 决策门 | 生产基础设施 | 待决策：Alembic、PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储。默认不静默引入，需在 `DECISIONS.md` 明确选择后实施。 |
 | R32 | R31 决策后 | P0 | 第二轮总验收 | 待开始：全量测试、前端构建、核心浏览器流程、导出下载、secrets 扫描、远程分支校验、最终交付报告。 |
 
@@ -84,9 +84,9 @@
 
 ## 当前下一步
 
-立即进入 R30：文件与导出格式增强。
-- 评估并实现 `.xlsx`、PDF、Word、XMind 的本地安全导出；若依赖未批准，保留 Markdown/CSV/HTML/ZIP 完整替代。
-- R30-R32 仍保持未完成排期，分别等待文件与导出格式增强、生产基础设施决策和第二轮总验收。
+立即进入 R31：生产基础设施决策。
+- R30 文件与导出格式增强已完成并验收；PDF/Word/XMind 未做真实服务端生成，本轮未新增生产依赖。
+- R31-R32 仍保持未完成排期，分别等待生产基础设施决策和第二轮总验收。
 - 继续保持脱敏、本地优先和结构化失败约束。
 
 ## 当前进展
@@ -168,4 +168,13 @@
 - R29 验收证据见 `docs/orchestration/ROUND29_REPORT.md`：R29 定向测试复验 5 passed，合同回归组合 passed，后端全量 passed，`npm run build` passed，浏览器复验 passed，Settings cleanup dry-run 200，`console.error=0`，`pageerror=0`。
 - 真实清理未执行：dry-run 显示会影响 849 个 artifact 文件，出于安全边界仅验证 dry-run 和确认门能力。
 - 端口说明：本机 8000 被既有 `python -m http.server 8000` PID 4588 占用，验收使用 8001，未触碰非本次启动进程。
-- 下一步进入 R30：文件与导出格式增强。R30-R32 保持未完成排期。
+- 下一步已进入并完成 R30：文件与导出格式增强。
+
+## 当前进展补充：R30
+- R30 已完成文档收口：文件与导出格式增强已落地并验收。
+- 后端完成统一 unsupported contract、无依赖 XLSX 导出 test-cases/defects、公式注入中和、二进制 docx/pdf/xlsx/xmind 导入硬边界、自动化/性能 artifact ZIP canonical path 校验、越界 skipped metadata 和文本脱敏。
+- 前端移除假下载/假成功；TestCases 支持 CSV、Markdown、JSON、XLSX 四种真实下载；PDF、Word、XMind 未开放真实服务端生成并提示未开放；Reports/Performance 使用 HTML/Markdown 替代；统一下载 helper 处理 unsupported、空内容和真实下载。
+- R30 验收证据见 `docs/orchestration/ROUND30_REPORT.md`：`python -m compileall backend\aitest_platform` 通过；R30 定向 36 passed；合同回归组合 64 passed；后端全量通过；`npm run build` 通过；真实 Chrome 烟测通过，`console.error=0`，`pageerror=0`。
+- R30 冒烟事实：TestCases 四种真实下载均可用；XLSX 为真实 ZIP workbook；unsupported 不返回假文件字段；artifact 越界条目进入 skipped metadata。
+- R30 残余风险：PDF/Word/XMind 未做真实服务端生成；本轮未新增生产依赖；docx/pdf/xlsx/xmind 导入只建立硬边界，不做深度解析。
+- 下一步进入 R31：生产基础设施决策。R31-R32 保持未完成排期。

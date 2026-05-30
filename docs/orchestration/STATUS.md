@@ -1,7 +1,7 @@
 # 后端实现状态
 
 ## 阶段
-- 当前阶段：截至 2026-05-30，Round 29 已验收；数据工厂、测试数据建议、备份状态提醒、存储空间统计和模块化清理安全门已完成。
+- 当前阶段：截至 2026-05-30，Round 30 已验收；文件与导出格式增强已完成，下一步进入 R31 生产基础设施决策。
 - 日期说明：第二轮路线图中的旧时间窗口如与实际完成时间冲突，以各 Round 报告、验收记录和提交/测试证据为准。
 - 目标：在不改变前端视觉风格的前提下，实现需求文档与技术实现方案中的后端基础能力。
 - 主线程职责：拆解、派工、验收、进度统一；产品实现代码由子任务完成。
@@ -602,4 +602,15 @@
 - 真实清理未执行：dry-run 显示会影响 849 个 artifact 文件，出于安全边界仅验证 dry-run 和确认门能力。
 - 端口说明：本机 8000 被既有 `python -m http.server 8000` PID 4588 占用，验收使用 8001，未触碰非本次启动进程。
 - R29 验收证据见 `docs/orchestration/ROUND29_REPORT.md`。
-- 下一步进入 R30：文件与导出格式增强。R30-R32 保持未完成排期。
+- 下一步已进入并完成 R30：文件与导出格式增强。
+
+## 第二轮 R30 完成状态
+- R30 名称：文件与导出格式增强。
+- 后端实现：统一 unsupported contract；无依赖 XLSX 导出 test-cases/defects；公式注入中和；二进制 docx/pdf/xlsx/xmind 导入硬边界；自动化/性能 artifact ZIP canonical path 校验、越界 skipped metadata 和文本脱敏。
+- 前端实现：移除假下载/假成功；TestCases 支持 CSV、Markdown、JSON、XLSX；PDF、Word、XMind 未开放真实服务端生成并展示未开放提示；Reports/Performance 使用 HTML/Markdown 替代；统一下载 helper 处理 unsupported、空内容和真实下载。
+- QA：新增 `backend/tests/test_round30_file_export_formats.py`，R30 定向 36 passed。
+- 验证：`python -m compileall backend\aitest_platform` 通过；R30 定向 36 passed；合同回归组合 64 passed；后端全量通过；`npm run build` 通过；真实 Chrome 烟测通过，TestCases 四种真实下载、XLSX 真实 ZIP workbook、unsupported 不返回假文件字段、artifact 越界 skipped，`console.error=0`，`pageerror=0`。
+- 端口说明：本机 8000 被既有 PID 4588 占用，验收使用 8001，未触碰外部进程。
+- R30 验收证据见 `docs/orchestration/ROUND30_REPORT.md`。
+- 残余风险：PDF/Word/XMind 未做真实服务端生成；本轮未新增生产依赖；docx/pdf/xlsx/xmind 导入只建立硬边界，不做深度解析。
+- 下一步进入 R31：生产基础设施决策。R31-R32 保持未完成排期。

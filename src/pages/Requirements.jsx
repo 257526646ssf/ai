@@ -282,6 +282,14 @@ export default function Requirements() {
     window.dispatchEvent(new CustomEvent('show-toast', { detail: { message, type } }));
   };
 
+  const handleExportRequirementReport = () => {
+    if (!selectedBackendLibId) {
+      showToast('当前没有真实需求库，无法导出后端报告。', 'info');
+      return;
+    }
+    showToast('需求分析 PDF 报告导出未开放；请到报告中心使用 HTML/Markdown/JSON 真实导出，不会生成假文件。', 'info');
+  };
+
   const loadRequirementLibDetails = useCallback(async () => {
     if (!selectedBackendLibId) {
       setRemoteDocs([]);
@@ -1112,7 +1120,7 @@ export default function Requirements() {
                 {actionLoading === 'brain' ? '分析中...' : '需求大脑'}
               </button>
               <button
-                onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: 'PDF格式分析报告生成中，请在浏览器下载！', type: 'success' } }))}
+                onClick={handleExportRequirementReport}
                 className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer"
               >
                 导出报告

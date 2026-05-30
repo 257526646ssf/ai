@@ -31,6 +31,7 @@ from aitest_platform.models import (
     TestRound,
 )
 from aitest_platform.services.perf_analysis import build_performance_summary, performance_recommendations, performance_risk_items
+from aitest_platform.services.file_formats import UnsupportedFormatError, is_unsupported_export_format, unsupported_export_detail
 
 SENSITIVE_MARKERS = (
     "api_key",
@@ -50,7 +51,6 @@ OPEN_DEFECT_STATUSES = {"open", "new", "active", "reopen", "reopened", "todo", "
 
 
 SUPPORTED_REPORT_FORMATS = {"markdown", "html", "json"}
-UNSUPPORTED_BINARY_FORMATS = {"pdf", "doc", "docx", "word"}
 DEFAULT_MODULE_TYPES = ["functional", "api", "automation", "performance"]
 MODULE_ALIASES = {
     "functional": "functional",
@@ -537,16 +537,8 @@ def render_markdown_report(title: str, context: dict[str, Any]) -> str:
 
 def export_report(report: Report, output_format: str) -> dict[str, Any]:
     fmt = (output_format or "markdown").strip().lower()
-    if fmt in UNSUPPORTED_BINARY_FORMATS:
-        return {
-            "report_id": report.id,
-            "format": fmt,
-            "supported": False,
-            "unsupported": {
-                "reason": "Binary report export is not available without a document renderer.",
-                "supported_formats": sorted(SUPPORTED_REPORT_FORMATS),
-            },
-        }
+    if is_unsupported_export_format(fmt):
+        raise UnsupportedFormatError(unsupported_export_detail(fmt, SUPPORTED_REPORT_FORMATS, error_code="unsupported_report_export_format"))
     if fmt not in SUPPORTED_REPORT_FORMATS:
         raise ReportingPayloadError("format must be one of: markdown, html, json, pdf, docx")
     base_name = _safe_filename(report.name or f"report-{report.id}")

@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, apiRequest, downloadBase64File, formatDateTime, pickList } from '../lib/api';
+import { apiGet, apiPost, apiRequest, downloadBase64File, downloadExportedFile, formatDownloadError, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
 const showToast = (message, type = 'success') => {
@@ -852,13 +852,12 @@ export default function Automation() {
     }
     try {
       const payload = await apiGet(`/auto-projects/${activeProj.backendId}/download`, { timeoutMs: 15000 });
-      downloadBase64File({
-        filename: payload.filename,
-        contentBase64: payload.content_base64 || payload.contentBase64,
-        mimeType: payload.mime_type || payload.mimeType
+      downloadExportedFile(payload, {
+        defaultFilename: `auto-project-${activeProj.backendId}.zip`,
+        defaultMimeType: 'application/zip'
       });
     } catch (error) {
-      showToast(`自动化项目下载失败：${error.message || error}`, 'error');
+      showToast(formatDownloadError(error, '自动化项目下载失败。'), 'error');
     }
   };
 
@@ -870,13 +869,12 @@ export default function Automation() {
     }
     try {
       const payload = await apiGet(`/auto-executions/${executionId}/artifacts/download`, { timeoutMs: 15000 });
-      downloadBase64File({
-        filename: payload.filename,
-        contentBase64: payload.content_base64 || payload.contentBase64,
-        mimeType: payload.mime_type || payload.mimeType
+      downloadExportedFile(payload, {
+        defaultFilename: `auto-artifacts-${executionId}.zip`,
+        defaultMimeType: 'application/zip'
       });
     } catch (error) {
-      showToast(`Artifacts 下载失败：${error.message || error}`, 'error');
+      showToast(formatDownloadError(error, 'Artifacts 下载失败。'), 'error');
     }
   };
 
