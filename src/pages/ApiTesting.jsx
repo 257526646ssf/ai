@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, formatDateTime, pickList } from '../lib/api';
+import { apiGet, apiPost, formatDateTime, inferFileFormat, pickList, readFileAsBase64 } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
 const numberText = (value, fallback = '0') => {
@@ -41,6 +41,7 @@ const IMPORT_SOURCES = [
     label: 'OpenAPI JSON',
     sourceType: 'openapi',
     format: 'json',
+    mode: 'text',
     sample: '{\n  "openapi": "3.0.0",\n  "info": { "title": "Demo API", "version": "1.0.0" },\n  "paths": {\n    "/api/v1/ping": {\n      "get": {\n        "summary": "Ping",\n        "responses": { "200": { "description": "ok" } }\n      }\n    }\n  }\n}'
   },
   {
@@ -48,6 +49,7 @@ const IMPORT_SOURCES = [
     label: 'OpenAPI YAML',
     sourceType: 'openapi',
     format: 'yaml',
+    mode: 'text',
     sample: 'openapi: 3.0.0\ninfo:\n  title: Demo API\n  version: 1.0.0\npaths:\n  /api/v1/ping:\n    get:\n      summary: Ping\n      responses:\n        "200":\n          description: ok'
   },
   {
@@ -55,9 +57,50 @@ const IMPORT_SOURCES = [
     label: 'HAR',
     sourceType: 'har',
     format: 'json',
+    mode: 'text',
     sample: '{\n  "log": {\n    "version": "1.2",\n    "entries": []\n  }\n}'
+  },
+  {
+    id: 'docx',
+    label: 'DOCX',
+    sourceType: 'docx',
+    format: 'docx',
+    mode: 'file',
+    accept: '.docx',
+    sample: ''
+  },
+  {
+    id: 'pdf',
+    label: 'PDF',
+    sourceType: 'pdf',
+    format: 'pdf',
+    mode: 'file',
+    accept: '.pdf',
+    sample: ''
+  },
+  {
+    id: 'xlsx',
+    label: 'XLSX',
+    sourceType: 'xlsx',
+    format: 'xlsx',
+    mode: 'file',
+    accept: '.xlsx',
+    sample: ''
+  },
+  {
+    id: 'xmind',
+    label: 'XMind',
+    sourceType: 'xmind',
+    format: 'xmind',
+    mode: 'file',
+    accept: '.xmind',
+    sample: ''
   }
 ];
+
+const FILE_IMPORT_ACCEPT = '.docx,.pdf,.xlsx,.xmind';
+const FILE_IMPORT_SOURCE_IDS = new Set(['docx', 'pdf', 'xlsx', 'xmind']);
+const MAX_IMPORT_FILE_SIZE = 50 * 1024 * 1024;
 
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 const EMPTY_ROW = { key: '', value: '', enabled: true };
@@ -100,6 +143,14 @@ const safeStringify = (value) => {
   } catch {
     return String(value);
   }
+};
+
+const formatFileSize = (size) => {
+  const numeric = Number(size);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '--';
+  if (numeric >= 1024 * 1024) return `${(numeric / (1024 * 1024)).toFixed(1)} MB`;
+  if (numeric >= 1024) return `${Math.round(numeric / 1024)} KB`;
+  return `${numeric} B`;
 };
 
 const normalizeFactorySource = (payload) => {
@@ -332,9 +383,11 @@ export default function ApiTesting() {
   const [importText, setImportText] = useState(IMPORT_SOURCES[0].sample);
   const [importGenerateCases, setImportGenerateCases] = useState(true);
   const [importCreateCases, setImportCreateCases] = useState(true);
+  const [importFile, setImportFile] = useState(null);
   const [isImporting, setIsImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
   const [importError, setImportError] = useState('');
+  const importFileInputRef = React.useRef(null);
   const [debugForm, setDebugForm] = useState({
     method: 'GET',
     url: '',
@@ -590,14 +643,53 @@ export default function ApiTesting() {
   };
 
   const getActiveLibId = () => activeBackendLib?.backendId || activeBackendLib?.raw?.id || null;
+  const activeImportSource = IMPORT_SOURCES.find((item) => item.id === importSourceId) || IMPORT_SOURCES[0];
+  const isFileImportSource = activeImportSource.mode === 'file';
 
   const handleImportSourceChange = (sourceId) => {
     const currentSource = IMPORT_SOURCES.find((item) => item.id === importSourceId) || IMPORT_SOURCES[0];
     const nextSource = IMPORT_SOURCES.find((item) => item.id === sourceId) || IMPORT_SOURCES[0];
     setImportSourceId(sourceId);
-    if (!importText.trim() || importText === currentSource.sample) {
+    setImportError('');
+    setImportResult(null);
+    if (nextSource.mode === 'file') {
+      if (!importFile || inferFileFormat(importFile) !== nextSource.format) {
+        setImportFile(null);
+      }
+      return;
+    }
+    if (!importText.trim() || importText === currentSource.sample || currentSource.mode === 'file') {
       setImportText(nextSource.sample);
     }
+  };
+
+  const openImportFilePicker = () => {
+    importFileInputRef.current?.click();
+  };
+
+  const handleImportFileChange = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    const sourceFormat = inferFileFormat(file);
+    if (!FILE_IMPORT_SOURCE_IDS.has(sourceFormat)) {
+      const message = '当前仅支持导入 DOCX / PDF / XLSX / XMind 文件。';
+      setImportError(message);
+      showToast(message, 'error');
+      return;
+    }
+    if (file.size > MAX_IMPORT_FILE_SIZE) {
+      const message = '单个导入文件不能超过 50MB。';
+      setImportError(message);
+      showToast(message, 'error');
+      return;
+    }
+
+    setImportSourceId(sourceFormat);
+    setImportFile(file);
+    setImportError('');
+    setImportResult(null);
   };
 
   const handleImportApis = async () => {
@@ -622,17 +714,35 @@ export default function ApiTesting() {
         source_type: source.sourceType,
         source_format: source.format,
         generate_cases: importGenerateCases,
-        create_cases: importCreateCases,
-        raw_text: importText,
-        content: importText
+        create_cases: importCreateCases
       };
-      if (source.format === 'json') {
-        const parsed = parseJsonSource(importText);
-        if (!parsed.ok) throw new Error(parsed.message);
-        if (source.sourceType === 'har') {
-          payload.har = parsed.value;
-        } else {
-          payload.schema = parsed.value;
+      if (source.mode === 'file') {
+        if (!(importFile instanceof File)) {
+          throw new Error('请先选择要导入的文件。');
+        }
+        const contentBase64 = await readFileAsBase64(importFile);
+        Object.assign(payload, {
+          source_file_name: importFile.name,
+          file_name: importFile.name,
+          mime_type: importFile.type || undefined,
+          content_type: importFile.type || undefined,
+          file_size: importFile.size,
+          upload_mode: 'base64',
+          content_base64: contentBase64
+        });
+      } else {
+        Object.assign(payload, {
+          raw_text: importText,
+          content: importText
+        });
+        if (source.format === 'json') {
+          const parsed = parseJsonSource(importText);
+          if (!parsed.ok) throw new Error(parsed.message);
+          if (source.sourceType === 'har') {
+            payload.har = parsed.value;
+          } else {
+            payload.schema = parsed.value;
+          }
         }
       }
 
@@ -1471,10 +1581,17 @@ export default function ApiTesting() {
         </div>
 
         <div className="theme-card rounded-xl p-4 shadow-soft space-y-3">
+          <input
+            ref={importFileInputRef}
+            type="file"
+            accept={activeImportSource.accept || FILE_IMPORT_ACCEPT}
+            className="hidden"
+            onChange={handleImportFileChange}
+          />
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-color)] pb-2">
             <div>
-              <h3 className="text-xs font-bold text-[var(--text-primary)]">OpenAPI / HAR 导入面板</h3>
-              <p className="text-[9.5px] text-[var(--text-secondary)] mt-1">选择 source type，粘贴 JSON、YAML 或 HAR，调用当前接口库 import 入口。</p>
+              <h3 className="text-xs font-bold text-[var(--text-primary)]">接口文档导入面板</h3>
+              <p className="text-[9.5px] text-[var(--text-secondary)] mt-1">可继续粘贴 OpenAPI / HAR 文本，也可上传 DOCX / PDF / XLSX / XMind 并把文件信息发送给后端解析。</p>
             </div>
             <div className="p-0.5 border border-[var(--border-color)] rounded-lg flex gap-0.5 bg-[var(--bg-app)] text-[9px] font-bold">
               {IMPORT_SOURCES.map((source) => {
@@ -1492,11 +1609,35 @@ export default function ApiTesting() {
               })}
             </div>
           </div>
-          <textarea
-            value={importText}
-            onChange={(event) => setImportText(event.target.value)}
-            className="w-full h-36 font-mono text-[10px] p-3 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 focus:outline-none focus:border-[var(--accent-color)] leading-relaxed text-[var(--text-primary)]"
-          />
+          {isFileImportSource ? (
+            <div className="rounded-lg border border-dashed border-[var(--border-color)] bg-[var(--bg-app)]/20 p-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-[10px] font-bold text-[var(--text-primary)]">
+                    <FileInput className="size-4 text-[var(--accent-color)]" />
+                    <span>{importFile ? importFile.name : '选择待导入文件'}</span>
+                  </div>
+                  <div className="mt-1 text-[9px] text-[var(--text-secondary)]">
+                    {importFile ? `${activeImportSource.label} · ${formatFileSize(importFile.size)}` : '支持 DOCX / PDF / XLSX / XMind，导入时会发送文件名、格式、大小和 content_base64。'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={openImportFilePicker}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-1.5 text-[10px] font-bold text-[var(--text-primary)] hover:bg-[var(--border-color)]/40"
+                >
+                  <FileInput className="size-3.5" />
+                  <span>{importFile ? '重新选择' : '选择文件'}</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <textarea
+              value={importText}
+              onChange={(event) => setImportText(event.target.value)}
+              className="w-full h-36 font-mono text-[10px] p-3 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 focus:outline-none focus:border-[var(--accent-color)] leading-relaxed text-[var(--text-primary)]"
+            />
+          )}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3 text-[10px] text-[var(--text-secondary)]">
               <label className="flex items-center gap-1.5 cursor-pointer">

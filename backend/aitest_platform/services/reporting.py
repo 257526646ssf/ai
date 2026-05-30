@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import html
 import json
@@ -31,7 +32,21 @@ from aitest_platform.models import (
     TestRound,
 )
 from aitest_platform.services.perf_analysis import build_performance_summary, performance_recommendations, performance_risk_items
-from aitest_platform.services.file_formats import UnsupportedFormatError, is_unsupported_export_format, unsupported_export_detail
+from aitest_platform.services.file_formats import (
+    UnsupportedFormatError,
+    is_unsupported_export_format,
+    normalize_format,
+    unsupported_export_detail,
+)
+from aitest_platform.services.office_formats import (
+    DOCX_MIME_TYPE,
+    PDF_MIME_TYPE,
+    XMIND_MIME_TYPE,
+    markdown_to_blocks,
+    render_docx_document,
+    render_pdf_document,
+    render_xmind_document,
+)
 
 SENSITIVE_MARKERS = (
     "api_key",
@@ -50,7 +65,7 @@ FAIL_STATUSES = {"fail", "failed", "error", "timeout"}
 OPEN_DEFECT_STATUSES = {"open", "new", "active", "reopen", "reopened", "todo", "待修复", "待处理"}
 
 
-SUPPORTED_REPORT_FORMATS = {"markdown", "html", "json"}
+SUPPORTED_REPORT_FORMATS = {"markdown", "html", "json", "pdf", "docx", "xmind"}
 DEFAULT_MODULE_TYPES = ["functional", "api", "automation", "performance"]
 MODULE_ALIASES = {
     "functional": "functional",
@@ -536,12 +551,13 @@ def render_markdown_report(title: str, context: dict[str, Any]) -> str:
 
 
 def export_report(report: Report, output_format: str) -> dict[str, Any]:
-    fmt = (output_format or "markdown").strip().lower()
+    fmt = normalize_format(output_format or "markdown") or "markdown"
     if is_unsupported_export_format(fmt):
         raise UnsupportedFormatError(unsupported_export_detail(fmt, SUPPORTED_REPORT_FORMATS, error_code="unsupported_report_export_format"))
     if fmt not in SUPPORTED_REPORT_FORMATS:
-        raise ReportingPayloadError("format must be one of: markdown, html, json, pdf, docx")
+        raise ReportingPayloadError("format must be one of: markdown, html, json, pdf, docx, xmind")
     base_name = _safe_filename(report.name or f"report-{report.id}")
+    markdown = sanitize_report_payload(report.content or "")
     if fmt == "json":
         content = json.dumps(
             sanitize_report_payload(
@@ -564,7 +580,7 @@ def export_report(report: Report, output_format: str) -> dict[str, Any]:
             "format": "json",
         }
     if fmt == "html":
-        content = _markdown_to_simple_html(report.content or "")
+        content = _markdown_to_simple_html(markdown)
         return {
             "report_id": report.id,
             "filename": f"{base_name}.html",
@@ -572,10 +588,29 @@ def export_report(report: Report, output_format: str) -> dict[str, Any]:
             "mime_type": "text/html; charset=utf-8",
             "format": "html",
         }
+    if fmt in {"pdf", "docx", "xmind"}:
+        blocks = markdown_to_blocks(markdown)
+        title = next((str(block.get("text")).strip() for block in blocks if block.get("type") == "heading" and str(block.get("text") or "").strip()), report.name or f"Report {report.id}")
+        if fmt == "pdf":
+            raw_bytes = render_pdf_document(title, blocks)
+            mime_type = PDF_MIME_TYPE
+        elif fmt == "docx":
+            raw_bytes = render_docx_document(title, blocks)
+            mime_type = DOCX_MIME_TYPE
+        else:
+            raw_bytes = render_xmind_document(title, blocks)
+            mime_type = XMIND_MIME_TYPE
+        return {
+            "report_id": report.id,
+            "filename": f"{base_name}.{fmt}",
+            "content_base64": base64.b64encode(raw_bytes).decode("ascii"),
+            "mime_type": mime_type,
+            "format": fmt,
+        }
     return {
         "report_id": report.id,
         "filename": f"{base_name}.md",
-        "content": sanitize_report_payload(report.content or ""),
+        "content": markdown,
         "mime_type": "text/markdown; charset=utf-8",
         "format": "markdown",
     }
@@ -779,7 +814,7 @@ def _normalize_supported_formats(value: Any, *, strict: bool) -> list[str]:
     raw_values = value if isinstance(value, list) else str(value).split(",")
     formats: list[str] = []
     for raw in raw_values:
-        fmt = str(raw or "").strip().lower()
+        fmt = normalize_format(raw) or str(raw or "").strip().lower()
         if not fmt:
             continue
         if fmt not in SUPPORTED_REPORT_FORMATS:

@@ -507,3 +507,11 @@
 - 下载/导出边界：CSV/Markdown/JSON/XLSX 为真实输出；PDF/Word/XMind 保持 unsupported 或 HTML/Markdown 替代。
 - 安全边界：真实 cleanup 未执行，仅验证 dry-run 与确认门；真实生产基础设施依赖仍 deferred / unsupported unless explicitly approved。
 - 参考文档：`docs/orchestration/ROUND32_REPORT.md`、`docs/orchestration/DECISIONS.md`、`backend/README.md`。
+
+## R33 完成交接
+- R33 名称：二进制文档导入与正式导出。
+- 本轮完成两项补强：`PDF / DOCX / XMind` 真实服务端导出，`docx / pdf / xlsx / xmind` 深度导入解析。
+- 前端已把 `Requirements / ApiTesting / TestCases / Reports / Performance` 相关入口接到真实导入/下载链路。
+- 后端新增 `office_formats.py`，并扩展 `exporting.py`、`requirement_parser.py`、`api_importer.py`、`reporting.py`、`router.py`。
+- 本轮没有新增生产依赖，也没有触碰 PostgreSQL、Celery、MinIO、Alembic、真实密钥托管边界。
+- 后续若继续推进，剩余的就是生产基础设施与真实外部服务层面的 deferred 项。

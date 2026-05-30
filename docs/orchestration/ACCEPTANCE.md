@@ -668,3 +668,20 @@
 - 重点合同回归：R27-R31 组合在独立 `AITEST_DATABASE_PATH` 下通过。
 - 前端构建：`npm run build`。
 - 浏览器验证：Python Playwright + system Chrome，使用 `8001` 后端与 `VITE_API_BASE_URL=http://127.0.0.1:8001/api/v2` 前端。
+
+## 第三十三轮验收
+- [x] `PDF / DOCX / XMind` 真实服务端导出已覆盖 `test-cases / defects / reports / performance / requirements`。
+- [x] `docx / pdf / xlsx / xmind` 深度导入解析已覆盖需求文档和 API 文档导入链路。
+- [x] `backend/tests/test_round30_file_export_formats.py` 覆盖新增导出与导入契约并通过。
+- [x] `python -m compileall backend/aitest_platform` 通过。
+- [x] `cd backend; python -m pytest -q` 通过。
+- [x] `npm run build` 通过。
+- [x] live API smoke 证明 requirement docx/xlsx/xmind 导入、requirement pdf/docx/xmind 导出、api docx/xmind 导入可用。
+- [x] deferred 生产基础设施边界未被误写为完成。
+
+## Round 33 Evidence
+- 新增 `docs/orchestration/ROUND33_REPORT.md`。
+- 后端新增 `backend/aitest_platform/services/office_formats.py`。
+- 后端验证：`python -m compileall backend/aitest_platform`、`python -m pytest tests/test_round30_file_export_formats.py -q`、`python -m pytest -q`。
+- 前端验证：`npm run build`。
+- Live smoke：本地 `8001` 后端 + `3000` 前端，导入/导出关键链路可用。

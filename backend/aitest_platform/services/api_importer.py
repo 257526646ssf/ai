@@ -7,15 +7,18 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
-from aitest_platform.services.file_formats import detect_unsupported_import_format, unsupported_import_detail
+from aitest_platform.services.file_formats import detect_import_format, detect_unsupported_import_format, unsupported_import_detail
+from aitest_platform.services.office_formats import ParsedDocument, parse_document_payload
 
 
 HTTP_METHODS = {"get", "post", "put", "delete", "patch", "options", "head"}
 SENSITIVE_KEY_PARTS = ("authorization", "api_key", "api-key", "apikey", "token", "cookie", "secret", "password")
-SUPPORTED_API_IMPORT_FORMATS = {"curl", "har", "manual", "openapi", "postman", "swagger"}
+SUPPORTED_API_IMPORT_FORMATS = {"curl", "har", "manual", "openapi", "postman", "swagger", "docx", "pdf", "xlsx", "xmind"}
 SENSITIVE_TEXT_PATTERN = re.compile(
     r"(?i)(authorization|api[_-]?key|token|cookie|secret|password)(\s*[:=]\s*)(Bearer\s+)?[^\s,;}\"]+"
 )
+DOCUMENT_IMPORT_FORMATS = {"docx", "pdf", "xlsx", "xmind"}
+METHOD_LINE_RE = re.compile(r"(?i)\b(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)\b\s+(/[A-Za-z0-9._~!$&'()*+,;=:@%/\-{}[\]]*)")
 
 
 class ApiImportError(ValueError):
@@ -54,6 +57,15 @@ def parse_api_import_payload(payload: dict[str, Any]) -> ApiImportResult:
     if source in {"openapi", "swagger"}:
         document = _document_from_payload(data, allow_yaml=True)
         endpoints = _parse_openapi_document(document)
+    elif source in DOCUMENT_IMPORT_FORMATS:
+        parsed = parse_document_payload(
+            data,
+            source_type=source,
+            filename=data.get("source_file_name") or data.get("filename") or data.get("name"),
+            fallback_name=str(data.get("name") or data.get("source_file_name") or "API document"),
+        )
+        endpoints = _parse_document_endpoints(parsed)
+        source = parsed.format
     elif source == "har":
         document = _document_from_payload(data)
         endpoints = _parse_har_document(document)
@@ -101,6 +113,9 @@ def safe_import_error_detail(exc: Exception) -> dict[str, Any]:
 
 
 def _source_type(data: dict[str, Any]) -> str:
+    declared_format = detect_import_format(data)
+    if declared_format in DOCUMENT_IMPORT_FORMATS:
+        return declared_format
     explicit = data.get("source_type") or data.get("type") or data.get("import_source")
     if explicit:
         lowered = str(explicit).strip().lower().replace("-", "_")
@@ -117,7 +132,7 @@ def _source_type(data: dict[str, Any]) -> str:
             "har_json": "har",
         }
         lowered = aliases.get(lowered, lowered)
-        if lowered in {"openapi", "swagger", "postman", "curl", "har"}:
+        if lowered in {"openapi", "swagger", "postman", "curl", "har", *DOCUMENT_IMPORT_FORMATS}:
             return lowered
     if any(key in data for key in ("curl", "command")):
         return "curl"
@@ -160,6 +175,180 @@ def _document_from_payload(data: dict[str, Any], *, allow_yaml: bool = False) ->
     if isinstance(document, dict):
         return document
     raise ApiImportError("Import document must be a JSON object or JSON string")
+
+
+def _parse_document_endpoints(document: ParsedDocument) -> list[dict[str, Any]]:
+    endpoints = _parse_document_tables(document.tables)
+    if not endpoints:
+        endpoints = _parse_document_text(document.text)
+    if not endpoints and document.warnings:
+        warning = "; ".join(document.warnings)
+        raise ApiImportError(f"No API endpoints found in import payload. {warning}")
+    return endpoints
+
+
+def _parse_document_tables(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    endpoints: list[dict[str, Any]] = []
+    for table in tables:
+        rows = table.get("rows") if isinstance(table, dict) else None
+        normalized_rows = _normalize_table_rows(rows)
+        if len(normalized_rows) < 2:
+            continue
+        header_map = _table_header_map(normalized_rows[0])
+        if "method" not in header_map or "path" not in header_map:
+            continue
+        for row in normalized_rows[1:]:
+            method = row[header_map["method"]] if header_map["method"] < len(row) else ""
+            raw_path = row[header_map["path"]] if header_map["path"] < len(row) else ""
+            if not method and not raw_path:
+                continue
+            path, inline_query = _path_and_query_from_url(raw_path or "/")
+            query_schema = _structured_cell(_table_cell(row, header_map, "query"))
+            if isinstance(query_schema, dict):
+                query_schema = {**inline_query, **query_schema}
+            endpoint = {
+                "name": _table_cell(row, header_map, "name") or _table_cell(row, header_map, "summary"),
+                "method": (method or "GET").upper(),
+                "path": path or "/",
+                "headers_schema": _structured_cell(_table_cell(row, header_map, "headers")),
+                "query_schema": query_schema if query_schema not in ("", None) else inline_query,
+                "body_schema": _structured_body(_table_cell(row, header_map, "body")),
+                "response_schema": _structured_response(
+                    _table_cell(row, header_map, "response"),
+                    _table_cell(row, header_map, "status"),
+                ),
+                "description": _table_cell(row, header_map, "description") or _table_cell(row, header_map, "remark"),
+            }
+            endpoints.append(endpoint)
+    return endpoints
+
+
+def _parse_document_text(text: str) -> list[dict[str, Any]]:
+    stripped = (text or "").strip()
+    if not stripped:
+        return []
+    try:
+        structured = _document_from_payload({"content": stripped}, allow_yaml=True)
+    except ApiImportError:
+        structured = None
+    if isinstance(structured, dict):
+        if "paths" in structured:
+            return _parse_openapi_document(structured)
+        if isinstance(structured.get("log"), dict):
+            return _parse_har_document(structured)
+        if "item" in structured and "info" in structured:
+            return _parse_postman_collection(structured)
+
+    endpoints: list[dict[str, Any]] = []
+    for line in stripped.splitlines():
+        for match in METHOD_LINE_RE.finditer(line):
+            method = match.group(1).upper()
+            path, query = _path_and_query_from_url(match.group(2).strip())
+            endpoints.append(
+                {
+                    "name": f"{method} {path}",
+                    "method": method,
+                    "path": path,
+                    "headers_schema": {},
+                    "query_schema": query,
+                    "body_schema": {},
+                    "response_schema": {},
+                    "description": line.strip()[:500],
+                }
+            )
+    if endpoints:
+        return endpoints
+
+    curl_matches = re.findall(r"curl\s+[^\n]+", stripped)
+    for command in curl_matches[:20]:
+        try:
+            endpoints.append(_parse_curl_command(command))
+        except ApiImportError:
+            continue
+    return endpoints
+
+
+def _normalize_table_rows(rows: Any) -> list[list[str]]:
+    normalized: list[list[str]] = []
+    if not isinstance(rows, list):
+        return normalized
+    for row in rows:
+        if not isinstance(row, list):
+            continue
+        normalized.append([str(cell or "").strip() for cell in row])
+    return normalized
+
+
+def _table_header_map(header_row: list[str]) -> dict[str, int]:
+    aliases = {
+        "name": {"name", "title", "api name", "接口名称", "名称"},
+        "summary": {"summary", "概述"},
+        "method": {"method", "http method", "请求方式", "方式"},
+        "path": {"path", "url", "uri", "endpoint", "接口", "接口路径", "request path"},
+        "headers": {"headers", "request headers", "请求头"},
+        "query": {"query", "query params", "params", "请求参数", "querystring"},
+        "body": {"body", "request body", "请求体", "body schema"},
+        "response": {"response", "response body", "响应体", "返回体", "返回结果"},
+        "status": {"status", "status code", "http status", "响应码", "返回码"},
+        "description": {"description", "desc", "描述", "说明"},
+        "remark": {"remark", "备注", "notes"},
+    }
+    result: dict[str, int] = {}
+    for index, value in enumerate(header_row):
+        normalized = _normalize_header_text(value)
+        for key, names in aliases.items():
+            if normalized in {_normalize_header_text(item) for item in names} and key not in result:
+                result[key] = index
+                break
+    return result
+
+
+def _normalize_header_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", str(value or "").strip().lower())
+
+
+def _table_cell(row: list[str], header_map: dict[str, int], key: str) -> str:
+    index = header_map.get(key)
+    if index is None or index >= len(row):
+        return ""
+    return str(row[index] or "").strip()
+
+
+def _structured_cell(value: str) -> Any:
+    if not value:
+        return {}
+    parsed = _json_or_text(value)
+    if isinstance(parsed, (dict, list)):
+        return parsed
+    pairs: dict[str, Any] = {}
+    for part in re.split(r"[;\n]+", value):
+        if ":" in part:
+            key, item_value = part.split(":", 1)
+            if key.strip():
+                pairs[key.strip()] = item_value.strip()
+    return pairs or value
+
+
+def _structured_body(value: str) -> Any:
+    if not value:
+        return {}
+    parsed = _structured_cell(value)
+    if isinstance(parsed, dict):
+        return parsed
+    return {"example": parsed}
+
+
+def _structured_response(value: str, status_value: str) -> dict[str, Any]:
+    response: dict[str, Any] = {}
+    if status_value:
+        try:
+            response["status"] = int(status_value)
+        except ValueError:
+            response["status"] = status_value
+    parsed = _structured_cell(value)
+    if parsed not in ({}, ""):
+        response["body"] = parsed
+    return response
 
 
 def _curl_command_from_payload(data: dict[str, Any]) -> str:

@@ -43,6 +43,7 @@
 | R30 | 2026-05-30 已验收 | P1 | 文件与导出格式增强 | 已完成：统一 unsupported contract；无依赖 XLSX 导出 test-cases/defects；公式注入中和；二进制 docx/pdf/xlsx/xmind 导入硬边界；自动化/性能 artifact ZIP canonical path 校验、越界 skipped metadata 和文本脱敏；前端移除假下载并支持 TestCases CSV/Markdown/JSON/XLSX。PDF/Word/XMind 未做真实服务端生成。验收证据见 `ROUND30_REPORT.md`。 |
 | R31 | 2026-05-30 已完成 | 决策门 | 生产基础设施决策 | 已完成：明确 SQLite 本地优先为 R32 支持目标；PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储、Alembic 均 deferred / unsupported unless explicitly approved。未新增生产依赖。验收证据见 `ROUND31_REPORT.md`。 |
 | R32 | 2026-05-30 已验收 | P0 | 第二轮总验收 | 已完成：后端编译、后端全量 pytest、R27-R31 重点合同回归、前端构建、核心浏览器导航、接口状态自检、unsupported 导出边界、R31 文档事实修正与最终交付报告。验收证据见 `ROUND32_REPORT.md`。 |
+| R33 | 2026-05-31 已验收 | P1 | 二进制文档导入与正式导出 | 已完成：`PDF / DOCX / XMind` 真实服务端导出；`docx / pdf / xlsx / xmind` 深度导入解析；前端相关入口接入真实链路。验收证据见 `ROUND33_REPORT.md`。 |
 
 ## 必须完成清单
 

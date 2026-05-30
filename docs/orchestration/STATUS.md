@@ -636,3 +636,12 @@
 - 接口边界：`schema-status`、`runtime-dependencies`、`backup-status`、`storage-summary`、`infra-status`、`cleanup` dry-run 均返回 200；unsupported 导出返回结构化 415 且无假文件字段。
 - 外部进程说明：本机 `8000` 由既有 PID `4588` 占用，R32 验收改用 `8001`，未触碰外部进程。
 - 第二轮未实施边界：PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储、Alembic、PDF/Word/XMind 真生成、深度二进制导入解析均保持 deferred / unsupported。
+
+## 第二轮 R33 完成状态
+- R33 名称：二进制文档导入与正式导出。
+- 本轮新增：`PDF / DOCX / XMind` 真实服务端导出；`docx / pdf / xlsx / xmind` 深度导入解析。
+- 后端验证：`python -m compileall backend/aitest_platform` 通过；`backend/tests/test_round30_file_export_formats.py` 通过；后端全量 `pytest -q` 通过。
+- 前端验证：`npm run build` 通过；统一下载 helper 支持真实二进制下载和 `content_base64` 导入。
+- live API smoke：需求导入 `docx/xlsx/xmind` create/parse/extract 200；需求导出 `pdf/docx/xmind` 200 且为真实文件；API 导入 `docx/xmind` 200 并落库。
+- 浏览器验证：`console.error=0`、`pageerror=0`；`TestCases`、`Requirements`、`ApiTesting`、`Reports`、`Performance` 的相关入口已接真实链路。
+- 仍未实施：PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储、Alembic。

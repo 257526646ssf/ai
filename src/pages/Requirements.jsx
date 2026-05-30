@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { 
   Folder, 
   FileText, 
@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, apiRequest, formatDateTime, pickList } from '../lib/api';
+import { apiDownload, apiGet, apiPost, apiRequest, formatDateTime, formatDownloadError, inferFileFormat, pickList, readFileAsBase64 } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
 const mapRequirementStatus = (status) => {
@@ -170,6 +170,32 @@ const mapRequirementItem = (item) => {
   };
 };
 
+const REQUIREMENT_IMPORT_ACCEPT = '.docx,.pdf,.xlsx,.xmind';
+const REQUIREMENT_IMPORT_FORMATS = new Set(['docx', 'pdf', 'xlsx', 'xmind']);
+const REQUIREMENT_EXPORT_FORMATS = [
+  { id: 'markdown', label: 'Markdown' },
+  { id: 'json', label: 'JSON' },
+  { id: 'pdf', label: 'PDF' },
+  { id: 'docx', label: 'DOCX' },
+  { id: 'xmind', label: 'XMind' }
+];
+const REQUIREMENT_EXPORT_EXTENSIONS = {
+  markdown: '.md',
+  json: '.json',
+  pdf: '.pdf',
+  docx: '.docx',
+  xmind: '.xmind'
+};
+const MAX_IMPORT_FILE_SIZE = 50 * 1024 * 1024;
+
+const formatFileSize = (size) => {
+  const numeric = Number(size);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '--';
+  if (numeric >= 1024 * 1024) return `${(numeric / (1024 * 1024)).toFixed(1)} MB`;
+  if (numeric >= 1024) return `${Math.round(numeric / 1024)} KB`;
+  return `${numeric} B`;
+};
+
 export default function Requirements() {
   const { selectedProject, loading: projectLoading, error: projectError } = useProjectContext();
   const [viewMode, setViewMode] = useState('list'); // 'list' or 'workbench'
@@ -182,6 +208,7 @@ export default function Requirements() {
   const [requirementsStatus, setRequirementsStatus] = useState({ loading: true, message: '' });
   const [isCreatingLib, setIsCreatingLib] = useState(false);
   const [isCreatingDocument, setIsCreatingDocument] = useState(false);
+  const [lastImportedDocument, setLastImportedDocument] = useState(null);
   const [isGeneratingPoints, setIsGeneratingPoints] = useState(false);
   const [parseBlocks, setParseBlocks] = useState([]);
   const [selectedItemKeys, setSelectedItemKeys] = useState([]);
@@ -190,6 +217,9 @@ export default function Requirements() {
   const [traceability, setTraceability] = useState({});
   const [brainResult, setBrainResult] = useState(null);
   const [actionLoading, setActionLoading] = useState('');
+  const [isRequirementExportOpen, setIsRequirementExportOpen] = useState(false);
+  const [isExportingRequirement, setIsExportingRequirement] = useState(false);
+  const requirementFileInputRef = useRef(null);
 
   // ==========================================================================
   // VIEW 1: 需求库列表页 (11-页)
@@ -277,17 +307,84 @@ export default function Requirements() {
   const activeTestCases = toDisplayArray(activeTraceability?.test_cases || activeTraceability?.testCases);
   const activeQualityIssues = toDisplayArray(activeQuality?.issues);
   const activeQualityActions = toDisplayArray(activeQuality?.suggested_actions || activeQuality?.suggestedActions);
+  const requirementExportTarget = useMemo(() => {
+    if (selectedDoc?.backendId) {
+      return {
+        path: `/requirement-documents/${selectedDoc.backendId}/export`,
+        label: selectedDoc.name || `需求文档 #${selectedDoc.backendId}`,
+        fallbackName: `requirement-document-${selectedDoc.backendId}`
+      };
+    }
+    if (activeItem?.backendId) {
+      return {
+        path: `/requirement-items/${activeItem.backendId}/export`,
+        label: activeItem.title || `需求项 #${activeItem.backendId}`,
+        fallbackName: `requirement-item-${activeItem.backendId}`
+      };
+    }
+    return null;
+  }, [activeItem, selectedDoc]);
 
   const showToast = (message, type = 'success') => {
     window.dispatchEvent(new CustomEvent('show-toast', { detail: { message, type } }));
   };
 
-  const handleExportRequirementReport = () => {
+  const openRequirementDocumentPicker = () => {
+    if (!selectedBackendLibId) {
+      showToast('请先选择一个后端需求库。', 'error');
+      return;
+    }
+    requirementFileInputRef.current?.click();
+  };
+
+  const handleRequirementFileChange = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    await handleCreateRequirementDocument(file);
+  };
+
+  const legacyHandleExportRequirementReport = () => {
     if (!selectedBackendLibId) {
       showToast('当前没有真实需求库，无法导出后端报告。', 'info');
       return;
     }
     showToast('需求分析 PDF 报告导出未开放；请到报告中心使用 HTML/Markdown/JSON 真实导出，不会生成假文件。', 'info');
+  };
+
+  const toggleRequirementExportMenu = () => {
+    if (!requirementExportTarget) {
+      showToast('当前没有可导出的真实需求文档或需求项。', 'info');
+      return;
+    }
+    setIsRequirementExportOpen(open => !open);
+  };
+
+  const handleExportRequirementReport = async (format = 'markdown') => {
+    setIsRequirementExportOpen(false);
+    if (!REQUIREMENT_EXPORT_FORMATS.some(item => item.id === format)) {
+      showToast(`不支持 ${format} 需求导出。`, 'error');
+      return;
+    }
+    if (!requirementExportTarget) {
+      showToast('当前没有可导出的真实需求文档或需求项。', 'info');
+      return;
+    }
+
+    setIsExportingRequirement(true);
+    try {
+      await apiDownload(requirementExportTarget.path, {
+        params: { format },
+        format,
+        timeoutMs: 20000,
+        defaultFilename: `${requirementExportTarget.fallbackName}${REQUIREMENT_EXPORT_EXTENSIONS[format] || `.${format}`}`
+      });
+      showToast(`${requirementExportTarget.label} ${format.toUpperCase()} 已开始下载。`, 'success');
+    } catch (error) {
+      showToast(formatDownloadError(error, `${requirementExportTarget.label} 导出失败。`), 'error');
+    } finally {
+      setIsExportingRequirement(false);
+    }
   };
 
   const loadRequirementLibDetails = useCallback(async () => {
@@ -410,28 +507,75 @@ export default function Requirements() {
     }
   };
 
-  const handleCreateRequirementDocument = async () => {
+  const handleCreateRequirementDocument = async (file) => {
     if (!projectContext?.id || !selectedBackendLibId) {
       showToast('请先选择一个后端需求库。', 'error');
       return;
     }
+    if (!(file instanceof File)) {
+      openRequirementDocumentPicker();
+      return;
+    }
+
+    const sourceFormat = inferFileFormat(file);
+    if (!REQUIREMENT_IMPORT_FORMATS.has(sourceFormat)) {
+      showToast('当前仅支持导入 DOCX / PDF / XLSX / XMind 文件。', 'error');
+      return;
+    }
+    if (file.size > MAX_IMPORT_FILE_SIZE) {
+      showToast('单个需求文档不能超过 50MB。', 'error');
+      return;
+    }
+
     setIsCreatingDocument(true);
+    setLastImportedDocument({ name: file.name, size: file.size, format: sourceFormat });
     try {
-      const document = await apiPost(`/projects/${projectContext.id}/requirement-documents`, {
-        lib_id: selectedBackendLibId,
-        name: `前端导入需求说明 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`,
-        source_type: 'text',
-        raw_content: '用户可以登录系统；错误密码需要提示并记录失败次数；连续失败后账号应被锁定并产生安全提示。'
-      });
-      const parsed = await apiPost(`/requirement-documents/${document.id}/parse`, { parse_mode: 'standard' });
-      const extracted = await apiPost(`/requirement-documents/${document.id}/extract-items`, { mode: 'frontend' });
-      setSelectedDocId(document.id);
+      const contentBase64 = await readFileAsBase64(file);
+      const document = await apiPost(
+        `/projects/${projectContext.id}/requirement-documents`,
+        {
+          lib_id: selectedBackendLibId,
+          name: file.name,
+          source_type: sourceFormat,
+          source_format: sourceFormat,
+          source_file_name: file.name,
+          file_name: file.name,
+          mime_type: file.type || undefined,
+          content_type: file.type || undefined,
+          file_size: file.size,
+          upload_mode: 'base64',
+          content_base64: contentBase64
+        },
+        { timeoutMs: 20000 }
+      );
+      const documentId = document?.id;
+      if (!documentId) {
+        throw new Error('后端未返回需求文档 ID。');
+      }
+      const parsed = await apiPost(
+        `/requirement-documents/${documentId}/parse`,
+        {
+          parse_mode: 'standard',
+          source_format: sourceFormat,
+          source_file_name: file.name
+        },
+        { timeoutMs: 30000 }
+      );
+      const extracted = await apiPost(
+        `/requirement-documents/${documentId}/extract-items`,
+        {
+          mode: 'frontend',
+          source_format: sourceFormat
+        },
+        { timeoutMs: 30000 }
+      );
+      setSelectedDocId(documentId);
       setParseBlocks((parsed?.blocks || pickList(parsed)).map(normalizeBlock));
-      setRemoteDocs(prev => [mapRequirementDocument({ ...document, parser_status: 'parsed' }), ...prev]);
-      const extractedItems = (extracted?.items || []).map(mapRequirementItem);
+      setRemoteDocs(prev => [mapRequirementDocument({ ...document, parser_status: 'parsed', source_file_name: file.name, source_type: sourceFormat }), ...prev]);
+      const extractedItems = (pickList(extracted).length ? pickList(extracted) : extracted?.items || []).map(mapRequirementItem);
       setRemoteItems(prev => [...extractedItems, ...prev]);
       if (extractedItems.length) setActiveItem(extractedItems[0]);
-      showToast('需求文档已导入、解析并提取需求项。');
+      showToast(`需求文档已导入并解析：${file.name}`);
     } catch (error) {
       showToast(error?.message || '需求文档导入失败。', 'error');
     } finally {
@@ -690,7 +834,7 @@ export default function Requirements() {
         {/* 顶部对比控制 */}
         <div className="theme-card rounded-xl p-4 shadow-soft flex items-center justify-between">
           <div className="flex items-center gap-4 text-xs font-bold text-[var(--text-primary)]">
-            <div className="flex items-center gap-2">
+            <div className="relative flex items-center gap-2">
               <span className="opacity-60 text-[var(--text-secondary)]">当前版本:</span>
               <div className="px-3 py-1.5 rounded border border-[var(--border-color)] bg-[var(--border-color)]/20 font-mono text-[11px]">
                 v2.1 (2025-05-20)
@@ -816,7 +960,14 @@ export default function Requirements() {
 
   return (
     <div className="space-y-4 text-left w-full animate-[fadeIn_0.2s_ease-out]">
-      
+      <input
+        ref={requirementFileInputRef}
+        type="file"
+        accept={REQUIREMENT_IMPORT_ACCEPT}
+        className="hidden"
+        onChange={handleRequirementFileChange}
+      />
+
       {viewMode === 'list' ? (
         // ==========================================================================
         // 渲染：需求库列表页 (11-页)
@@ -1108,7 +1259,7 @@ export default function Requirements() {
               <button 
                 onClick={handleCreateRequirementDocument}
                 disabled={isCreatingDocument || !selectedBackendLibId}
-                className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer"
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-transparent cursor-pointer disabled:opacity-60"
               >
                 {isCreatingDocument ? '解析中...' : '导入并解析'}
               </button>
@@ -1120,11 +1271,28 @@ export default function Requirements() {
                 {actionLoading === 'brain' ? '分析中...' : '需求大脑'}
               </button>
               <button
-                onClick={handleExportRequirementReport}
-                className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer"
+                onClick={toggleRequirementExportMenu}
+                disabled={isExportingRequirement}
+                className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-transparent cursor-pointer disabled:opacity-60"
               >
+                <span className="text-[var(--text-primary)]">{isExportingRequirement ? '导出中..' : '导出需求'}</span>
+                <ChevronDown className="size-3 text-[var(--text-primary)]" />
                 导出报告
               </button>
+              {isRequirementExportOpen && (
+                <div className="absolute right-[156px] top-full z-20 mt-2 min-w-[132px] rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] p-1 shadow-lg">
+                  {REQUIREMENT_EXPORT_FORMATS.map(format => (
+                    <button
+                      key={format.id}
+                      onClick={() => handleExportRequirementReport(format.id)}
+                      disabled={isExportingRequirement}
+                      className="flex w-full items-center justify-between rounded-md px-2.5 py-2 text-left text-[10px] font-bold text-[var(--text-primary)] hover:bg-[var(--border-color)]/40 disabled:opacity-60"
+                    >
+                      <span>{format.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               <button 
                 onClick={handleGenerateTestPoints}
                 disabled={isGeneratingPoints}
@@ -1167,8 +1335,13 @@ export default function Requirements() {
                   className="border border-dashed border-[var(--border-color)] rounded-lg p-4 flex flex-col items-center justify-center bg-[var(--border-color)]/30 hover:bg-[var(--border-color)]/50 cursor-pointer transition-colors"
                 >
                   <Upload className="size-6 text-[var(--accent-color)] mb-1.5" />
-                  <span className="text-[10px] font-bold text-[var(--text-primary)]">{isCreatingDocument ? '正在导入并解析...' : '点击创建一份后端需求文档'}</span>
-                  <span className="text-[8px] text-[var(--text-secondary)] mt-1">支持 Word、Excel、PDF 等格式，单个文件不超过 50MB</span>
+                  <span className="text-[10px] font-bold text-[var(--text-primary)]">{isCreatingDocument ? '正在导入并解析...' : '点击上传并解析需求文档'}</span>
+                  <span className="text-[8px] text-[var(--text-secondary)] mt-1">支持 DOCX / PDF / XLSX / XMind，单个文件不超过 50MB</span>
+                  {lastImportedDocument && (
+                    <span className="mt-1 text-[8px] text-[var(--accent-color)]">
+                      最近导入：{lastImportedDocument.name} · {formatFileSize(lastImportedDocument.size)}
+                    </span>
+                  )}
                 </div>
 
                 <div className="mt-3.5 space-y-2">

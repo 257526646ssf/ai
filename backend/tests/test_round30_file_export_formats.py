@@ -6,11 +6,13 @@ import io
 import json
 import re
 import zipfile
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 from xml.etree import ElementTree
+from xml.sax.saxutils import escape as xml_escape
 
 import pytest
 
@@ -42,8 +44,19 @@ COOKIE_SECRET = f"round30-cookie-{FAKE_SECRET}"
 SECRET_MARKERS = (FAKE_SECRET, AUTH_SECRET, API_KEY_SECRET, COOKIE_SECRET)
 FORMULA_VALUES = ("=cmd", "+SUM", "-1+2", "@foo")
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+PDF_MIME = "application/pdf"
+XMIND_UPLOAD_MIME = "application/x-xmind"
+XMIND_MIME_CANDIDATES = {
+    "application/octet-stream",
+    "application/vnd.xmind.workbook",
+    "application/x-xmind",
+    "application/xmind",
+    "application/zip",
+}
+REAL_BINARY_EXPORT_FORMATS = ("pdf", "docx", "xmind")
+OCR_HINT_MARKERS = ("ocr", "text insufficient", "insufficient text", "needs_ocr", "文本不足", "无文本")
 FAKE_FILE_FIELDS = {"filename", "content", "content_base64", "mime_type"}
-UNSUPPORTED_FILE_TYPES = ("pdf", "word", "docx", "xmind")
 
 
 def payload_text(payload: Any) -> str:
@@ -227,6 +240,10 @@ def seed_export_context(marker: str | None = None) -> dict[str, Any]:
         return {
             "marker": marker,
             "project_id": project.id,
+            "document_id": document.id,
+            "document_name": document.name,
+            "item_id": item.id,
+            "item_title": item.title,
             "case_id": selected_case.id,
             "case_title": selected_case.title,
             "unselected_case_title": unselected_case.title,
@@ -277,30 +294,83 @@ def seed_formula_context(marker: str | None = None) -> dict[str, Any]:
         return {"project_id": project.id, "case_ids": case_ids, "defect_ids": defect_ids, "marker": marker}
 
 
-def seed_report(marker: str | None = None) -> int:
+def seed_report_export_context(marker: str | None = None) -> dict[str, Any]:
     marker = marker or uuid4().hex[:10]
     with session_scope() as session:
-        project = _create_project(session, marker, "report")
+        project = _create_project(session, marker, "report-export")
+        report_name = f"round30-report-export-{marker}"
         report = Report(
             project_id=project.id,
-            name=f"round30-report-{marker}",
+            name=report_name,
             type="comprehensive",
             status="generated",
             related_module="project",
             related_scope_json={"project_id": project.id},
             requirement_item_ids_json=[],
             source_document_ids_json=[],
-            scope_snapshot={"project_id": project.id},
-            data_snapshot={"marker": marker},
-            source_refs_json={},
-            content=f"# Round30 report {marker}\n",
+            scope_snapshot={"project_id": project.id, "token": FAKE_SECRET},
+            data_snapshot={"marker": marker, "summary": f"Round30 report export summary {marker}", "cookie": COOKIE_SECRET},
+            source_refs_json={"authorization": AUTH_SECRET},
+            content=(
+                f"# {report_name}\n\n"
+                f"Round30 report export visible marker {marker}.\n"
+                f"Do not leak token={FAKE_SECRET} or cookie={COOKIE_SECRET}.\n"
+            ),
             template_version="r30",
             ai_summary_version="rules",
             generated_at=datetime.now(timezone.utc),
         )
         session.add(report)
         session.flush()
-        return report.id
+        return {
+            "project_id": project.id,
+            "report_id": report.id,
+            "report_name": report_name,
+            "visible_marker": f"Round30 report export visible marker {marker}",
+            "marker": marker,
+        }
+
+
+def seed_perf_export_context(marker: str | None = None) -> dict[str, Any]:
+    marker = marker or uuid4().hex[:10]
+    with session_scope() as session:
+        project = _create_project(session, marker, "perf-export")
+        plan = PerfPlan(
+            project_id=project.id,
+            name=f"round30-perf-export-{marker}",
+            target_doc="p95 <= 300ms",
+            plan_schema={"thresholds": {"p95_ms": 300}, "authorization": AUTH_SECRET},
+            status="scripted",
+        )
+        session.add(plan)
+        session.flush()
+        result = PerfResult(
+            plan_id=plan.id,
+            project_id=project.id,
+            status="completed",
+            summary_data={
+                "total": 12,
+                "passed": 12,
+                "failed": 0,
+                "p95_ms": 120,
+                "visible_note": f"Round30 perf export marker {marker}",
+                "api_key": API_KEY_SECRET,
+            },
+            timeline_data=[{"second": 1, "p95_ms": 120}],
+            error_details=[{"note": f"cookie={COOKIE_SECRET}"}],
+            artifacts={"token": FAKE_SECRET},
+            duration=5,
+        )
+        session.add(result)
+        session.flush()
+        return {
+            "project_id": project.id,
+            "plan_id": plan.id,
+            "result_id": result.id,
+            "plan_name": plan.name,
+            "visible_marker": f"Round30 perf export marker {marker}",
+            "marker": marker,
+        }
 
 
 def seed_import_context(marker: str | None = None) -> dict[str, Any]:
@@ -572,6 +642,516 @@ def is_neutralized_cell(value: str, formula: str) -> bool:
     return value != formula and any(value.startswith(prefix + formula) for prefix in ("'", "\t", " ", "\u200b", "\ufeff"))
 
 
+def export_binary_bytes(response, *, expected_format: str, allowed_mime_types: set[str]) -> tuple[dict[str, Any], bytes]:
+    content_type = response.headers.get("content-type", "")
+    if "application/json" not in content_type:
+        assert response.status_code == 200, response.text
+        mime = content_type.split(";", 1)[0]
+        assert mime in allowed_mime_types, response.headers
+        disposition = response.headers.get("content-disposition", "")
+        if disposition:
+            assert f".{expected_format}" in disposition.lower(), disposition
+        return {"mime_type": mime, "format": expected_format}, response.content
+
+    payload = response_payload(response)
+    assert response.status_code in {200, 201}, response.text
+    assert payload.get("code") in {0, 200}, payload
+    data = payload.get("data")
+    assert isinstance(data, dict), payload
+    assert data.get("format") == expected_format, data
+    if data.get("filename"):
+        assert str(data["filename"]).lower().endswith(f".{expected_format}"), data
+    mime = str(data.get("mime_type") or data.get("mime") or "").split(";", 1)[0]
+    assert mime in allowed_mime_types, data
+    if isinstance(data.get("content_base64"), str):
+        return data, base64.b64decode(data["content_base64"])
+    if isinstance(data.get("content"), str):
+        content = data["content"]
+        try:
+            return data, base64.b64decode(content, validate=True)
+        except Exception:
+            return data, content.encode("latin-1")
+    pytest.fail(f"{expected_format} export must provide raw bytes or content_base64: {data!r}", pytrace=False)
+
+
+def xml_text_values(raw_xml: bytes) -> list[str]:
+    try:
+        root = ElementTree.fromstring(raw_xml)
+    except ElementTree.ParseError:
+        return []
+    return [element.text.strip() for element in root.iter() if element.text and element.text.strip()]
+
+
+def assert_real_docx(raw_docx: bytes) -> tuple[set[str], str]:
+    assert raw_docx.startswith(b"PK"), raw_docx[:8]
+    with zipfile.ZipFile(io.BytesIO(raw_docx)) as archive:
+        names = set(archive.namelist())
+        assert_zip_names_safe(names)
+        required = {"[Content_Types].xml", "_rels/.rels", "word/document.xml"}
+        assert required <= names, names
+        xml_fragments: list[str] = []
+        for name in names:
+            if name.endswith(".xml"):
+                raw_xml = archive.read(name)
+                xml_fragments.append(raw_xml.decode("utf-8", errors="replace"))
+                xml_fragments.extend(xml_text_values(raw_xml))
+        combined = "\n".join(xml_fragments)
+        return names, combined
+
+
+def collect_json_strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        result: list[str] = []
+        for item in value.values():
+            result.extend(collect_json_strings(item))
+        return result
+    if isinstance(value, list):
+        result: list[str] = []
+        for item in value:
+            result.extend(collect_json_strings(item))
+        return result
+    return []
+
+
+def assert_real_xmind(raw_xmind: bytes) -> tuple[set[str], str]:
+    assert raw_xmind.startswith(b"PK"), raw_xmind[:8]
+    with zipfile.ZipFile(io.BytesIO(raw_xmind)) as archive:
+        names = set(archive.namelist())
+        assert_zip_names_safe(names)
+        assert "content.json" in names or "content.xml" in names, names
+        fragments: list[str] = []
+        if "content.json" in names:
+            content_json = json.loads(archive.read("content.json").decode("utf-8"))
+            fragments.extend(collect_json_strings(content_json))
+        if "content.xml" in names:
+            raw_xml = archive.read("content.xml")
+            fragments.append(raw_xml.decode("utf-8", errors="replace"))
+            fragments.extend(xml_text_values(raw_xml))
+        combined = "\n".join(item for item in fragments if item)
+        assert combined.strip(), combined
+        return names, combined
+
+
+def pdf_candidate_text(raw_pdf: bytes) -> str:
+    fragments = [raw_pdf.decode("latin-1", errors="ignore")]
+    for match in re.finditer(rb"stream\r?\n(.*?)\r?\nendstream", raw_pdf, re.DOTALL):
+        chunk = match.group(1).strip(b"\r\n")
+        if not chunk:
+            continue
+        for candidate in (chunk, _maybe_inflate_pdf_stream(chunk)):
+            if not candidate:
+                continue
+            for encoding in ("utf-8", "latin-1", "utf-16-be", "utf-16-le"):
+                try:
+                    fragments.append(candidate.decode(encoding))
+                except UnicodeDecodeError:
+                    continue
+            fragments.extend(_decode_pdf_hex_strings(candidate))
+    return "\n".join(fragments)
+
+
+def _maybe_inflate_pdf_stream(value: bytes) -> bytes | None:
+    try:
+        return zlib.decompress(value)
+    except Exception:
+        return None
+
+
+def assert_real_pdf(raw_pdf: bytes) -> str:
+    assert raw_pdf.startswith(b"%PDF-"), raw_pdf[:8]
+    assert b"%%EOF" in raw_pdf[-2048:], raw_pdf[-2048:]
+    combined = pdf_candidate_text(raw_pdf)
+    assert combined.strip(), combined
+    return combined
+
+
+def assert_text_contains_expected_markers(text: str, *, present: tuple[str, ...], absent: tuple[str, ...] = ()) -> None:
+    for marker in present:
+        assert marker in text, {"missing": marker, "text": text}
+    for marker in absent:
+        assert marker not in text, {"unexpected": marker, "text": text}
+
+
+def _decode_pdf_hex_strings(raw_bytes: bytes) -> list[str]:
+    decoded: list[str] = []
+    for match in re.finditer(rb"<([0-9A-Fa-f\s]+)>", raw_bytes):
+        compact = re.sub(rb"\s+", b"", match.group(1))
+        if not compact or len(compact) % 2:
+            continue
+        try:
+            binary = bytes.fromhex(compact.decode("ascii"))
+        except ValueError:
+            continue
+        for encoding in ("utf-16-be", "utf-8", "latin-1"):
+            try:
+                text = binary.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+            if text.strip():
+                decoded.append(text)
+    return decoded
+
+
+def _excel_column_name(index: int) -> str:
+    letters = ""
+    current = index
+    while current:
+        current, remainder = divmod(current - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters or "A"
+
+
+def docx_payload_bytes(paragraphs: list[str], table_rows: list[list[str]]) -> bytes:
+    def paragraph_xml(text: str) -> str:
+        return f"<w:p><w:r><w:t>{xml_escape(text)}</w:t></w:r></w:p>"
+
+    table_xml = ""
+    if table_rows:
+        table_rows_xml = []
+        for row in table_rows:
+            cells = "".join(
+                f"<w:tc><w:p><w:r><w:t>{xml_escape(cell)}</w:t></w:r></w:p></w:tc>"
+                for cell in row
+            )
+            table_rows_xml.append(f"<w:tr>{cells}</w:tr>")
+        table_xml = f"<w:tbl>{''.join(table_rows_xml)}</w:tbl>"
+
+    document_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    {''.join(paragraph_xml(item) for item in paragraphs)}
+    {table_xml}
+    <w:sectPr/>
+  </w:body>
+</w:document>"""
+    content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"""
+    rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", rels)
+        archive.writestr("word/document.xml", document_xml)
+    return buffer.getvalue()
+
+
+def xlsx_payload_bytes(rows: list[list[str]]) -> bytes:
+    shared_strings: list[str] = []
+    shared_index: dict[str, int] = {}
+
+    def string_id(value: str) -> int:
+        if value not in shared_index:
+            shared_index[value] = len(shared_strings)
+            shared_strings.append(value)
+        return shared_index[value]
+
+    xml_rows: list[str] = []
+    for row_index, row in enumerate(rows, start=1):
+        cells = []
+        for column_index, value in enumerate(row, start=1):
+            ref = f"{_excel_column_name(column_index)}{row_index}"
+            cells.append(f'<c r="{ref}" t="s"><v>{string_id(value)}</v></c>')
+        xml_rows.append(f'<row r="{row_index}">{"".join(cells)}</row>')
+
+    workbook_xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Round30" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"""
+    sheet_xml = f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>{''.join(xml_rows)}</sheetData>
+</worksheet>"""
+    shared_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{len(shared_strings)}" uniqueCount="{len(shared_strings)}">'
+        + "".join(f"<si><t>{xml_escape(item)}</t></si>" for item in shared_strings)
+        + "</sst>"
+    )
+    content_types = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+</Types>"""
+    root_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+    workbook_rels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+</Relationships>"""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", root_rels)
+        archive.writestr("xl/workbook.xml", workbook_xml)
+        archive.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+        archive.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+        archive.writestr("xl/sharedStrings.xml", shared_xml)
+    return buffer.getvalue()
+
+
+def xmind_payload_bytes(lines: list[str]) -> bytes:
+    topic_nodes = [
+        {"id": f"topic-{index}", "title": line}
+        for index, line in enumerate(lines, start=1)
+    ]
+    content_json = [
+        {
+            "id": "sheet-1",
+            "class": "sheet",
+            "title": "Round30 XMind Sheet",
+            "rootTopic": {
+                "id": "root-1",
+                "title": lines[0],
+                "children": {"attached": topic_nodes[1:]},
+            },
+        }
+    ]
+    xml_topics = "".join(
+        f'<topic id="topic-{index}"><title>{xml_escape(line)}</title></topic>'
+        for index, line in enumerate(lines[1:], start=1)
+    )
+    content_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<xmap-content xmlns="urn:xmind:xmap:xmlns:content:2.0" version="2.0">
+  <sheet id="sheet-1">
+    <title>Round30 XMind Sheet</title>
+    <topic id="root-1">
+      <title>{xml_escape(lines[0])}</title>
+      <children>
+        <topics type="attached">{xml_topics}</topics>
+      </children>
+    </topic>
+  </sheet>
+</xmap-content>"""
+    manifest_xml = """<?xml version="1.0" encoding="UTF-8"?>
+<manifest xmlns="urn:xmind:xmap:xmlns:manifest:1.0">
+  <file-entry full-path="content.json" media-type="text/plain"/>
+  <file-entry full-path="content.xml" media-type="text/xml"/>
+</manifest>"""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("content.json", json.dumps(content_json, ensure_ascii=False))
+        archive.writestr("content.xml", content_xml)
+        archive.writestr("META-INF/manifest.xml", manifest_xml)
+    return buffer.getvalue()
+
+
+def _pdf_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def pdf_payload_bytes(lines: list[str], *, title: str = "Round30 PDF") -> bytes:
+    text_ops = ["BT", "/F1 12 Tf", "72 760 Td"]
+    for index, line in enumerate(lines):
+        if index:
+            text_ops.append("0 -18 Td")
+        text_ops.append(f"({_pdf_escape(line)}) Tj")
+    text_ops.append("ET")
+    stream = "\n".join(text_ops).encode("latin-1")
+    objects = [
+        b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        b"2 0 obj\n<< /Type /Pages /Count 1 /Kids [3 0 R] >>\nendobj\n",
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>\nendobj\n",
+        b"4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        f"5 0 obj\n<< /Length {len(stream)} >>\nstream\n".encode("latin-1") + stream + b"\nendstream\nendobj\n",
+        f"6 0 obj\n<< /Title ({_pdf_escape(title)}) >>\nendobj\n".encode("latin-1"),
+    ]
+    buffer = io.BytesIO()
+    buffer.write(b"%PDF-1.4\n")
+    offsets = [0]
+    for obj in objects:
+        offsets.append(buffer.tell())
+        buffer.write(obj)
+    xref_pos = buffer.tell()
+    buffer.write(f"xref\n0 {len(objects) + 1}\n".encode("latin-1"))
+    buffer.write(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        buffer.write(f"{offset:010d} 00000 n \n".encode("latin-1"))
+    buffer.write(
+        (
+            "trailer\n"
+            f"<< /Size {len(objects) + 1} /Root 1 0 R /Info 6 0 R >>\n"
+            f"startxref\n{xref_pos}\n%%EOF"
+        ).encode("latin-1")
+    )
+    return buffer.getvalue()
+
+
+def build_requirement_binary_sample(file_type: str) -> dict[str, Any]:
+    if file_type == "docx":
+        visible = ("Round30 DOCX Heading", "Visible paragraph for docx parsing", "Priority", "P0")
+        raw_bytes = docx_payload_bytes(
+            [visible[0], visible[1], f"token={FAKE_SECRET} should be redacted"],
+            [["Field", "Value"], [visible[2], visible[3]], ["Cookie", COOKIE_SECRET]],
+        )
+        mime_type = DOCX_MIME
+    elif file_type == "xlsx":
+        visible = ("Module", "Round30 XLSX table row", "Status", "Ready")
+        raw_bytes = xlsx_payload_bytes(
+            [
+                ["Column", "Value"],
+                [visible[0], visible[1]],
+                [visible[2], visible[3]],
+                ["Authorization", AUTH_SECRET],
+            ]
+        )
+        mime_type = XLSX_MIME
+    elif file_type == "xmind":
+        visible = ("Round30 XMind Root", "Requirement Branch", "Scenario Leaf")
+        raw_bytes = xmind_payload_bytes([*visible, f"secret {FAKE_SECRET} must be redacted"])
+        mime_type = XMIND_UPLOAD_MIME
+    elif file_type == "pdf":
+        visible = ("Round30 PDF Requirement", "Visible text PDF body", "Export contract must parse text")
+        raw_bytes = pdf_payload_bytes([*visible, f"api_key={API_KEY_SECRET} must be redacted"], title=visible[0])
+        mime_type = PDF_MIME
+    else:
+        raise AssertionError(file_type)
+    return {"bytes": raw_bytes, "mime_type": mime_type, "expected_markers": visible}
+
+
+def build_binary_curl_container(file_type: str) -> dict[str, Any]:
+    command = (
+        f"curl -X GET https://example.invalid/round30/binary/{file_type}/health?mode={file_type} "
+        f"-H 'Authorization: {AUTH_SECRET}' "
+        f"-H 'Cookie: {COOKIE_SECRET}' "
+        "-H 'Content-Type: application/json'"
+    )
+    if file_type == "docx":
+        raw_bytes = docx_payload_bytes(
+            ["Round30 API binary import docx", "Visible curl command follows"],
+            [["Command", command], ["Note", f"api_key={API_KEY_SECRET}"]],
+        )
+        mime_type = DOCX_MIME
+    elif file_type == "xlsx":
+        raw_bytes = xlsx_payload_bytes(
+            [["Type", "Value"], ["Command", command], ["Secret", f"token={FAKE_SECRET}"]]
+        )
+        mime_type = XLSX_MIME
+    elif file_type == "xmind":
+        raw_bytes = xmind_payload_bytes(
+            ["Round30 API binary root", "Curl command", command, f"cookie {COOKIE_SECRET}"]
+        )
+        mime_type = XMIND_UPLOAD_MIME
+    elif file_type == "pdf":
+        raw_bytes = pdf_payload_bytes(["Round30 API binary PDF", command, f"secret {FAKE_SECRET}"], title="Round30 API binary PDF")
+        mime_type = PDF_MIME
+    else:
+        raise AssertionError(file_type)
+    return {
+        "bytes": raw_bytes,
+        "mime_type": mime_type,
+        "path": f"/round30/binary/{file_type}/health",
+        "method": "GET",
+        "expected_status": 200,
+    }
+
+
+def build_blank_pdf_container() -> bytes:
+    return pdf_payload_bytes([], title="")
+
+
+def binary_upload_payload(
+    *,
+    file_type: str,
+    mime_type: str,
+    raw_bytes: bytes,
+    source_type: str,
+    source_file_name: str,
+    name: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "source_type": source_type,
+        "file_type": file_type,
+        "source_file_name": source_file_name,
+        "mime_type": mime_type,
+        "content_base64": base64.b64encode(raw_bytes).decode("ascii"),
+    }
+    if name is not None:
+        payload["name"] = name
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def post_api_binary_import(client, target: str, api_lib_id: int, payload: dict[str, Any]):
+    path = (
+        f"{API_PREFIX}/api-test-libs/{api_lib_id}/import-documents"
+        if target == "api-documents"
+        else f"{API_PREFIX}/api-test-libs/{api_lib_id}/apis/import"
+    )
+    return api_request(client, "post", path, json=payload)
+
+
+def assert_ocr_needed_contract(response) -> dict[str, Any]:
+    payload = response_payload(response)
+    assert {"code", "message", "data"} <= payload.keys(), payload
+    dumped = payload_text(payload).lower()
+    assert "unsupported" not in dumped, payload
+    assert any(marker in dumped for marker in OCR_HINT_MARKERS), payload
+    if response.status_code in {200, 201}:
+        assert payload["code"] in {0, 200}, payload
+        data = payload.get("data")
+        assert isinstance(data, dict), payload
+        data_dump = payload_text(data).lower()
+        assert any(marker in data_dump for marker in OCR_HINT_MARKERS), data
+        for key in ("blocks", "items", "apis", "test_cases"):
+            value = data.get(key)
+            assert value in (None, [], {}), data
+    else:
+        assert response.status_code in {400, 409, 415, 422}, response.text
+        assert payload["code"] not in {0, 200, 201}, payload
+    assert_no_fake_secrets(payload)
+    return payload
+
+
+def assert_export_file_contract(
+    fmt: str,
+    raw_bytes: bytes,
+    *,
+    present_markers: tuple[str, ...],
+    absent_markers: tuple[str, ...] = (),
+) -> str:
+    if fmt == "docx":
+        _, combined = assert_real_docx(raw_bytes)
+    elif fmt == "xmind":
+        _, combined = assert_real_xmind(raw_bytes)
+    elif fmt == "pdf":
+        combined = assert_real_pdf(raw_bytes)
+    else:
+        raise AssertionError(fmt)
+    assert_text_contains_expected_markers(combined, present=present_markers, absent=absent_markers)
+    assert_no_fake_secrets(combined)
+    assert_no_fake_secrets(raw_bytes.decode("latin-1", errors="ignore"))
+    return combined
+
+
+def export_mime_candidates(fmt: str) -> set[str]:
+    if fmt == "pdf":
+        return {PDF_MIME}
+    if fmt == "docx":
+        return {DOCX_MIME}
+    if fmt == "xmind":
+        return XMIND_MIME_CANDIDATES
+    raise AssertionError(fmt)
+
+
 def decode_zip_payload(payload: dict[str, Any]) -> tuple[bytes, dict[str, Any], set[str], dict[str, bytes]]:
     raw_zip = base64.b64decode(payload["content_base64"])
     with zipfile.ZipFile(io.BytesIO(raw_zip)) as archive:
@@ -699,45 +1279,236 @@ def test_csv_and_xlsx_exports_neutralize_formula_injection_and_redact_secrets(cl
     assert_no_fake_secrets("\n".join([*values, *xml_by_name.values()]))
 
 
-@pytest.mark.parametrize("fmt", UNSUPPORTED_FILE_TYPES)
-@pytest.mark.parametrize("target", ["test-cases", "defects", "reports"])
-def test_unsupported_export_formats_return_structured_errors_without_fake_file_fields(client, target: str, fmt: str):
-    if target == "reports":
-        response = api_request(client, "get", f"{API_PREFIX}/reports/{seed_report()}/download", params={"format": fmt})
-    else:
-        response = api_request(client, "get", f"{API_PREFIX}/{target}/export", params={"format": fmt})
+@pytest.mark.parametrize("fmt", REAL_BINARY_EXPORT_FORMATS)
+def test_test_case_binary_exports_return_real_files_filter_data_and_redact_secrets(client, fmt: str):
+    context = seed_export_context()
 
-    assert_structured_unsupported(response)
+    response = client.get(
+        f"{API_PREFIX}/test-cases/export",
+        params={"projectId": context["project_id"], "caseIds": str(context["case_id"]), "format": fmt},
+    )
+    exported, raw_bytes = export_binary_bytes(response, expected_format=fmt, allowed_mime_types=export_mime_candidates(fmt))
+    assert exported.get("count") in {None, 1}, exported
+    assert_export_file_contract(
+        fmt,
+        raw_bytes,
+        present_markers=(context["case_title"],),
+        absent_markers=(context["unselected_case_title"], context["foreign_case_title"]),
+    )
+    assert_no_fake_secrets(exported)
 
 
-@pytest.mark.parametrize("file_type", ("docx", "pdf", "xlsx", "xmind"))
-@pytest.mark.parametrize("target", ["requirement-documents", "api-documents", "api-import"])
-def test_document_and_api_import_reject_unsupported_file_types_without_fake_collections(client, target: str, file_type: str):
-    context = seed_import_context()
-    payload = {
-        "source_type": file_type,
-        "file_type": file_type,
-        "source_file_name": f"round30.{file_type}",
-        "content": f"fake {file_type} binary source token={FAKE_SECRET}",
-        "raw_content": f"fake {file_type} binary source token={FAKE_SECRET}",
-        "generate_cases": True,
-        "create_cases": True,
-    }
+@pytest.mark.parametrize("fmt", REAL_BINARY_EXPORT_FORMATS)
+def test_defect_binary_exports_return_real_files_filter_data_and_redact_secrets(client, fmt: str):
+    context = seed_export_context()
 
-    if target == "requirement-documents":
-        response = api_request(
+    response = client.get(
+        f"{API_PREFIX}/defects/export",
+        params={"projectId": context["project_id"], "status": "open", "format": fmt},
+    )
+    exported, raw_bytes = export_binary_bytes(response, expected_format=fmt, allowed_mime_types=export_mime_candidates(fmt))
+    assert exported.get("count") in {None, 1}, exported
+    assert_export_file_contract(
+        fmt,
+        raw_bytes,
+        present_markers=(context["defect_title"],),
+        absent_markers=(context["closed_defect_title"], context["foreign_defect_title"]),
+    )
+    assert_no_fake_secrets(exported)
+
+
+@pytest.mark.parametrize("fmt", REAL_BINARY_EXPORT_FORMATS)
+def test_report_binary_exports_return_real_files_and_redact_secrets(client, fmt: str):
+    context = seed_report_export_context()
+
+    response = api_request(
+        client,
+        "get",
+        f"{API_PREFIX}/reports/{context['report_id']}/download",
+        params={"format": fmt},
+    )
+    exported, raw_bytes = export_binary_bytes(response, expected_format=fmt, allowed_mime_types=export_mime_candidates(fmt))
+    assert_export_file_contract(
+        fmt,
+        raw_bytes,
+        present_markers=(context["report_name"],),
+    )
+    assert_no_fake_secrets(exported)
+
+
+@pytest.mark.parametrize("fmt", REAL_BINARY_EXPORT_FORMATS)
+def test_performance_binary_exports_return_real_files_and_redact_secrets(client, fmt: str):
+    context = seed_perf_export_context()
+
+    response = api_request(
+        client,
+        "get",
+        f"{API_PREFIX}/perf-plans/{context['plan_id']}/results/{context['result_id']}/download",
+        params={"format": fmt},
+    )
+    exported, raw_bytes = export_binary_bytes(response, expected_format=fmt, allowed_mime_types=export_mime_candidates(fmt))
+    assert_export_file_contract(
+        fmt,
+        raw_bytes,
+        present_markers=(context["plan_name"], context["visible_marker"]),
+    )
+    assert_no_fake_secrets(exported)
+
+
+@pytest.mark.parametrize("fmt", REAL_BINARY_EXPORT_FORMATS)
+def test_requirement_document_binary_exports_return_real_files_and_redact_secrets(client, fmt: str):
+    context = seed_export_context()
+
+    response = api_request(
+        client,
+        "get",
+        f"{API_PREFIX}/requirement-documents/{context['document_id']}/export",
+        params={"format": fmt},
+    )
+    exported, raw_bytes = export_binary_bytes(response, expected_format=fmt, allowed_mime_types=export_mime_candidates(fmt))
+    assert_export_file_contract(
+        fmt,
+        raw_bytes,
+        present_markers=(context["document_name"], context["item_title"]),
+    )
+    assert_no_fake_secrets(exported)
+
+
+@pytest.mark.parametrize("fmt", REAL_BINARY_EXPORT_FORMATS)
+def test_requirement_item_binary_exports_return_real_files_and_redact_secrets(client, fmt: str):
+    context = seed_export_context()
+
+    response = api_request(
+        client,
+        "get",
+        f"{API_PREFIX}/requirement-items/{context['item_id']}/export",
+        params={"format": fmt},
+    )
+    exported, raw_bytes = export_binary_bytes(response, expected_format=fmt, allowed_mime_types=export_mime_candidates(fmt))
+    assert_export_file_contract(
+        fmt,
+        raw_bytes,
+        present_markers=(context["item_title"],),
+    )
+    assert_no_fake_secrets(exported)
+
+
+@pytest.mark.parametrize("file_type", ("docx", "xlsx", "xmind", "pdf"))
+def test_requirement_documents_parse_binary_files_extract_visible_content_and_redact_secrets(client, file_type: str):
+    context = seed_import_context(f"req-{file_type}-{uuid4().hex[:6]}")
+    sample = build_requirement_binary_sample(file_type)
+    create_payload = binary_upload_payload(
+        file_type=file_type,
+        mime_type=sample["mime_type"],
+        raw_bytes=sample["bytes"],
+        source_type=file_type,
+        source_file_name=f"round30-requirement.{file_type}",
+        name=f"Round30 {file_type} requirement import",
+        extra={"lib_id": context["lib_id"]},
+    )
+
+    document = data_of(
+        api_request(
             client,
             "post",
             f"{API_PREFIX}/projects/{context['project_id']}/requirement-documents",
-            json={"lib_id": context["lib_id"], "name": f"round30-{file_type}", **payload},
+            json=create_payload,
         )
-    elif target == "api-documents":
-        response = api_request(client, "post", f"{API_PREFIX}/api-test-libs/{context['api_lib_id']}/import-documents", json=payload)
-    else:
-        response = api_request(client, "post", f"{API_PREFIX}/api-test-libs/{context['api_lib_id']}/apis/import", json=payload)
+    )
+    document_id = object_id(document, "id", "document_id")
+    parsed = data_of(api_request(client, "post", f"{API_PREFIX}/requirement-documents/{document_id}/parse", json={"mode": "round30-binary"}))
+    blocks = parsed.get("blocks") or []
+    assert isinstance(blocks, list) and blocks, parsed
+    extracted = data_of(
+        api_request(
+            client,
+            "post",
+            f"{API_PREFIX}/requirement-documents/{document_id}/extract-items",
+            json={"mode": "round30-binary"},
+        )
+    )
+    items = list_items(extracted.get("items") or extracted)
+    assert items, extracted
 
-    error_payload = assert_structured_unsupported(response)
-    assert_no_fake_collection_fields(error_payload)
+    combined = payload_text({"document": document, "parse": parsed, "items": items})
+    assert_text_contains_expected_markers(combined, present=sample["expected_markers"])
+    assert_no_fake_secrets(document)
+    assert_no_fake_secrets(parsed)
+    assert_no_fake_secrets(items)
+
+
+def test_requirement_document_blank_pdf_returns_structured_ocr_needed_instead_of_unsupported(client):
+    context = seed_import_context(f"req-pdf-ocr-{uuid4().hex[:6]}")
+    payload = binary_upload_payload(
+        file_type="pdf",
+        mime_type=PDF_MIME,
+        raw_bytes=build_blank_pdf_container(),
+        source_type="pdf",
+        source_file_name="round30-blank.pdf",
+        name="Round30 blank pdf import",
+        extra={"lib_id": context["lib_id"]},
+    )
+
+    create_response = api_request(
+        client,
+        "post",
+        f"{API_PREFIX}/projects/{context['project_id']}/requirement-documents",
+        json=payload,
+    )
+    if create_response.status_code not in {200, 201}:
+        assert_ocr_needed_contract(create_response)
+        return
+
+    document = data_of(create_response)
+    parse_response = api_request(
+        client,
+        "post",
+        f"{API_PREFIX}/requirement-documents/{object_id(document, 'id', 'document_id')}/parse",
+        json={"mode": "round30-binary"},
+    )
+    assert_ocr_needed_contract(parse_response)
+
+
+@pytest.mark.parametrize("target", ["api-documents", "api-import"])
+@pytest.mark.parametrize("file_type", ("docx", "xlsx", "xmind", "pdf"))
+def test_api_import_parses_binary_wrappers_and_keeps_case_generation_working(client, target: str, file_type: str):
+    context = seed_import_context(f"api-{target}-{file_type}-{uuid4().hex[:6]}")
+    sample = build_binary_curl_container(file_type)
+    payload = binary_upload_payload(
+        file_type=file_type,
+        mime_type=sample["mime_type"],
+        raw_bytes=sample["bytes"],
+        source_type="curl",
+        source_file_name=f"round30-api-import.{file_type}",
+        extra={"generate_cases": True, "create_cases": True, "create_test_cases": True},
+    )
+
+    imported = data_of(post_api_binary_import(client, target, context["api_lib_id"], payload))
+    endpoints = list_items(imported.get("apis") if isinstance(imported, dict) else imported)
+    endpoint = next((item for item in endpoints if item.get("path") == sample["path"]), None)
+    assert endpoint is not None, {"expected_path": sample["path"], "endpoints": endpoints}
+    assert endpoint.get("method") == sample["method"], endpoint
+
+    cases = list_items(imported.get("test_cases") or data_of(client.get(f"{API_PREFIX}/apis/{object_id(endpoint)}/test-cases")))
+    assert any(api_case_expected_status(case) == sample["expected_status"] for case in cases), cases
+    assert_no_fake_secrets(imported)
+    assert_no_fake_secrets(cases)
+
+
+@pytest.mark.parametrize("target", ["api-documents", "api-import"])
+def test_api_import_blank_pdf_returns_structured_ocr_needed_instead_of_unsupported(client, target: str):
+    context = seed_import_context(f"api-{target}-pdf-ocr-{uuid4().hex[:6]}")
+    payload = binary_upload_payload(
+        file_type="pdf",
+        mime_type=PDF_MIME,
+        raw_bytes=build_blank_pdf_container(),
+        source_type="curl",
+        source_file_name="round30-api-blank.pdf",
+        extra={"generate_cases": True, "create_cases": True, "create_test_cases": True},
+    )
+
+    response = post_api_binary_import(client, target, context["api_lib_id"], payload)
+    assert_ocr_needed_contract(response)
 
 
 @pytest.mark.parametrize("artifact_kind", ["automation", "performance"])

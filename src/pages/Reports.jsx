@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, apiRequest, downloadExportedFile, formatDownloadError, formatDateTime, pickList } from '../lib/api';
+import { apiDownload, apiGet, apiPost, apiRequest, formatDownloadError, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
 const SUPPORTED_DOWNLOAD_FORMATS = [
@@ -36,6 +36,8 @@ const UNSUPPORTED_DOWNLOAD_FORMATS = [
   { id: 'pdf', label: 'PDF' },
   { id: 'word', label: 'Word' }
 ];
+
+const REPORT_DOWNLOAD_FORMATS = [...SUPPORTED_DOWNLOAD_FORMATS, ...UNSUPPORTED_DOWNLOAD_FORMATS];
 
 const DRILLDOWN_SECTIONS = [
   { id: 'requirements', label: '需求快照' },
@@ -784,8 +786,8 @@ export default function Reports() {
   const updateFilter = (key, value) => setFilters(current => ({ ...current, [key]: value }));
 
   const handleDownloadReport = async (format) => {
-    if (!SUPPORTED_DOWNLOAD_FORMATS.some(item => item.id === format)) {
-      showToast('PDF / Word 报告未开放；请使用 HTML 或 Markdown 替代，不会生成假下载文件。', 'info');
+    if (!REPORT_DOWNLOAD_FORMATS.some(item => item.id === format)) {
+      showToast(`不支持 ${format} 报告下载。`, 'error');
       return;
     }
     if (!selectedReport?.id || !isNumericId(selectedReport.id)) {
@@ -795,10 +797,11 @@ export default function Reports() {
 
     setIsDownloadingReport(true);
     try {
-      const exported = await apiGet(`/reports/${selectedReport.id}/download`, { params: { format } });
-      downloadExportedFile(exported, {
+      await apiDownload(`/reports/${selectedReport.id}/download`, {
+        params: { format },
         format,
-        defaultFilename: `report-${selectedReport.id}.${format === 'markdown' ? 'md' : format}`
+        timeoutMs: 15000,
+        defaultFilename: `report-${selectedReport.id}${format === 'markdown' ? '.md' : format === 'word' ? '.docx' : `.${format}`}`
       });
       showToast(`${format.toUpperCase()} 报告已开始下载。`);
     } catch (error) {
@@ -1405,9 +1408,10 @@ export default function Reports() {
                 <button
                   key={format.id}
                   onClick={() => handleDownloadReport(format.id)}
-                  className="rounded-lg border border-dashed border-[var(--border-color)] bg-[var(--border-color)]/10 px-2 py-1.5 text-[9px] font-bold text-[var(--text-secondary)]"
+                  disabled={!selectedReport || isDownloadingReport}
+                  className="rounded-lg border border-dashed border-[var(--border-color)] bg-[var(--border-color)]/10 px-2 py-1.5 text-[9px] font-bold text-[var(--text-secondary)] disabled:opacity-50"
                 >
-                  {format.label} 未开放，用 HTML/Markdown 替代
+                  {isDownloadingReport ? '下载中...' : format.label}
                 </button>
               ))}
             </div>
@@ -1591,9 +1595,10 @@ export default function Reports() {
             <button
               key={format.id}
               onClick={() => handleDownloadReport(format.id)}
-              className="rounded-lg border border-dashed border-[var(--border-color)] bg-[var(--border-color)]/10 px-3 py-1.5 text-[10px] font-bold text-[var(--text-secondary)]"
+              disabled={!selectedReport || isDownloadingReport}
+              className="rounded-lg border border-dashed border-[var(--border-color)] bg-[var(--border-color)]/10 px-3 py-1.5 text-[10px] font-bold text-[var(--text-secondary)] disabled:opacity-50"
             >
-              {format.label} 未开放，用 HTML/Markdown 替代
+              {isDownloadingReport ? '下载中...' : format.label}
             </button>
           ))}
         </div>

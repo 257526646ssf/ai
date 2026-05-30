@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, downloadExportedFile, formatDownloadError, formatDateTime, pickList } from '../lib/api';
+import { apiDownload, apiGet, apiPost, formatDownloadError, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
 const SUPPORTED_CASE_EXPORT_FORMATS = [
@@ -31,6 +31,8 @@ const UNSUPPORTED_CASE_EXPORT_FORMATS = [
   { id: 'word', label: 'Word' },
   { id: 'xmind', label: 'XMind' }
 ];
+
+const ALL_CASE_EXPORT_FORMATS = [...SUPPORTED_CASE_EXPORT_FORMATS, ...UNSUPPORTED_CASE_EXPORT_FORMATS];
 
 const mapCaseStatus = (status) => {
   const normalized = String(status || '').toLowerCase();
@@ -360,7 +362,7 @@ export default function TestCases() {
   };
 
   const handleExportCases = async (format) => {
-    if (!SUPPORTED_CASE_EXPORT_FORMATS.some(item => item.id === format)) {
+    if (!ALL_CASE_EXPORT_FORMATS.some(item => item.id === format)) {
       showToast('PDF / Word / XMind 导出未开放；请使用 Markdown 或 HTML 替代，不会生成假下载文件。', 'info');
       return;
     }
@@ -372,16 +374,15 @@ export default function TestCases() {
 
     setIsExportingCases(true);
     try {
-      const exported = await apiGet('/test-cases/export', {
+      await apiDownload('/test-cases/export', {
         params: {
           projectId: projectContext?.id,
           requirementItemId: selectedRequirementItem?.backendId,
           format
-        }
-      });
-      downloadExportedFile(exported, {
+        },
         format,
-        defaultFilename: `test-cases.${format === 'markdown' ? 'md' : format}`
+        timeoutMs: 15000,
+        defaultFilename: `test-cases${format === 'markdown' ? '.md' : format === 'word' ? '.docx' : `.${format}`}`
       });
       window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: `${format.toUpperCase()} 测试用例文件已开始下载。`, type: 'success' } }));
     } catch (error) {
@@ -1471,9 +1472,10 @@ export default function TestCases() {
                     <button
                       key={format.id}
                       onClick={() => handleExportCases(format.id)}
-                      className="min-h-[32px] rounded-lg border border-dashed border-[var(--border-color)] bg-[var(--border-color)]/10 px-2 py-1.5 leading-tight"
+                      disabled={isExportingCases}
+                      className="min-h-[32px] rounded-lg border border-dashed border-[var(--border-color)] bg-[var(--border-color)]/10 px-2 py-1.5 leading-tight disabled:opacity-60"
                     >
-                      {format.label} 未开放，使用 Markdown/HTML 替代
+                      {isExportingCases ? '导出中...' : format.label}
                     </button>
                   ))}
                 </div>

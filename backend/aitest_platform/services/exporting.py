@@ -22,10 +22,29 @@ from aitest_platform.models import (
     Defect,
     PerfPlan,
     PerfResult,
+    RequirementDocument,
+    RequirementDocumentBlock,
+    RequirementItem,
     TestCase,
+    TestPoint,
 )
 from aitest_platform.services.perf_analysis import render_jmeter_script
-from aitest_platform.services.file_formats import UnsupportedFormatError, is_unsupported_export_format, unsupported_export_detail
+from aitest_platform.services.file_formats import (
+    UnsupportedFormatError,
+    is_unsupported_export_format,
+    normalize_format,
+    unsupported_export_detail,
+)
+from aitest_platform.services.office_formats import (
+    DOCX_MIME_TYPE,
+    PDF_MIME_TYPE,
+    XLSX_MIME_TYPE,
+    XMIND_MIME_TYPE,
+    markdown_to_blocks,
+    render_docx_document,
+    render_pdf_document,
+    render_xmind_document,
+)
 
 SENSITIVE_MARKERS = (
     "authorization",
@@ -39,9 +58,9 @@ SENSITIVE_MARKERS = (
     "git_auth",
 )
 TEXT_ARTIFACT_SUFFIXES = {".css", ".csv", ".html", ".js", ".json", ".log", ".md", ".txt", ".xml", ".yaml", ".yml"}
-TABULAR_EXPORT_FORMATS = {"markdown", "csv", "json", "xlsx"}
-PERF_RESULT_EXPORT_FORMATS = {"json", "html"}
-XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+TABULAR_EXPORT_FORMATS = {"markdown", "csv", "json", "xlsx", "pdf", "docx", "xmind"}
+PERF_RESULT_EXPORT_FORMATS = {"json", "html", "markdown", "pdf", "docx", "xmind"}
+REQUIREMENT_EXPORT_FORMATS = {"json", "markdown", "pdf", "docx", "xmind"}
 FORMULA_PREFIXES = ("=", "+", "-", "@")
 
 
@@ -92,6 +111,83 @@ def export_defects(
     rows = [_defect_row(defect) for defect in defects]
     filename = _filename("defects", fmt)
     return _tabular_export(filename, fmt, rows, "缺陷列表导出", _DEFECT_COLUMNS)
+
+
+def export_requirement_document(
+    session: Session,
+    *,
+    document_id: int,
+    output_format: str = "markdown",
+) -> dict[str, Any]:
+    fmt = _normalize_format(output_format, REQUIREMENT_EXPORT_FORMATS)
+    document = _require_active(session, RequirementDocument, document_id, "RequirementDocument")
+    blocks = list(
+        session.scalars(
+            select(RequirementDocumentBlock)
+            .where(RequirementDocumentBlock.document_id == document.id)
+            .order_by(RequirementDocumentBlock.order_no, RequirementDocumentBlock.id)
+        )
+    )
+    items = list(
+        session.scalars(
+            select(RequirementItem)
+            .where(RequirementItem.document_id == document.id, RequirementItem.is_deleted.is_(False))
+            .order_by(RequirementItem.id)
+        )
+    )
+    payload = {
+        "document": _requirement_document_row(document),
+        "parser_metadata": sanitize_export_payload(document.parser_metadata or {}),
+        "items": [_requirement_item_row(item) for item in items],
+        "blocks": [_requirement_block_row(block) for block in blocks],
+    }
+    markdown = _render_requirement_document_markdown(document, blocks, items)
+    filename_stem = _safe_filename_stem(document.source_file_name or document.name, fallback=f"requirement-document-{document.id}")
+    return _requirement_export_payload(filename_stem, fmt, payload, markdown, count=len(items))
+
+
+def export_requirement_item(
+    session: Session,
+    *,
+    item_id: int,
+    output_format: str = "markdown",
+) -> dict[str, Any]:
+    fmt = _normalize_format(output_format, REQUIREMENT_EXPORT_FORMATS)
+    item = _require_active(session, RequirementItem, item_id, "RequirementItem")
+    document = session.get(RequirementDocument, item.document_id)
+    all_blocks = list(
+        session.scalars(
+            select(RequirementDocumentBlock)
+            .where(RequirementDocumentBlock.document_id == item.document_id)
+            .order_by(RequirementDocumentBlock.order_no, RequirementDocumentBlock.id)
+        )
+    )
+    anchor_ids = {str(anchor) for anchor in (item.source_anchor_ids or []) if anchor not in (None, "")}
+    source_blocks = [block for block in all_blocks if str(block.block_key) in anchor_ids] if anchor_ids else all_blocks[:3]
+    test_points = list(
+        session.scalars(
+            select(TestPoint)
+            .where(TestPoint.requirement_item_id == item.id, TestPoint.is_deleted.is_(False))
+            .order_by(TestPoint.id)
+        )
+    )
+    test_cases = list(
+        session.scalars(
+            select(TestCase)
+            .where(TestCase.requirement_item_id == item.id, TestCase.is_deleted.is_(False))
+            .order_by(TestCase.id)
+        )
+    )
+    payload = {
+        "item": _requirement_item_row(item),
+        "document": _requirement_document_row(document) if document is not None else None,
+        "source_blocks": [_requirement_block_row(block) for block in source_blocks],
+        "test_points": [_test_point_row(point) for point in test_points],
+        "test_cases": [_test_case_row(case) for case in test_cases],
+    }
+    markdown = _render_requirement_item_markdown(item, document, source_blocks, test_points, test_cases)
+    filename_stem = _safe_filename_stem(item.item_number or item.title, fallback=f"requirement-item-{item.id}")
+    return _requirement_export_payload(filename_stem, fmt, payload, markdown, count=1)
 
 
 def build_auto_project_zip(session: Session, *, auto_project_id: int) -> dict[str, Any]:
@@ -251,6 +347,29 @@ def export_perf_result(session: Session, *, plan_id: int, result_id: int | None 
             "raw_data_path": payload["raw_data"]["path"],
             "raw_file_available": payload["raw_data"]["available"],
         }
+    if fmt in {"markdown", "pdf", "docx", "xmind"}:
+        markdown = _render_perf_result_markdown(payload)
+        if fmt == "markdown":
+            return {
+                "plan_id": plan.id,
+                "result_id": result.id,
+                "filename": f"perf-result-{result.id}.md",
+                "content": markdown,
+                "mime_type": "text/markdown; charset=utf-8",
+                "format": fmt,
+                "raw_data_path": payload["raw_data"]["path"],
+                "raw_file_available": payload["raw_data"]["available"],
+            }
+        exported = _binary_document_export(f"perf-result-{result.id}.{fmt}", fmt, markdown)
+        exported.update(
+            {
+                "plan_id": plan.id,
+                "result_id": result.id,
+                "raw_data_path": payload["raw_data"]["path"],
+                "raw_file_available": payload["raw_data"]["available"],
+            }
+        )
+        return exported
     return {
         "plan_id": plan.id,
         "result_id": result.id,
@@ -316,6 +435,9 @@ def _tabular_export(filename: str, fmt: str, rows: list[dict[str, Any]], title: 
             "format": fmt,
             "count": len(safe_rows),
         }
+    elif fmt in {"pdf", "docx", "xmind"}:
+        markdown = _render_markdown(title, safe_rows, columns)
+        return _binary_document_export(filename, fmt, markdown, count=len(safe_rows))
     else:
         content = _render_markdown(title, safe_rows, columns)
         mime_type = "text/markdown; charset=utf-8"
@@ -434,6 +556,195 @@ def _render_markdown(title: str, rows: list[dict[str, Any]], columns: tuple[tupl
     return "\n".join(lines) + "\n"
 
 
+def _render_requirement_document_markdown(
+    document: RequirementDocument,
+    blocks: list[RequirementDocumentBlock],
+    items: list[RequirementItem],
+) -> str:
+    metadata = sanitize_export_payload(document.parser_metadata or {})
+    lines = [
+        f"# Requirement Document {document.name}",
+        "",
+        "## Overview",
+        f"- Document Number: {_cell(document.document_number)}",
+        f"- Source Type: {_cell(document.source_type)}",
+        f"- Source File: {_cell(document.source_file_name or document.name)}",
+        f"- Parser Status: {_cell(document.parser_status)}",
+        f"- Version: {_cell(document.version)}",
+        f"- Requirement Items: {len(items)}",
+        f"- Parsed Blocks: {len(blocks)}",
+        "",
+    ]
+    if metadata:
+        lines.extend(["## Parser Metadata", "| Field | Value |", "| --- | --- |"])
+        for key, value in metadata.items():
+            lines.append(f"| {key} | {_escape_markdown(_cell(value))} |")
+        lines.append("")
+    if items:
+        lines.extend(
+            [
+                "## Requirement Items",
+                "| Item Number | Title | Priority | Status | Module | Confidence |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ]
+        )
+        for item in items:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _escape_markdown(_cell(item.item_number)),
+                        _escape_markdown(_cell(item.title)),
+                        _escape_markdown(_cell(item.priority)),
+                        _escape_markdown(_cell(item.status)),
+                        _escape_markdown(_cell(item.module)),
+                        _escape_markdown(_cell(item.confidence)),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+    else:
+        lines.extend(["## Requirement Items", "- No requirement items extracted yet.", ""])
+    if blocks:
+        lines.append("## Parsed Blocks")
+        for block in blocks:
+            lines.extend(
+                [
+                    f"### {block.block_key} ({block.block_type})",
+                    f"- Section: {_cell(block.section_path or 'N/A')}",
+                    f"- Order: {_cell(block.order_no)}",
+                ]
+            )
+            text = str(sanitize_export_payload(block.raw_text or block.normalized_text or "")).strip()
+            if text:
+                lines.extend(["", text])
+            lines.append("")
+    elif document.raw_content:
+        lines.extend(["## Raw Content", str(sanitize_export_payload(document.raw_content)).strip(), ""])
+    else:
+        lines.extend(["## Raw Content", "- No parsed blocks or raw content available.", ""])
+    return "\n".join(lines).strip() + "\n"
+
+
+def _render_requirement_item_markdown(
+    item: RequirementItem,
+    document: RequirementDocument | None,
+    source_blocks: list[RequirementDocumentBlock],
+    test_points: list[TestPoint],
+    test_cases: list[TestCase],
+) -> str:
+    lines = [
+        f"# Requirement Item {item.title}",
+        "",
+        "## Overview",
+        f"- Item Number: {_cell(item.item_number)}",
+        f"- Document: {_cell(document.name if document is not None else item.document_id)}",
+        f"- Module: {_cell(item.module)}",
+        f"- Priority: {_cell(item.priority)}",
+        f"- Status: {_cell(item.status)}",
+        f"- Confidence: {_cell(item.confidence)}",
+        f"- Granularity Flag: {_cell(item.granularity_flag)}",
+        f"- Case Status: {_cell(item.case_status)}",
+        f"- Source Anchors: {_cell(item.source_anchor_ids or [])}",
+        "",
+    ]
+    if item.summary:
+        lines.extend(["## Summary", str(sanitize_export_payload(item.summary)).strip(), ""])
+    for title, value in (
+        ("Actor", item.actor),
+        ("Goal", item.goal),
+        ("Preconditions", item.preconditions_json),
+        ("Business Rules", item.business_rules_json),
+        ("State Transitions", item.state_transitions_json),
+        ("Exceptions", item.exceptions_json),
+        ("Permissions", item.permissions_json),
+        ("Non Functional", item.non_functional_json),
+    ):
+        rendered = _render_requirement_detail_section(title, value)
+        if rendered:
+            lines.extend(rendered)
+    if source_blocks:
+        lines.append("## Source Blocks")
+        for block in source_blocks:
+            lines.extend(
+                [
+                    f"### {block.block_key} ({block.block_type})",
+                    f"- Section: {_cell(block.section_path or 'N/A')}",
+                ]
+            )
+            text = str(sanitize_export_payload(block.raw_text or block.normalized_text or "")).strip()
+            if text:
+                lines.extend(["", text])
+            lines.append("")
+    if test_points:
+        lines.extend(
+            [
+                "## Test Points",
+                "| Title | Type | Priority | Coverage Status |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for point in test_points:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _escape_markdown(_cell(point.title)),
+                        _escape_markdown(_cell(point.point_type)),
+                        _escape_markdown(_cell(point.priority)),
+                        _escape_markdown(_cell(point.coverage_status)),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+    if test_cases:
+        lines.extend(
+            [
+                "## Test Cases",
+                "| Case Number | Title | Type | Priority | Status |",
+                "| --- | --- | --- | --- | --- |",
+            ]
+        )
+        for case in test_cases:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _escape_markdown(_cell(case.case_number)),
+                        _escape_markdown(_cell(case.title)),
+                        _escape_markdown(_cell(case.case_type)),
+                        _escape_markdown(_cell(case.priority)),
+                        _escape_markdown(_cell(case.status)),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+    if not source_blocks and not test_points and not test_cases:
+        lines.extend(["## Linked Data", "- No parsed source blocks, test points, or test cases available.", ""])
+    return "\n".join(lines).strip() + "\n"
+
+
+def _render_requirement_detail_section(title: str, value: Any) -> list[str]:
+    safe_value = sanitize_export_payload(value)
+    if safe_value in (None, "", [], {}):
+        return []
+    lines = [f"## {title}"]
+    if isinstance(safe_value, list):
+        for item in safe_value:
+            lines.append(f"- {_escape_markdown(_cell(item))}")
+    elif isinstance(safe_value, dict):
+        lines.extend(["| Field | Value |", "| --- | --- |"])
+        for key, item in safe_value.items():
+            lines.append(f"| {key} | {_escape_markdown(_cell(item))} |")
+    else:
+        lines.append(_cell(safe_value))
+    lines.append("")
+    return lines
+
+
 def _test_case_row(case: TestCase) -> dict[str, Any]:
     return {
         "id": case.id,
@@ -464,6 +775,89 @@ def _defect_row(defect: Defect) -> dict[str, Any]:
         "status": defect.status,
         "actual_result": defect.actual_result,
         "remark": defect.remark,
+    }
+
+
+def _requirement_document_row(document: RequirementDocument | None) -> dict[str, Any] | None:
+    if document is None:
+        return None
+    return {
+        "id": document.id,
+        "project_id": document.project_id,
+        "lib_id": document.lib_id,
+        "document_number": document.document_number,
+        "name": document.name,
+        "source_type": document.source_type,
+        "source_file_name": document.source_file_name,
+        "source_file_path": document.source_file_path,
+        "raw_content": document.raw_content,
+        "parser_status": document.parser_status,
+        "parser_metadata": document.parser_metadata,
+        "version": document.version,
+        "created_at": _iso_value(document.created_at),
+        "updated_at": _iso_value(document.updated_at),
+    }
+
+
+def _requirement_block_row(block: RequirementDocumentBlock) -> dict[str, Any]:
+    return {
+        "id": block.id,
+        "document_id": block.document_id,
+        "block_key": block.block_key,
+        "block_type": block.block_type,
+        "section_path": block.section_path,
+        "order_no": block.order_no,
+        "page_no": block.page_no,
+        "raw_text": block.raw_text,
+        "normalized_text": block.normalized_text,
+        "metadata_json": block.metadata_json,
+        "created_at": _iso_value(block.created_at),
+    }
+
+
+def _requirement_item_row(item: RequirementItem) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "project_id": item.project_id,
+        "lib_id": item.lib_id,
+        "document_id": item.document_id,
+        "item_number": item.item_number,
+        "title": item.title,
+        "summary": item.summary,
+        "module": item.module,
+        "actor": item.actor,
+        "goal": item.goal,
+        "preconditions": item.preconditions_json,
+        "business_rules": item.business_rules_json,
+        "state_transitions": item.state_transitions_json,
+        "exceptions": item.exceptions_json,
+        "permissions": item.permissions_json,
+        "non_functional": item.non_functional_json,
+        "priority": item.priority,
+        "status": item.status,
+        "confidence": item.confidence,
+        "granularity_flag": item.granularity_flag,
+        "source_anchor_ids": item.source_anchor_ids,
+        "case_status": item.case_status,
+        "version": item.version,
+        "created_at": _iso_value(item.created_at),
+        "updated_at": _iso_value(item.updated_at),
+    }
+
+
+def _test_point_row(point: TestPoint) -> dict[str, Any]:
+    return {
+        "id": point.id,
+        "requirement_item_id": point.requirement_item_id,
+        "title": point.title,
+        "point_type": point.point_type,
+        "target": point.target,
+        "priority": point.priority,
+        "suggested_method": point.suggested_method,
+        "coverage_status": point.coverage_status,
+        "source_anchor_ids": point.source_anchor_ids,
+        "note": point.note,
+        "has_generated_cases": point.has_generated_cases,
     }
 
 
@@ -656,6 +1050,59 @@ def _render_perf_result_html(payload: dict[str, Any]) -> str:
 </html>"""
 
 
+def _render_perf_result_markdown(payload: dict[str, Any]) -> str:
+    plan = payload.get("plan") or {}
+    result = payload.get("result") or {}
+    summary = result.get("summary_data") or {}
+    timeline = result.get("timeline_data") or []
+    errors = result.get("error_details") or []
+    lines = [
+        f"# Performance Result {result.get('id') or ''}".strip(),
+        "",
+        "## Plan",
+        f"- Name: {plan.get('name') or 'N/A'}",
+        f"- Status: {plan.get('status') or 'unknown'}",
+        "",
+        "## Result",
+        f"- Result ID: {result.get('id') or 'N/A'}",
+        f"- Status: {result.get('status') or 'unknown'}",
+        f"- Duration: {result.get('duration') or 0}",
+        f"- Executed At: {result.get('executed_at') or 'N/A'}",
+        "",
+        "## Summary",
+        "| Metric | Value |",
+        "| --- | --- |",
+    ]
+    if summary:
+        for key, value in summary.items():
+            lines.append(f"| {key} | {_escape_markdown(_cell(value))} |")
+    else:
+        lines.append("| summary | no data |")
+    lines.extend(["", "## Timeline", "| Item | Value |", "| --- | --- |"])
+    if isinstance(timeline, list) and timeline:
+        for index, item in enumerate(timeline[:50], start=1):
+            lines.append(f"| {index} | {_escape_markdown(_cell(item))} |")
+    else:
+        lines.append("| timeline | no data |")
+    lines.extend(["", "## Errors"])
+    if isinstance(errors, list) and errors:
+        for item in errors[:20]:
+            lines.append(f"- {_escape_markdown(_cell(item))}")
+    else:
+        lines.append("- No errors")
+    lines.extend(
+        [
+            "",
+            "## Raw Data",
+            f"- Path: {payload.get('raw_data', {}).get('path') or 'N/A'}",
+            f"- Available: {payload.get('raw_data', {}).get('available')}",
+            f"- Note: {payload.get('raw_data', {}).get('note') or 'N/A'}",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _html_escape(value: Any) -> str:
     return (
         "" if value is None else str(sanitize_export_payload(value))
@@ -663,7 +1110,7 @@ def _html_escape(value: Any) -> str:
 
 
 def _normalize_format(value: str | None, allowed: set[str]) -> str:
-    fmt = (value or "markdown").strip().lower()
+    fmt = normalize_format(value or "markdown") or "markdown"
     if is_unsupported_export_format(fmt):
         raise UnsupportedFormatError(unsupported_export_detail(fmt, allowed))
     if fmt not in allowed:
@@ -692,8 +1139,17 @@ def _require_active(session: Session, model: type[Any], item_id: int, label: str
 
 
 def _filename(prefix: str, fmt: str) -> str:
-    ext = {"markdown": "md", "csv": "csv", "json": "json", "xlsx": "xlsx"}[fmt]
+    ext = {"markdown": "md", "csv": "csv", "json": "json", "xlsx": "xlsx", "pdf": "pdf", "docx": "docx", "xmind": "xmind"}[fmt]
     return f"{prefix}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}.{ext}"
+
+
+def _safe_filename_stem(value: Any, *, fallback: str) -> str:
+    text = str(value or "").strip().rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    if "." in text:
+        text = text.rsplit(".", 1)[0]
+    text = re.sub(r'[<>:"/\\\\|?*]+', "-", text)
+    text = re.sub(r"\s+", "-", text).strip(" .-_")
+    return text[:96] or fallback
 
 
 def _cell(value: Any) -> str:
@@ -790,3 +1246,68 @@ def _redact_sensitive_text(value: str) -> str:
     redacted = re.sub(r"(?i)round\d+-[a-z0-9_-]*secret[a-z0-9_-]*", "***", redacted)
     redacted = redacted.replace("placeholder", "generated").replace("Placeholder", "Generated").replace("PLACEHOLDER", "GENERATED")
     return redacted
+
+
+def _binary_document_export(filename: str, fmt: str, markdown: str, *, count: int | None = None) -> dict[str, Any]:
+    safe_markdown = str(sanitize_export_payload(markdown))
+    blocks = markdown_to_blocks(safe_markdown)
+    title = _document_title_from_blocks(filename, blocks)
+    if fmt == "pdf":
+        raw_bytes = render_pdf_document(title, blocks)
+        mime_type = PDF_MIME_TYPE
+    elif fmt == "docx":
+        raw_bytes = render_docx_document(title, blocks)
+        mime_type = DOCX_MIME_TYPE
+    elif fmt == "xmind":
+        raw_bytes = render_xmind_document(title, blocks)
+        mime_type = XMIND_MIME_TYPE
+    else:
+        raise ExportPayloadError(f"format must be one of: {fmt}")
+    payload = {
+        "filename": filename,
+        "content_base64": base64.b64encode(raw_bytes).decode("ascii"),
+        "mime_type": mime_type,
+        "format": fmt,
+    }
+    if count is not None:
+        payload["count"] = count
+    return payload
+
+
+def _document_title_from_blocks(filename: str, blocks: list[dict[str, Any]]) -> str:
+    for block in blocks:
+        if block.get("type") == "heading" and str(block.get("text") or "").strip():
+            return str(block.get("text")).strip()
+    name = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    return name.rsplit(".", 1)[0] or "Document"
+
+
+def _requirement_export_payload(
+    filename_stem: str,
+    fmt: str,
+    payload: dict[str, Any],
+    markdown: str,
+    *,
+    count: int,
+) -> dict[str, Any]:
+    if fmt == "json":
+        return {
+            "filename": f"{filename_stem}.json",
+            "content": json.dumps(sanitize_export_payload(payload), ensure_ascii=False, indent=2),
+            "mime_type": "application/json; charset=utf-8",
+            "format": "json",
+            "count": count,
+        }
+    if fmt == "markdown":
+        return {
+            "filename": f"{filename_stem}.md",
+            "content": str(sanitize_export_payload(markdown)),
+            "mime_type": "text/markdown; charset=utf-8",
+            "format": "markdown",
+            "count": count,
+        }
+    return _binary_document_export(f"{filename_stem}.{fmt}", fmt, markdown, count=count)
+
+
+def _iso_value(value: Any) -> Any:
+    return value.isoformat() if isinstance(value, datetime) else value

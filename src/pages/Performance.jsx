@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
-import { apiGet, apiPost, apiRequest, downloadExportedFile, formatDownloadError, formatDateTime, pickList } from '../lib/api';
+import { apiDownload, apiGet, apiPost, apiRequest, formatDownloadError, formatDateTime, pickList } from '../lib/api';
 import { useProjectContext } from '../lib/projectContext';
 
 const showToast = (message, type = 'success') => {
@@ -32,6 +32,8 @@ const UNSUPPORTED_REPORT_FORMATS = [
   { id: 'pdf', label: 'PDF' },
   { id: 'word', label: 'Word' }
 ];
+
+const PERF_RESULT_DOWNLOAD_FORMATS = [...SUPPORTED_PERF_RESULT_FORMATS, ...UNSUPPORTED_REPORT_FORMATS];
 
 const DEFAULT_TARGET_APIS = [
   { method: 'POST', url: '/api/v1/auth/login', weight: 30 },
@@ -869,12 +871,8 @@ export default function Performance() {
       return;
     }
     try {
-      const payload = await apiGet(`/perf-plans/${planId}/download-script`, { timeoutMs: 15000 });
-      if (!payload.available && !payload.content) {
-        showToast('当前方案还没有 JMX 脚本，请先生成脚本。', 'info');
-        return;
-      }
-      downloadExportedFile(payload, {
+      await apiDownload(`/perf-plans/${planId}/download-script`, {
+        timeoutMs: 15000,
         defaultFilename: `perf-plan-${planId}.jmx`,
         defaultMimeType: 'application/xml;charset=utf-8'
       });
@@ -884,8 +882,8 @@ export default function Performance() {
   };
 
   const handleExportPerfResult = async (format = 'json') => {
-    if (!SUPPORTED_PERF_RESULT_FORMATS.some(item => item.id === format)) {
-      showToast('PDF / Word 性能报告未开放；请使用 HTML 或 Markdown 替代，不会生成假下载文件。', 'info');
+    if (!PERF_RESULT_DOWNLOAD_FORMATS.some(item => item.id === format)) {
+      showToast(`不支持 ${format} 性能结果导出。`, 'error');
       return;
     }
 
@@ -896,10 +894,11 @@ export default function Performance() {
       return;
     }
     try {
-      const payload = await apiGet(`/perf-plans/${planId}/results/${resultId}/download`, { params: { format }, timeoutMs: 15000 });
-      downloadExportedFile(payload, {
+      await apiDownload(`/perf-plans/${planId}/results/${resultId}/download`, {
+        params: { format },
         format,
-        defaultFilename: `perf-result-${resultId}.${format === 'markdown' ? 'md' : format}`
+        timeoutMs: 15000,
+        defaultFilename: `perf-result-${resultId}${format === 'markdown' ? '.md' : format === 'word' ? '.docx' : `.${format}`}`
       });
       showToast(`性能结果 ${format.toUpperCase()} 已开始下载。`);
     } catch (error) {
@@ -922,8 +921,8 @@ export default function Performance() {
       return;
     }
     try {
-      const payload = await apiGet(`/perf-results/${resultId}/artifacts/download`, { timeoutMs: 15000 });
-      downloadExportedFile(payload, {
+      await apiDownload(`/perf-results/${resultId}/artifacts/download`, {
+        timeoutMs: 15000,
         defaultFilename: `perf-artifacts-${resultId}.zip`,
         defaultMimeType: 'application/zip'
       });
@@ -1783,7 +1782,7 @@ export default function Performance() {
                   onClick={() => handleExportPerfResult(format.id)}
                   className="px-3 py-1.5 rounded-lg border border-dashed border-[var(--border-color)] bg-[var(--border-color)]/10 text-[10px] font-bold text-[var(--text-secondary)]"
                 >
-                  {format.label} 未开放，用 HTML/Markdown 替代
+                  {format.label}
                 </button>
               ))}
               <button

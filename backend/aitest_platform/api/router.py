@@ -110,6 +110,8 @@ from aitest_platform.services.exporting import (
     build_perf_result_artifacts_zip,
     export_defects,
     export_perf_result,
+    export_requirement_document,
+    export_requirement_item,
     export_perf_script,
     export_test_cases as export_test_cases_payload,
 )
@@ -131,6 +133,7 @@ from aitest_platform.services.execution_defect_loop import (
 from aitest_platform.services.file_formats import (
     UnsupportedFormatError,
     detect_unsupported_import_format,
+    normalize_format,
     unsupported_import_detail,
 )
 from aitest_platform.services.infra_status import get_infra_status
@@ -311,7 +314,7 @@ def unsupported_requirement_import_http(data: dict[str, Any]) -> HTTPException |
         status_code=415,
         detail=unsupported_import_detail(
             fmt,
-            {"markdown", "text"},
+            {"markdown", "text", "docx", "pdf", "xlsx", "xmind"},
             error_code="unsupported_requirement_document_format",
         ),
     )
@@ -1181,8 +1184,11 @@ def create_requirement_document(projectId: str, payload: WritePayload):
                 project_id=to_int(projectId, "projectId"),
                 lib_id=to_int(data.get("lib_id"), "lib_id"),
                 name=data.get("name") or "未命名需求文档",
-                source_type=data.get("source_type", "text"),
-                raw_content=data.get("raw_content") or data.get("content"),
+                source_type=normalize_format(data.get("source_type") or data.get("file_type") or data.get("source_file_name") or "text") or "text",
+                raw_content=data.get("raw_content")
+                or data.get("content")
+                or data.get("raw_content_base64")
+                or data.get("content_base64"),
                 source_file_name=data.get("source_file_name"),
                 source_file_path=data.get("source_file_path"),
             )
@@ -1200,6 +1206,21 @@ def get_requirement_document(documentId: str):
         return model_dict(document)
 
 
+@router.get("/requirement-documents/{documentId}/export")
+def export_requirement_document_endpoint(documentId: str, format: str = Query("markdown")):
+    with session_scope() as session:
+        try:
+            return export_requirement_document(
+                session,
+                document_id=to_int(documentId, "documentId"),
+                output_format=format,
+            )
+        except UnsupportedFormatError as exc:
+            raise unsupported_format_http(exc) from exc
+        except ExportPayloadError as exc:
+            raise HTTPException(status_code=404 if "not found" in str(exc).lower() else 400, detail=str(exc)) from exc
+
+
 @router.patch("/requirement-documents/{documentId}")
 def update_requirement_document(documentId: str, payload: WritePayload):
     data = payload_dict(payload)
@@ -1209,7 +1230,14 @@ def update_requirement_document(documentId: str, payload: WritePayload):
             raise HTTPException(status_code=404, detail=f"RequirementDocument({documentId}) not found")
         for key in ("name", "source_type", "source_file_name", "source_file_path", "raw_content", "parser_status"):
             if key in data:
-                setattr(document, key, data[key])
+                value = data[key]
+                if key == "source_type":
+                    value = normalize_format(value) or value
+                setattr(document, key, value)
+        if "content_base64" in data and "raw_content" not in data:
+            document.raw_content = data.get("content_base64")
+        if "raw_content_base64" in data and "raw_content" not in data:
+            document.raw_content = data.get("raw_content_base64")
         session.flush()
         return model_dict(document)
 
@@ -1305,6 +1333,21 @@ def list_document_requirement_items(documentId: str, page_num: int = Query(1, al
     with session_scope() as session:
         doc_id = to_int(documentId, "documentId")
         return db_page(session, RequirementItem, page_num, page_size, RequirementItem.document_id == doc_id, RequirementItem.is_deleted.is_(False), order_by=RequirementItem.id)
+
+
+@router.get("/requirement-items/{itemId}/export")
+def export_requirement_item_endpoint(itemId: str, format: str = Query("markdown")):
+    with session_scope() as session:
+        try:
+            return export_requirement_item(
+                session,
+                item_id=to_int(itemId, "itemId"),
+                output_format=format,
+            )
+        except UnsupportedFormatError as exc:
+            raise unsupported_format_http(exc) from exc
+        except ExportPayloadError as exc:
+            raise HTTPException(status_code=404 if "not found" in str(exc).lower() else 400, detail=str(exc)) from exc
 
 
 @router.patch("/requirement-items/{itemId}")

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
+import zipfile
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
@@ -801,18 +804,28 @@ def test_markdown_html_outputs_include_sections_tables_risks_todos_escape_and_re
     assert_no_sensitive_markers(html)
 
 
-@pytest.mark.parametrize("fmt", ["pdf", "word", "docx"])
-def test_pdf_and_word_download_requests_return_structured_unsupported_errors_without_fake_files(client, fmt: str):
+@pytest.mark.parametrize(("fmt", "extension"), [("pdf", ".pdf"), ("word", ".docx"), ("docx", ".docx"), ("xmind", ".xmind")])
+def test_pdf_and_word_download_requests_return_real_files_without_fake_placeholders(client, fmt: str, extension: str):
     context = seed_round28_context()
     report = generate_report(client, context)
     report_id = object_id(report, "id", "report_id")
 
-    response = client.get(f"{API_PREFIX}/reports/{report_id}/download", params={"format": fmt})
-    payload = assert_structured_error(response, expected_statuses={400, 415})
+    payload = data_of(client.get(f"{API_PREFIX}/reports/{report_id}/download", params={"format": fmt}))
+    raw_bytes = base64.b64decode(payload["content_base64"])
+    assert payload.get("filename", "").endswith(extension), payload
     dumped = payload_text(payload).lower()
-    assert "unsupported" in dumped, payload
+    assert "unsupported" not in dumped, payload
     assert "placeholder" not in dumped, payload
-    assert "content_base64" not in dumped and "application/pdf" not in dumped and "officedocument" not in dumped, payload
+    if fmt == "pdf":
+        assert raw_bytes.startswith(b"%PDF-"), raw_bytes[:8]
+    else:
+        assert raw_bytes.startswith(b"PK"), raw_bytes[:8]
+        with zipfile.ZipFile(io.BytesIO(raw_bytes)) as archive:
+            names = set(archive.namelist())
+            if fmt == "xmind":
+                assert "content.json" in names, names
+            else:
+                assert "word/document.xml" in names, names
 
 
 @pytest.mark.parametrize(

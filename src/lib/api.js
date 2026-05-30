@@ -1,5 +1,19 @@
 const DEFAULT_API_BASE_URL = 'http://127.0.0.1:8000/api/v2';
 
+const JSON_CONTENT_TYPE = 'application/json';
+const DOWNLOAD_ACCEPT = 'application/json, text/plain, */*';
+const RFC5987_PREFIX = "utf-8''";
+
+const MIME_TYPE_TO_FORMAT = {
+  'application/pdf': 'pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/msword': 'docx',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-excel': 'xlsx',
+  'application/xmind': 'xmind',
+  'application/vnd.xmind': 'xmind'
+};
+
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || DEFAULT_API_BASE_URL).replace(/\/+$/, '');
 
 export class ApiError extends Error {
@@ -20,58 +34,103 @@ export async function apiPost(path, body, options = {}) {
   return apiRequest(path, { ...options, method: 'POST', body });
 }
 
-export async function apiRequest(path, { method = 'GET', body, params, timeoutMs = 8000, signal } = {}) {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-  const abortFromParent = () => controller.abort();
+export async function apiRequest(
+  path,
+  {
+    method = 'GET',
+    body,
+    params,
+    timeoutMs = 8000,
+    signal,
+    headers,
+    accept = JSON_CONTENT_TYPE,
+    responseType = 'auto'
+  } = {}
+) {
+  const response = await executeFetch(path, { method, body, params, timeoutMs, signal, headers, accept });
+  const payload = await readResponsePayload(response, responseType);
 
-  if (signal?.aborted) {
-    controller.abort();
-  } else if (signal) {
-    signal.addEventListener('abort', abortFromParent, { once: true });
+  if (!response.ok) {
+    throw buildApiError(payload, response.status, response.statusText);
   }
 
-  try {
-    const response = await fetch(buildApiUrl(path, params), {
-      method,
-      signal: controller.signal,
-      headers: {
-        Accept: 'application/json',
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' })
-      },
-      body: body === undefined ? undefined : JSON.stringify(body)
+  if (isEnvelopeError(payload)) {
+    throw new ApiError(payload.message || 'API request failed', {
+      status: response.status,
+      traceId: payload.trace_id,
+      payload
     });
+  }
 
-    const contentType = response.headers.get('content-type') || '';
-    const payload = contentType.includes('application/json') ? await response.json() : await response.text();
-    const unwrapped = unwrapEnvelope(payload);
+  return unwrapEnvelope(payload);
+}
 
+export async function apiDownload(
+  path,
+  {
+    method = 'GET',
+    body,
+    params,
+    timeoutMs = 15000,
+    signal,
+    headers,
+    format,
+    defaultFilename,
+    defaultMimeType
+  } = {}
+) {
+  const response = await executeFetch(path, {
+    method,
+    body,
+    params,
+    timeoutMs,
+    signal,
+    headers,
+    accept: DOWNLOAD_ACCEPT
+  });
+
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  const contentDisposition = response.headers.get('content-disposition') || '';
+
+  if (looksLikeJsonResponse(contentType)) {
+    const payload = await readResponsePayload(response, 'json');
     if (!response.ok) {
-      throw new ApiError(readErrorMessage(payload, response.statusText), {
-        status: response.status,
-        traceId: payload?.trace_id,
-        payload
-      });
+      throw buildApiError(payload, response.status, response.statusText);
     }
-
-    if (payload && typeof payload === 'object' && 'code' in payload && Number(payload.code) !== 0 && Number(payload.code) !== 200) {
-      throw new ApiError(payload.message || 'API request failed', {
+    if (isEnvelopeError(payload)) {
+      throw new ApiError(payload.message || 'File download failed', {
         status: response.status,
         traceId: payload.trace_id,
         payload
       });
     }
 
-    return unwrapped;
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new ApiError('API request timeout', { status: 408 });
+    const normalizedPayload = unwrapEnvelope(payload);
+    if (contentDisposition) {
+      const filename = parseFilenameFromDisposition(contentDisposition);
+      if (filename && normalizedPayload && typeof normalizedPayload === 'object' && !Array.isArray(normalizedPayload)) {
+        normalizedPayload.filename = normalizedPayload.filename || normalizedPayload.file_name || filename;
+      }
     }
-    throw error;
-  } finally {
-    window.clearTimeout(timeoutId);
-    signal?.removeEventListener?.('abort', abortFromParent);
+    return downloadExportedFile(normalizedPayload, { format, defaultFilename, defaultMimeType });
   }
+
+  if (!response.ok) {
+    const errorText = await readResponsePayload(response, 'text');
+    throw buildApiError(errorText, response.status, response.statusText);
+  }
+
+  const filename = parseFilenameFromDisposition(contentDisposition);
+  const blob = await response.blob();
+  return downloadExportedFile(
+    {
+      blob,
+      filename,
+      mime_type: contentType || defaultMimeType,
+      format
+    },
+    { format, defaultFilename, defaultMimeType }
+  );
 }
 
 export function pickList(payload) {
@@ -98,31 +157,12 @@ export function formatDateTime(value) {
 
 export function downloadTextFile({ filename, content, mimeType }) {
   const blob = new Blob([content || ''], { type: mimeType || 'text/plain;charset=utf-8' });
-  const href = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = href;
-  link.download = filename || 'download.txt';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(href);
+  return downloadBlobFile({ filename, blob });
 }
 
 export function downloadBase64File({ filename, contentBase64, mimeType }) {
-  const binary = window.atob(contentBase64 || '');
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  const blob = new Blob([bytes], { type: mimeType || 'application/octet-stream' });
-  const href = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = href;
-  link.download = filename || 'download.bin';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(href);
+  const blob = base64ToBlob(contentBase64 || '', mimeType || 'application/octet-stream');
+  return downloadBlobFile({ filename, blob });
 }
 
 export function downloadExportedFile(payload, options = {}) {
@@ -131,11 +171,31 @@ export function downloadExportedFile(payload, options = {}) {
     throw new ApiError(file.message, { status: file.status, payload });
   }
 
+  if (file.blob) {
+    if (file.blob.size <= 0) {
+      throw new ApiError('后端没有返回可下载的文件内容。', { status: 502, payload });
+    }
+    downloadBlobFile({
+      filename: file.filename,
+      blob: file.blob,
+      mimeType: file.mimeType
+    });
+    return file;
+  }
+
   if (file.contentBase64) {
     downloadBase64File({
       filename: file.filename,
       contentBase64: file.contentBase64,
       mimeType: file.mimeType
+    });
+    return file;
+  }
+
+  if (isBinaryLike(file.content)) {
+    downloadBlobFile({
+      filename: file.filename,
+      blob: new Blob([file.content], { type: file.mimeType || 'application/octet-stream' })
     });
     return file;
   }
@@ -149,7 +209,7 @@ export function downloadExportedFile(payload, options = {}) {
     return file;
   }
 
-  throw new ApiError('后端未返回可下载内容，已取消空文件下载。', { status: 502, payload });
+  throw new ApiError('后端没有返回可下载的文件内容。', { status: 502, payload });
 }
 
 export function formatDownloadError(error, fallback = '文件导出失败。') {
@@ -162,10 +222,39 @@ export function formatDownloadError(error, fallback = '文件导出失败。') {
   );
 
   if (status) parts.push(`HTTP ${status}`);
-  if (requestedFormat) parts.push(`请求格式：${requestedFormat}`);
-  if (supportedFormats.length) parts.push(`支持格式：${supportedFormats.join(' / ')}`);
-  if (error?.traceId || payload.trace_id || payload.traceId) parts.push(`Trace：${error.traceId || payload.trace_id || payload.traceId}`);
+  if (requestedFormat) parts.push(`请求格式: ${requestedFormat}`);
+  if (supportedFormats.length) parts.push(`支持格式: ${supportedFormats.join(' / ')}`);
+  if (error?.traceId || payload.trace_id || payload.traceId) parts.push(`Trace: ${error.traceId || payload.trace_id || payload.traceId}`);
   return parts.filter(Boolean).join('；');
+}
+
+export function inferFileFormat(fileOrName, mimeType = '') {
+  const name = typeof fileOrName === 'string' ? fileOrName : fileOrName?.name || '';
+  const normalizedMimeType = String(mimeType || fileOrName?.type || '').toLowerCase();
+  const extension = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+
+  if (extension) {
+    return normalizeFormatAlias(extension);
+  }
+
+  return MIME_TYPE_TO_FORMAT[normalizedMimeType] || '';
+}
+
+export async function readFileAsBase64(file) {
+  if (!(file instanceof Blob)) {
+    throw new Error('No file selected.');
+  }
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error || new Error('Failed to read file.'));
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const base64 = result.includes(',') ? result.split(',').pop() : result;
+      resolve(base64 || '');
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function buildApiUrl(path, params) {
@@ -178,6 +267,116 @@ function buildApiUrl(path, params) {
   return url.toString();
 }
 
+async function executeFetch(path, { method, body, params, timeoutMs, signal, headers, accept }) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromParent = () => controller.abort();
+
+  if (signal?.aborted) {
+    controller.abort();
+  } else if (signal) {
+    signal.addEventListener('abort', abortFromParent, { once: true });
+  }
+
+  try {
+    return await fetch(buildApiUrl(path, params), {
+      method,
+      signal: controller.signal,
+      headers: buildRequestHeaders({ body, headers, accept }),
+      body: serializeRequestBody(body)
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new ApiError('API request timeout', { status: 408 });
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
+    signal?.removeEventListener?.('abort', abortFromParent);
+  }
+}
+
+function buildRequestHeaders({ body, headers, accept }) {
+  const normalizedHeaders = new Headers(headers || {});
+
+  if (accept && !normalizedHeaders.has('Accept')) {
+    normalizedHeaders.set('Accept', accept);
+  }
+
+  if (body === undefined || body === null) {
+    return normalizedHeaders;
+  }
+
+  if (body instanceof FormData || body instanceof URLSearchParams || body instanceof Blob || typeof body === 'string') {
+    return normalizedHeaders;
+  }
+
+  if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) {
+    if (!normalizedHeaders.has('Content-Type')) {
+      normalizedHeaders.set('Content-Type', 'application/octet-stream');
+    }
+    return normalizedHeaders;
+  }
+
+  if (!normalizedHeaders.has('Content-Type')) {
+    normalizedHeaders.set('Content-Type', JSON_CONTENT_TYPE);
+  }
+
+  return normalizedHeaders;
+}
+
+function serializeRequestBody(body) {
+  if (body === undefined || body === null) return undefined;
+  if (body instanceof FormData || body instanceof URLSearchParams || body instanceof Blob || typeof body === 'string') return body;
+  if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return body;
+  return JSON.stringify(body);
+}
+
+async function readResponsePayload(response, responseType = 'auto') {
+  if (response.status === 204) {
+    return null;
+  }
+
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+
+  if (responseType === 'blob') {
+    return response.blob();
+  }
+
+  if (responseType === 'text') {
+    return response.text();
+  }
+
+  if (responseType === 'json') {
+    return readJsonResponse(response);
+  }
+
+  if (looksLikeJsonResponse(contentType)) {
+    return readJsonResponse(response);
+  }
+
+  return response.text();
+}
+
+async function readJsonResponse(response) {
+  const text = await response.text();
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+function buildApiError(payload, status, fallbackMessage) {
+  return new ApiError(readErrorMessage(payload, fallbackMessage), {
+    status,
+    traceId: payload?.trace_id,
+    payload
+  });
+}
+
 function unwrapEnvelope(payload) {
   if (payload && typeof payload === 'object' && 'data' in payload && 'code' in payload && 'message' in payload) {
     return payload.data;
@@ -185,18 +384,56 @@ function unwrapEnvelope(payload) {
   return payload;
 }
 
+function isEnvelopeError(payload) {
+  return payload && typeof payload === 'object' && 'code' in payload && Number(payload.code) !== 0 && Number(payload.code) !== 200;
+}
+
 function readErrorMessage(payload, fallback) {
   if (payload && typeof payload === 'object') {
     return payload.message || payload.detail || fallback || 'API request failed';
   }
+  if (typeof payload === 'string' && payload.trim()) {
+    return payload.trim();
+  }
   return fallback || 'API request failed';
 }
 
+function looksLikeJsonResponse(contentType) {
+  return contentType.includes('/json') || contentType.includes('+json');
+}
+
+function downloadBlobFile({ filename, blob, mimeType }) {
+  const nextBlob = blob instanceof Blob ? blob : new Blob([blob], { type: mimeType || 'application/octet-stream' });
+  const href = URL.createObjectURL(nextBlob);
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = filename || 'download.bin';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(href), 0);
+}
+
+function base64ToBlob(contentBase64, mimeType) {
+  const binary = window.atob(contentBase64 || '');
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new Blob([bytes], { type: mimeType || 'application/octet-stream' });
+}
+
 function normalizeDownloadPayload(payload, options = {}) {
-  const format = String(options.format || payload?.format || '').toLowerCase();
   const record = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
-  const unsupported = isUnsupportedDownloadPayload(record);
+  const format = normalizeFormatAlias(String(options.format || record.format || '').toLowerCase());
   const fallbackMime = options.defaultMimeType || mimeTypeForFormat(format);
+  const contentBase64 = firstText(
+    record.content_base64,
+    record.contentBase64,
+    record.file_base64,
+    record.fileBase64,
+    record.base64
+  );
   const filename = firstText(
     record.filename,
     record.file_name,
@@ -205,16 +442,22 @@ function normalizeDownloadPayload(payload, options = {}) {
     `download${extensionForFormat(format)}`
   );
   const mimeType = firstText(record.mime_type, record.mimeType, record.content_type, record.contentType, fallbackMime);
-  const contentBase64 = firstText(
-    record.content_base64,
-    record.contentBase64,
-    record.file_base64,
-    record.fileBase64,
-    record.base64
-  );
+
+  let blob = null;
+  if (record.blob instanceof Blob) {
+    blob = record.blob;
+  } else if (record.file instanceof Blob) {
+    blob = record.file;
+  } else if (isBinaryLike(record.bytes || record.array_buffer || record.arrayBuffer || record.binary)) {
+    blob = new Blob([record.bytes || record.array_buffer || record.arrayBuffer || record.binary], {
+      type: mimeType || 'application/octet-stream'
+    });
+  }
 
   let content;
-  if (typeof payload === 'string') {
+  if (blob) {
+    content = blob;
+  } else if (typeof payload === 'string') {
     content = payload;
   } else if (payload !== null && payload !== undefined && !Array.isArray(payload) && typeof payload !== 'object') {
     content = String(payload);
@@ -230,12 +473,17 @@ function normalizeDownloadPayload(payload, options = {}) {
     content = stringifyDownloadContent(payload, true);
   }
 
+  if (!blob && isBinaryLike(content)) {
+    blob = new Blob([content], { type: mimeType || 'application/octet-stream' });
+  }
+
   return {
     filename,
     mimeType,
     content,
     contentBase64,
-    unsupported,
+    blob,
+    unsupported: isUnsupportedDownloadPayload(record),
     status: record.status_code || record.statusCode || record.status || 415,
     message: readDownloadPayloadMessage(record, format)
   };
@@ -257,23 +505,35 @@ function readDownloadPayloadMessage(record, format) {
     record.supported_formats || record.supportedFormats || record.available_formats || record.availableFormats || record.formats
   );
   const formatText = format ? `${format.toUpperCase()} ` : '';
-  const supportText = supportedFormats.length ? `支持格式：${supportedFormats.join(' / ')}` : '请改用已开放格式。';
-  return record.message || record.detail || `${formatText}导出未开放，${supportText}`;
+  const supportText = supportedFormats.length ? `支持格式: ${supportedFormats.join(' / ')}` : '请改用后端已开放的格式。';
+  return record.message || record.detail || `${formatText}导出暂不可用，${supportText}`;
 }
 
 function stringifyDownloadContent(value, prettyJson = false) {
   if (typeof value === 'string') return value;
-  if (value instanceof Blob) return value;
-  if (value instanceof ArrayBuffer) return value;
-  if (ArrayBuffer.isView(value)) return value;
+  if (isBinaryLike(value)) return value;
   if (prettyJson || typeof value === 'object') return JSON.stringify(value, null, 2);
   return String(value);
 }
 
 function normalizeFormatList(value) {
-  if (Array.isArray(value)) return value.map(item => String(item).toUpperCase()).filter(Boolean);
-  if (typeof value === 'string') return value.split(/[,\s/]+/).map(item => item.trim().toUpperCase()).filter(Boolean);
+  if (Array.isArray(value)) return value.map((item) => normalizeFormatAlias(String(item))).filter(Boolean).map((item) => item.toUpperCase());
+  if (typeof value === 'string') {
+    return value
+      .split(/[,\s/]+/)
+      .map((item) => normalizeFormatAlias(item.trim()))
+      .filter(Boolean)
+      .map((item) => item.toUpperCase());
+  }
   return [];
+}
+
+function normalizeFormatAlias(value) {
+  const normalized = String(value || '').toLowerCase();
+  if (normalized === 'doc') return 'docx';
+  if (normalized === 'word') return 'word';
+  if (normalized === 'xls') return 'xlsx';
+  return normalized;
 }
 
 function firstText(...values) {
@@ -281,6 +541,10 @@ function firstText(...values) {
     if (value !== undefined && value !== null && value !== '') return String(value);
   }
   return '';
+}
+
+function isBinaryLike(value) {
+  return value instanceof Blob || value instanceof ArrayBuffer || ArrayBuffer.isView(value);
 }
 
 function extensionForFormat(format) {
@@ -297,7 +561,7 @@ function extensionForFormat(format) {
     xmind: '.xmind',
     zip: '.zip'
   };
-  return extensions[format] || '.txt';
+  return extensions[normalizeFormatAlias(format)] || '.txt';
 }
 
 function mimeTypeForFormat(format) {
@@ -314,5 +578,25 @@ function mimeTypeForFormat(format) {
     xmind: 'application/octet-stream',
     zip: 'application/zip'
   };
-  return mimeTypes[format] || 'application/octet-stream';
+  return mimeTypes[normalizeFormatAlias(format)] || 'application/octet-stream';
+}
+
+function parseFilenameFromDisposition(contentDisposition) {
+  if (!contentDisposition) return '';
+
+  const parts = contentDisposition.split(';').map((part) => part.trim());
+  const filenameStarPart = parts.find((part) => part.toLowerCase().startsWith('filename*='));
+  if (filenameStarPart) {
+    const rawValue = filenameStarPart.slice(filenameStarPart.indexOf('=') + 1).trim().replace(/^"(.*)"$/, '$1');
+    const normalizedValue = rawValue.toLowerCase().startsWith(RFC5987_PREFIX) ? rawValue.slice(RFC5987_PREFIX.length) : rawValue;
+    try {
+      return decodeURIComponent(normalizedValue);
+    } catch {
+      return normalizedValue;
+    }
+  }
+
+  const filenamePart = parts.find((part) => part.toLowerCase().startsWith('filename='));
+  if (!filenamePart) return '';
+  return filenamePart.slice(filenamePart.indexOf('=') + 1).trim().replace(/^"(.*)"$/, '$1');
 }

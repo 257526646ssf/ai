@@ -125,7 +125,11 @@ class AitestRepository:
             document_id=document.id,
             document_name=document.name,
             source_type=document.source_type,
+            source_file_name=document.source_file_name,
         )
+        ocr_warning = None
+        if document.source_type == "pdf" and not parsed_blocks:
+            ocr_warning = "PDF text extraction was insufficient; OCR is required before reliable parsing."
 
         self.session.execute(delete(RequirementDocumentBlock).where(RequirementDocumentBlock.document_id == document.id))
         for payload in parsed_blocks:
@@ -151,6 +155,9 @@ class AitestRepository:
             "parsed_at": self._now_iso(),
             "block_count": len(parsed_blocks),
             "content_hash": content_hash(raw_content)[:16],
+            "source_type": document.source_type,
+            "source_file_name": document.source_file_name,
+            "warning": ocr_warning,
         }
         self.session.flush()
 
@@ -160,7 +167,7 @@ class AitestRepository:
             requirement_item_id=None,
             job_type="parse_document",
             input_payload={"document_id": document.id},
-            output_payload={"summary": summary, "status": "parsed", "block_count": len(parsed_blocks)},
+            output_payload={"summary": summary, "status": "parsed", "block_count": len(parsed_blocks), "warning": ocr_warning},
         )
         self._log("requirement", "parse_document", "requirement_document", document.id, {"job_id": job.id})
         return job
@@ -184,6 +191,19 @@ class AitestRepository:
                     .order_by(RequirementDocumentBlock.order_no)
                 )
             )
+        if not blocks and document.source_type == "pdf":
+            metadata = document.parser_metadata or {}
+            warning = metadata.get("warning") or "PDF text extraction was insufficient; OCR is required before reliable parsing."
+            job = self._create_job(
+                project_id=document.project_id,
+                document_id=document.id,
+                requirement_item_id=None,
+                job_type="extract_items",
+                input_payload={"document_id": document.id, "placeholder": False, "warning": warning},
+                output_payload={"item_ids": [], "metadata": {"source": "binary_pdf", "placeholder": False, "warning": warning}},
+            )
+            self._log("requirement", "extract_items", "requirement_document", document.id, {"job_id": job.id, "warning": warning})
+            return job
 
         created_items: list[RequirementItem] = []
         source_items = list(items) if items is not None else build_requirement_item_payloads(document.name, blocks)

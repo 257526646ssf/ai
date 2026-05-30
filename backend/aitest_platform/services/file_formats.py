@@ -4,8 +4,8 @@ from pathlib import PurePath
 from typing import Any, Iterable
 
 
-UNSUPPORTED_EXPORT_BINARY_FORMATS = frozenset({"pdf", "word", "doc", "docx", "xmind"})
-UNSUPPORTED_IMPORT_BINARY_FORMATS = frozenset({"pdf", "word", "doc", "docx", "xlsx", "xmind", "binary"})
+UNSUPPORTED_EXPORT_BINARY_FORMATS = frozenset({"doc"})
+UNSUPPORTED_IMPORT_BINARY_FORMATS = frozenset({"doc", "binary"})
 
 _MIME_FORMATS = {
     "application/pdf": "pdf",
@@ -13,6 +13,7 @@ _MIME_FORMATS = {
     "application/octet-stream": "binary",
     "application/vnd.ms-excel": "xlsx",
     "application/vnd.ms-xmind": "xmind",
+    "application/vnd.xmind.workbook": "xmind",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
     "application/x-xmind": "xmind",
@@ -22,6 +23,7 @@ _FORMAT_ALIASES = {
     "excel": "xlsx",
     "msword": "doc",
     "office": "binary",
+    "word": "docx",
     "wordprocessingml": "docx",
 }
 
@@ -102,6 +104,20 @@ def detect_unsupported_import_format(data: dict[str, Any], *, extra_filename: An
     return None
 
 
+def detect_import_format(data: dict[str, Any], *, extra_filename: Any = None) -> str:
+    for key in _EXPLICIT_FORMAT_KEYS:
+        if key not in data:
+            continue
+        fmt = normalize_format(data.get(key))
+        if fmt:
+            return fmt
+    for key in _FILENAME_KEYS:
+        fmt = file_extension(data.get(key))
+        if fmt:
+            return fmt
+    return file_extension(extra_filename)
+
+
 def unsupported_format_detail(
     fmt: Any,
     *,
@@ -139,7 +155,7 @@ def unsupported_import_detail(fmt: Any, supported_formats: Iterable[str], *, err
         supported_formats=supported_formats,
         error_code=error_code,
         message=(
-            f"Import format '{normalized}' is a binary or unparsed document format. "
-            f"Upload parsed text or use one of: {', '.join(sorted(set(supported_formats)))}."
+            f"Import format '{normalized}' is not supported by the current parser. "
+            f"Use one of: {', '.join(sorted(set(supported_formats)))}."
         ),
     )
