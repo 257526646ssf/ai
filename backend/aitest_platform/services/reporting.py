@@ -28,6 +28,7 @@ from aitest_platform.models import (
     TestCase,
     TestRound,
 )
+from aitest_platform.services.perf_analysis import build_performance_summary, performance_recommendations, performance_risk_items
 
 SENSITIVE_MARKERS = (
     "api_key",
@@ -328,7 +329,10 @@ def build_aggregation_context(
     data_snapshot["api_summary"] = data_snapshot["api"]["summary"]
     data_snapshot["automation_summary"] = data_snapshot["auto"]["summary"]
     data_snapshot["performance_summary"] = _performance_summary(perf_results)
+    data_snapshot["threshold"] = _performance_threshold_snapshot(perf_results, data_snapshot["performance_summary"])
+    data_snapshot["comparison"] = _performance_comparison_snapshot(perf_results, data_snapshot["performance_summary"])
     data_snapshot["perf"]["summary"].update(data_snapshot["performance_summary"])
+    data_snapshot["recommendations"] = performance_recommendations(data_snapshot["performance_summary"])
     data_snapshot["risk_items"] = _risk_items(data_snapshot)
 
     generated_at = _now_iso()
@@ -388,6 +392,10 @@ def render_markdown_report(title: str, context: dict[str, Any]) -> str:
         lines.extend(["", "## 风险项"])
         for index, risk in enumerate(data["risk_items"][:10], start=1):
             lines.append(f"{index}. [{risk['level']}] {risk['title']} - {risk['detail']}")
+    if data.get("recommendations"):
+        lines.extend(["", "## Recommendations"])
+        for index, item in enumerate(data["recommendations"][:10], start=1):
+            lines.append(f"{index}. [{item.get('priority', 'medium')}] {item.get('title')} - {item.get('action')}")
     return sanitize_report_payload("\n".join(lines).strip() + "\n")
 
 
@@ -576,18 +584,39 @@ def _summary_metrics(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _performance_summary(results: list[PerfResult]) -> dict[str, Any]:
-    if not results:
-        return {"latest_result_id": None, "latest_status": None, "latest_p95_ms": None, "latest_error_rate": None}
-    latest = results[0]
-    summary = latest.summary_data or {}
+    return build_performance_summary(results)
+
+
+def _performance_threshold_snapshot(results: list[PerfResult], performance_summary: dict[str, Any]) -> dict[str, Any]:
+    latest_summary = results[0].summary_data or {} if results else {}
+    threshold_results = latest_summary.get("threshold_results")
+    if threshold_results is None:
+        threshold_results = performance_summary.get("threshold_violations") or []
+    violation_count = latest_summary.get("threshold_violation_count")
+    if violation_count is None:
+        violation_count = len(performance_summary.get("threshold_violations") or [])
     return {
-        "latest_result_id": latest.id,
-        "latest_status": latest.status,
-        "latest_avg_ms": summary.get("avg_ms") or summary.get("average_ms"),
-        "latest_p95_ms": summary.get("p95_ms") or summary.get("p95"),
-        "latest_error_rate": summary.get("error_rate"),
-        "latest_success_rate": summary.get("success_rate"),
-        "result_count": len(results),
+        "latest_result_id": performance_summary.get("latest_result_id"),
+        "status": latest_summary.get("threshold_status") or performance_summary.get("threshold_status") or "not_configured",
+        "results": threshold_results,
+        "violation_count": violation_count,
+    }
+
+
+def _performance_comparison_snapshot(results: list[PerfResult], performance_summary: dict[str, Any]) -> dict[str, Any]:
+    latest_summary = results[0].summary_data or {} if results else {}
+    comparison = latest_summary.get("comparison")
+    if isinstance(comparison, dict) and comparison:
+        return {
+            **comparison,
+            "current_result_id": comparison.get("current_result_id") or performance_summary.get("latest_result_id"),
+            "baseline_result_id": comparison.get("baseline_result_id") or performance_summary.get("history_baseline_result_id"),
+        }
+    return {
+        "current_result_id": performance_summary.get("latest_result_id"),
+        "baseline_result_id": performance_summary.get("history_baseline_result_id"),
+        "delta": performance_summary.get("history_delta") or {},
+        "regressions": performance_summary.get("history_regressions") or [],
     }
 
 
@@ -643,6 +672,7 @@ def _risk_items(data: dict[str, Any]) -> list[dict[str, Any]]:
                 "source": "performance",
             }
         )
+    risks.extend(performance_risk_items(perf))
     if not risks:
         risks.append({"level": "low", "title": "暂无高风险事实", "detail": "当前快照未发现失败执行或未关闭缺陷。", "source": "summary"})
     return risks

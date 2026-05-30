@@ -23,6 +23,7 @@ from aitest_platform.models import (
     PerfResult,
     TestCase,
 )
+from aitest_platform.services.perf_analysis import render_jmeter_script
 
 SENSITIVE_MARKERS = (
     "authorization",
@@ -222,7 +223,7 @@ def build_perf_result_artifacts_zip(session: Session, *, result_id: int) -> dict
 
 def export_perf_script(session: Session, *, plan_id: int) -> dict[str, Any]:
     plan = _require_active(session, PerfPlan, plan_id, "PerfPlan")
-    content = sanitize_export_payload(plan.jmx_script or "")
+    content = sanitize_export_payload(render_jmeter_script(plan.plan_schema or {}, plan.jmx_script))
     return {
         "plan_id": plan.id,
         "filename": f"perf-plan-{plan.id}.jmx",

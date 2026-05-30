@@ -517,3 +517,29 @@
 - Browser final smoke: Automation page opened; console.error=0; pageerror=0; `/case-files` request count 0; `/case-files` 404 count 0; `/auto-projects/693/files?page=1&pageSize=200` returned 200; R26 DOM visible keywords 8/8: 候选筛选、在线文件、保存、Playwright、trace、Artifacts、预览、执行日志.
 - Cleanup: ports 8000/3000 were stopped and rechecked with no listeners.
 - Residual risks: Vite chunk warning; Playwright 真实执行依赖本机环境；trace/zip 预览不展开执行；浏览器深层写操作主要由 API smoke 和后端契约测试覆盖。
+
+## 第二十七轮验收
+- [x] R27 名称为性能测试增强。
+- [x] 后端支持性能执行停止/中止接口。
+- [x] 后端支持性能阈值判定。
+- [x] 后端支持性能历史对比。
+- [x] 后端支持项目 `performance-trend` 聚合。
+- [x] JMeter 参数编辑会体现在生成/下载脚本中。
+- [x] `generate-report` 增加风险建议。
+- [x] 报告快照和嵌套数据支持递归脱敏，不回显 token / cookie / Authorization / secret。
+- [x] `src/pages/Performance.jsx` 接完整 results、阈值判定、历史比对、7 日趋势、JMeter 参数表单、停止执行和报告风险/建议展示。
+- [x] Performance 页面已去掉影响判断的关键静态假数据。
+- [x] R27 定向测试覆盖停止/中止、阈值判定、历史对比、趋势聚合、JMeter 参数、报告建议和递归脱敏。
+- [x] 完整后端回归、合同组合回归、前端构建和真实 Chrome Playwright 烟测均已验证通过。
+
+## Round 27 Evidence
+- Added `backend/tests/test_round27_performance_enhancement.py`.
+- Added backend service `backend/aitest_platform/services/perf_analysis.py`.
+- Enhanced `backend/aitest_platform/api/router.py`, `backend/aitest_platform/services/perf_runner.py`, `backend/aitest_platform/services/reporting.py`, `backend/aitest_platform/services/exporting.py`, and `src/pages/Performance.jsx`.
+- `python -m compileall backend/aitest_platform`: passed.
+- `python -m pytest backend/tests/test_round27_performance_enhancement.py -q`: 10 passed.
+- Contract combination regression: passed.
+- Full backend `pytest -q`: passed.
+- Root `npm run build`: passed.
+- Real Chrome Playwright smoke: passed; console.error=0; pageerror=0; visible keywords included 阈值判定、性能历史比对、7日趋势 P95、JMeter 参数/模板参数、停止执行、报告建议/风险建议.
+- Residual risks: 真实 JMeter 执行依赖本机工具和目标环境；阈值/风险建议为当前规则口径，后续可按项目 SLA 调整；趋势依赖已落库样本。

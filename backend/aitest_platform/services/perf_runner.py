@@ -217,16 +217,20 @@ def parse_jtl(jtl_text: str) -> dict[str, Any] | None:
     if not samples:
         return None
     elapsed = [sample["elapsed"] for sample in samples if sample.get("elapsed") is not None]
+    timestamps = [sample["timestamp"] for sample in samples if sample.get("timestamp") is not None]
     total = len(samples)
     failed = sum(1 for sample in samples if not sample.get("success", False))
     passed = total - failed
+    duration_seconds = _sample_duration_seconds(timestamps)
     summary = {
         "total": total,
         "passed": passed,
         "failed": failed,
         "avg_ms": round(mean(elapsed), 2) if elapsed else None,
         "p95_ms": _percentile(elapsed, 95),
+        "max_ms": round(max(elapsed), 2) if elapsed else None,
         "error_rate": round(failed / total, 6) if total else 0,
+        "tps": round(total / duration_seconds, 3) if duration_seconds else None,
     }
     return {"summary": summary, "timeline": _timeline(samples), "total": total, "failed": failed}
 
@@ -289,6 +293,15 @@ def _percentile(values: list[float], percentile: int) -> float | None:
     sorted_values = sorted(values)
     index = min(len(sorted_values) - 1, max(0, int(round((percentile / 100) * len(sorted_values) + 0.5)) - 1))
     return round(sorted_values[index], 2)
+
+
+def _sample_duration_seconds(timestamps: list[float]) -> float | None:
+    if not timestamps:
+        return None
+    if len(timestamps) == 1:
+        return 1.0
+    duration_ms = max(timestamps) - min(timestamps)
+    return max(1.0, duration_ms / 1000)
 
 
 def _artifacts(

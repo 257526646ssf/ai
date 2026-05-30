@@ -115,6 +115,19 @@ from aitest_platform.services.execution_defect_loop import (
     status_bucket,
 )
 from aitest_platform.services.perf_runner import inspect_jmeter_dependency, run_jmeter_plan, sanitize_perf_payload
+from aitest_platform.services.perf_analysis import (
+    PerfPayloadError,
+    abort_perf_result,
+    apply_thresholds,
+    compare_perf_results,
+    merge_jmeter_template_params,
+    normalize_plan_schema_template_params,
+    project_performance_trend,
+    render_jmeter_script,
+    resolve_thresholds,
+    status_after_thresholds,
+    template_params_from_schema,
+)
 from aitest_platform.services.reporting import (
     ReportingPayloadError,
     build_aggregation_context,
@@ -3394,6 +3407,13 @@ def list_perf_plans(projectId: str, page_num: int = Query(1, alias="page"), page
 @router.post("/projects/{projectId}/perf-plans")
 def create_perf_plan(projectId: str, payload: WritePayload):
     data = payload_dict(payload)
+    try:
+        plan_schema = normalize_plan_schema_template_params(data.get("plan_schema")) if data.get("plan_schema") is not None else None
+        jmx_script = data.get("jmx_script")
+        if not jmx_script and template_params_from_schema(plan_schema):
+            jmx_script = render_jmeter_script(plan_schema)
+    except PerfPayloadError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     with session_scope() as session:
         require_db_item(session, Project, projectId, "projectId")
         plan = PerfPlan(
@@ -3405,8 +3425,8 @@ def create_perf_plan(projectId: str, payload: WritePayload):
             target_assets_json=sanitize_payload(data.get("target_assets") or data.get("target_assets_json") or {}),
             target_doc=data.get("target_doc") or data.get("targetDoc"),
             plan_content=data.get("plan_content"),
-            plan_schema=sanitize_payload(data.get("plan_schema")),
-            jmx_script=data.get("jmx_script"),
+            plan_schema=plan_schema,
+            jmx_script=jmx_script,
             status=data.get("status", "draft"),
         )
         session.add(plan)
@@ -3422,10 +3442,42 @@ def update_perf_plan(planId: str, payload: WritePayload):
         data["target_assets_json"] = data["target_assets"]
     with session_scope() as session:
         plan = require_db_item(session, PerfPlan, planId, "planId")
+        plan_schema_changed = False
+        try:
+            if "plan_schema" in data:
+                data["plan_schema"] = normalize_plan_schema_template_params(data["plan_schema"])
+                plan_schema_changed = True
+            if "template_params" in data:
+                data["plan_schema"] = merge_jmeter_template_params(data.get("plan_schema") if "plan_schema" in data else plan.plan_schema, {"template_params": data["template_params"]})
+                plan_schema_changed = True
+        except PerfPayloadError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         update_columns(plan, data, ("name", "description", "requirement_item_ids_json", "target_assets_json", "target_doc", "plan_content", "plan_schema", "jmx_script", "status"))
+        if plan_schema_changed and "jmx_script" not in data and template_params_from_schema(plan.plan_schema):
+            plan.jmx_script = render_jmeter_script(plan.plan_schema, plan.jmx_script)
         session.flush()
         r2_log(session, "perf_plan", "update", plan.id)
         return model_dict(plan)
+
+
+@router.patch("/perf-plans/{planId}/jmeter-params")
+def update_perf_plan_jmeter_params(planId: str, payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        plan = require_db_item(session, PerfPlan, planId, "planId")
+        try:
+            plan.plan_schema = merge_jmeter_template_params(plan.plan_schema, data)
+            plan.jmx_script = render_jmeter_script(plan.plan_schema, plan.jmx_script)
+        except PerfPayloadError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        plan.status = "scripted"
+        session.flush()
+        r2_log(session, "perf_plan", "update_jmeter_params", plan.id)
+        return {
+            "plan": model_dict(plan),
+            "template_params": template_params_from_schema(plan.plan_schema),
+            "script": {"tool": "jmeter", "download_url": f"/api/v2/perf-plans/{plan.id}/download-script"},
+        }
 
 
 @router.delete("/perf-plans/{planId}")
@@ -3455,12 +3507,12 @@ def generate_perf_plan(planId: str):
 def generate_perf_script(planId: str):
     with session_scope() as session:
         plan = require_db_item(session, PerfPlan, planId, "planId")
-        script = "<jmeterTestPlan version=\"1.2\"><hashTree /></jmeterTestPlan>"
+        script = render_jmeter_script(plan.plan_schema or {}, plan.jmx_script)
         plan.jmx_script = script
         plan.status = "scripted"
-        job = create_db_job(session, plan.project_id, "generate_perf_script", {"plan_id": plan.id}, {"tool": "jmeter", "placeholder": True})
+        job = create_db_job(session, plan.project_id, "generate_perf_script", {"plan_id": plan.id}, {"tool": "jmeter"})
         session.flush()
-        return {"job": model_dict(job), "script": {"tool": "jmeter", "content": script, "placeholder": True}}
+        return {"job": model_dict(job), "script": {"tool": "jmeter", "content": sanitize_perf_payload(script)}}
 
 
 @router.get("/perf-plans/{planId}/download-script")
@@ -3477,15 +3529,22 @@ def execute_perf_plan(planId: str, payload: WritePayload | None = None):
     with session_scope() as session:
         plan = require_db_item(session, PerfPlan, planId, "planId")
         data = payload_dict(payload)
+        try:
+            thresholds = resolve_thresholds(plan.plan_schema, data)
+            effective_schema = merge_jmeter_template_params(plan.plan_schema, data) if isinstance(data.get("template_params"), dict) else normalize_plan_schema_template_params(plan.plan_schema)
+        except PerfPayloadError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         use_real_runner = data.get("real") is True or str(data.get("mode") or "").lower() == "real"
         use_jmeter_runner = bool(plan.jmx_script and data.get("use_jmeter") is True)
         if use_real_runner or use_jmeter_runner:
-            runner_result = run_jmeter_plan(plan.jmx_script, data)
+            runner_result = run_jmeter_plan(render_jmeter_script(effective_schema, plan.jmx_script), data)
+            summary_data, threshold_status = apply_thresholds(runner_result["summary_data"], thresholds)
+            result_status = status_after_thresholds(runner_result["status"], threshold_status)
             result = PerfResult(
                 plan_id=plan.id,
                 project_id=plan.project_id,
-                status=runner_result["status"],
-                summary_data=runner_result["summary_data"],
+                status=result_status,
+                summary_data=summary_data,
                 timeline_data=runner_result["timeline_data"],
                 error_details=runner_result["error_details"],
                 artifacts=runner_result["artifacts"],
@@ -3493,7 +3552,7 @@ def execute_perf_plan(planId: str, payload: WritePayload | None = None):
                 duration=runner_result["duration"],
             )
             session.add(result)
-            plan.status = "executed" if runner_result["status"] == "completed" else "execution_failed"
+            plan.status = "executed" if result_status == "completed" else "execution_failed"
             session.flush()
             job = create_db_job(
                 session,
@@ -3503,20 +3562,22 @@ def execute_perf_plan(planId: str, payload: WritePayload | None = None):
                 {"perf_result_id": result.id, "status": result.status},
             )
             return {"job": model_dict(job), "result": model_dict(result)}
+        summary_data, threshold_status = apply_thresholds({"avg_ms": 120, "p95_ms": 240, "error_rate": 0, "tps": 20}, thresholds)
+        result_status = status_after_thresholds("completed", threshold_status)
         result = PerfResult(
             plan_id=plan.id,
             project_id=plan.project_id,
-            status="completed",
-            summary_data={"avg_ms": 120, "p95_ms": 240, "error_rate": 0},
+            status=result_status,
+            summary_data=summary_data,
             timeline_data=[{"second": 1, "avg_ms": 120}],
             error_details=[],
             artifacts={"jtl": None, "html_report": None},
             duration=60,
         )
         session.add(result)
-        plan.status = "executed"
+        plan.status = "executed" if result_status == "completed" else "execution_failed"
         session.flush()
-        job = create_db_job(session, plan.project_id, "execute_perf_plan", {"plan_id": plan.id}, {"perf_result_id": result.id})
+        job = create_db_job(session, plan.project_id, "execute_perf_plan", {"plan_id": plan.id, "payload": sanitize_perf_payload(data)}, {"perf_result_id": result.id, "status": result.status})
         return {"job": model_dict(job), "result": model_dict(result)}
 
 
@@ -3525,6 +3586,22 @@ def list_perf_results(planId: str):
     with session_scope() as session:
         require_db_item(session, PerfPlan, planId, "planId")
         return db_page(session, PerfResult, 1, 200, PerfResult.plan_id == to_int(planId, "planId"), order_by=PerfResult.id.desc())
+
+
+@router.get("/perf-plans/{planId}/results/{resultId}/compare")
+def compare_perf_result(planId: str, resultId: str, baselineId: str = Query(...)):
+    with session_scope() as session:
+        plan = require_db_item(session, PerfPlan, planId, "planId")
+        current = session.get(PerfResult, to_int(resultId, "resultId"))
+        baseline = session.get(PerfResult, to_int(baselineId, "baselineId"))
+        if current is None:
+            raise HTTPException(status_code=404, detail=f"PerfResult({resultId}) not found")
+        if baseline is None:
+            raise HTTPException(status_code=404, detail=f"PerfResult({baselineId}) not found")
+        try:
+            return compare_perf_results(plan, current, baseline)
+        except PerfPayloadError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/perf-plans/{planId}/results/{resultId}/download")
@@ -3550,6 +3627,22 @@ def download_perf_result_artifacts(resultId: str):
             raise HTTPException(status_code=404 if "not found" in str(exc).lower() else 400, detail=str(exc)) from exc
 
 
+@router.post("/perf-results/{resultId}/abort")
+def abort_perf_execution(resultId: str, payload: WritePayload | None = None):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        result = session.get(PerfResult, to_int(resultId, "resultId"))
+        if result is None:
+            raise HTTPException(status_code=404, detail=f"PerfResult({resultId}) not found")
+        try:
+            abort = abort_perf_result(result, data.get("reason") or data.get("message"))
+        except PerfPayloadError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        session.flush()
+        r2_log(session, "perf_result", "abort", result.id, {"status": result.status, "reason": abort.get("reason")})
+        return {"result": model_dict(result), "abort": sanitize_perf_payload(abort)}
+
+
 @router.post("/perf-plans/{planId}/generate-report")
 def generate_perf_report(planId: str):
     with session_scope() as session:
@@ -3562,7 +3655,7 @@ def generate_perf_report(planId: str):
                 {"plan_id": to_int(planId, "planId")},
                 {"report_id": report.id, "perf_result_id": result.id if result else None},
             )
-            return {"job": model_dict(job), "report": model_dict(report), "perf_result": model_dict(result) if result else None}
+            return {"job": model_dict(job), "report": model_dict(report), "perf_result": sanitize_perf_payload(model_dict(result)) if result else None}
         except ReportingPayloadError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -3572,6 +3665,13 @@ def perf_quick_tests(payload: WritePayload):
     data = sanitize_payload(payload_dict(payload))
     with session_scope() as session:
         return r2_create(session, "perf_quick_test", {"status": "completed", "metrics": {"avg_ms": 100, "p95_ms": 180, "error_rate": 0}, "input": data})
+
+
+@router.get("/projects/{projectId}/performance-trend")
+def get_project_performance_trend(projectId: str, days: int = Query(7, ge=1, le=90)):
+    with session_scope() as session:
+        project = require_db_item(session, Project, projectId, "projectId")
+        return project_performance_trend(session, project_id=project.id, days=days)
 
 
 @router.get("/projects/{projectId}/reports")

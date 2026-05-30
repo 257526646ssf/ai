@@ -10,6 +10,10 @@
 - 每个工作包必须有测试、构建或浏览器烟测证据。
 - 每个工作包完成后更新 `STATUS.md`、`HANDOFF.md`、`ACCEPTANCE.md` 或新增对应报告。
 
+日期口径：
+- 当前真实日期为 2026-05-30；R20-R27 实际完成节奏早于原排期窗口。
+- 旧路线图日期如与实际完成时间冲突，以对应 Round 报告、验收记录和提交/测试证据为准。
+
 ## 默认策略
 
 - 默认运行模式：继续保持本地优先，SQLite + 本地 artifacts。
@@ -33,12 +37,12 @@
 | R24 | 2026-06-05 ~ 2026-06-07 | P0 | 执行与缺陷闭环 | 补失败/阻塞模板、缺陷标题/复现步骤/严重级别建议、关联/解除用例、复测提醒、失败/阻塞筛选、真实趋势统计。 |
 | R25 | 2026-06-07 ~ 2026-06-10 | P0 | 接口测试增强 | 支持 OpenAPI YAML/HAR 基础解析，补保存调试为用例、环境变量优先级、场景变量映射增强、Mock 服务基础能力、前后置脚本受控执行。 |
 | R26 | 2026-06-10 ~ 2026-06-12 | P0 | 自动化中心增强 | 补候选筛选、在线文件编辑、代码保存、Playwright 模板增强、执行日志/截图/trace 展示、Artifacts 预览。 |
-| R27 | 2026-06-12 ~ 2026-06-14 | P0 | 性能测试增强 | 补中止执行接口、阈值判定、历史对比、JMeter 模板参数编辑、性能趋势聚合、报告风险建议。 |
-| R28 | 2026-06-14 ~ 2026-06-16 | P0 | 报告中心增强 | 补模板管理闭环、报告下钻、风险项转待办、Markdown/HTML 强化；PDF/Word 若无新增依赖批准，先提供 HTML/Markdown 生产级替代。 |
-| R29 | 2026-06-16 ~ 2026-06-17 | P1 | 数据工厂与数据管理 | 补接口参数测试数据生成、执行测试数据建议、自动备份提醒、存储空间统计、按模块清理安全门。 |
-| R30 | 2026-06-17 ~ 2026-06-20 | P1 | 文件与导出格式增强 | 评估并实现 `.xlsx`、PDF、Word、XMind 的本地安全导出；若依赖未批准，保留 Markdown/CSV/HTML/ZIP 完整替代。 |
-| R31 | 2026-06-20 ~ 2026-06-24 | 决策门 | 生产基础设施 | Alembic、PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储。默认不静默引入，需在 `DECISIONS.md` 明确选择后实施。 |
-| R32 | 2026-06-24 ~ 2026-06-26 | P0 | 第二轮总验收 | 全量测试、前端构建、核心浏览器流程、导出下载、secrets 扫描、远程分支校验、最终交付报告。 |
+| R27 | 2026-05-30 已验收；原窗口 2026-06-12 ~ 2026-06-14 | P0 | 性能测试增强 | 已完成：中止/停止执行接口、阈值判定、历史对比、JMeter 模板参数编辑、性能趋势聚合、报告风险建议。验收证据见 `ROUND27_REPORT.md`。 |
+| R28 | 2026-05-30 起 | P0 | 报告中心增强 | 待开始：补模板管理闭环、报告下钻、风险项转待办、Markdown/HTML 强化；PDF/Word 若无新增依赖批准，先提供 HTML/Markdown 生产级替代。 |
+| R29 | R28 验收后 | P1 | 数据工厂与数据管理 | 待开始：补接口参数测试数据生成、执行测试数据建议、自动备份提醒、存储空间统计、按模块清理安全门。 |
+| R30 | R29 验收后 | P1 | 文件与导出格式增强 | 待开始：评估并实现 `.xlsx`、PDF、Word、XMind 的本地安全导出；若依赖未批准，保留 Markdown/CSV/HTML/ZIP 完整替代。 |
+| R31 | R30 验收后 | 决策门 | 生产基础设施 | 待决策：Alembic、PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储。默认不静默引入，需在 `DECISIONS.md` 明确选择后实施。 |
+| R32 | R31 决策后 | P0 | 第二轮总验收 | 待开始：全量测试、前端构建、核心浏览器流程、导出下载、secrets 扫描、远程分支校验、最终交付报告。 |
 
 ## 必须完成清单
 
@@ -80,9 +84,9 @@
 
 ## 当前下一步
 
-立即进入 R27：性能测试增强。
-- 补中止执行接口、阈值判定、历史对比。
-- 增强 JMeter 模板参数编辑、性能趋势聚合、报告风险建议。
+立即进入 R28：报告中心增强。
+- 补模板管理闭环、报告下钻、风险项转待办。
+- 强化 Markdown/HTML 报告输出；PDF/Word 若无新增依赖批准，先保留为后续评估项。
 - 继续保持脱敏、本地优先和结构化失败约束。
 
 ## 当前进展
@@ -136,4 +140,14 @@
 - R26 验收证据见 `docs/orchestration/ROUND26_REPORT.md`：`cd backend; python -m compileall aitest_platform` passed，exit code 0；R26 组合回归 40 passed，仅 FastAPI deprecation warning；full backend `python -m pytest -q` passed，exit code 0，仅 FastAPI deprecation warning；`npm run build` passed，仅 Vite chunk >500k warning。
 - R26 冒烟事实：API smoke passed，候选筛选/过滤、文件保存、artifact preview 均返回合理结果；浏览器最终复验 Automation 页面打开，console.error=0，pageerror=0，`/case-files` 请求数 0，`/case-files` 404 为 0，`/auto-projects/693/files?page=1&pageSize=200` 返回 200，R26 DOM 可见关键词 8/8：候选筛选、在线文件、保存、Playwright、trace、Artifacts、预览、执行日志；8000/3000 已停止并复查无监听。
 - R26 残余风险：Vite chunk warning；Playwright 真实执行依赖本机环境；trace/zip 预览不展开执行；浏览器深层写操作主要由 API smoke 和后端契约测试覆盖。
-- 下一步进入 R27：性能测试增强。
+- 下一步已进入并完成 R27：性能测试增强。
+
+## 当前进展补充：R27
+- R27 已完成文档收口：性能测试增强已落地并验收。
+- 后端完成性能停止/中止接口、阈值判定、历史对比、项目 `performance-trend` 聚合；JMeter 参数编辑会体现在生成/下载脚本中；`generate-report` 已增加风险建议并递归脱敏。
+- 新增 `backend/aitest_platform/services/perf_analysis.py`；增强 `backend/aitest_platform/api/router.py`、`backend/aitest_platform/services/perf_runner.py`、`backend/aitest_platform/services/reporting.py`、`backend/aitest_platform/services/exporting.py`。
+- 前端 `src/pages/Performance.jsx` 已接完整 results、阈值判定、历史比对、7 日趋势、JMeter 参数表单、停止执行、报告风险/建议展示，并去掉关键静态假数据。
+- R27 验收证据见 `docs/orchestration/ROUND27_REPORT.md`：`python -m compileall backend/aitest_platform` passed；R27 定向 10 passed；合同组合回归 passed；后端全量 `pytest -q` passed；`npm run build` passed；真实 Chrome Playwright 烟测 passed，`console.error=0`，`pageerror=0`。
+- R27 浏览器关键词命中：阈值判定、性能历史比对、7日趋势 P95、JMeter 参数/模板参数、停止执行、报告建议/风险建议。
+- R27 残余风险：真实 JMeter 执行依赖本机工具和目标环境；阈值/风险建议为当前规则口径，后续可按项目 SLA 调整；趋势依赖已落库样本。
+- 下一步进入 R28：报告中心增强。

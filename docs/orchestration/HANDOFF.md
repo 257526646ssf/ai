@@ -433,7 +433,18 @@
 - 进程清理：8000/3000 已停止并复查无监听。
 - R26 残余风险：Vite chunk warning；Playwright 真实执行依赖本机环境；trace/zip 预览不展开执行；浏览器深层写操作主要由 API smoke 和后端契约测试覆盖。
 
-## R27 预备交接
-- 下一步进入 R27：性能测试增强。
-- 建议优先围绕中止执行接口、阈值判定、历史对比、JMeter 模板参数编辑、性能趋势聚合、报告风险建议继续拆分 worker。
-- 继续保持本地优先、结构化失败、敏感信息脱敏和不静默新增生产依赖的约束。
+## R27 完成交接
+- R27 名称：性能测试增强。
+- 后端已完成性能停止/中止接口、阈值判定、历史对比、项目 `performance-trend` 聚合；JMeter 参数编辑会体现在生成/下载脚本中；`generate-report` 已增加风险建议并递归脱敏。
+- 新增服务：`backend/aitest_platform/services/perf_analysis.py`。
+- 增强文件：`backend/aitest_platform/api/router.py`、`backend/aitest_platform/services/perf_runner.py`、`backend/aitest_platform/services/reporting.py`、`backend/aitest_platform/services/exporting.py`。
+- 前端 `src/pages/Performance.jsx` 已接完整 results、阈值判定、历史比对、7 日趋势、JMeter 参数表单、停止执行、报告风险/建议展示，并去掉关键静态假数据。
+- R27 验收证据见 `docs/orchestration/ROUND27_REPORT.md`；定向测试 `backend/tests/test_round27_performance_enhancement.py` 为 10 passed。
+- 验证结果：`python -m compileall backend/aitest_platform` passed；合同组合回归 passed；后端全量 `pytest -q` passed；`npm run build` passed；真实 Chrome Playwright 烟测 passed，`console.error=0`，`pageerror=0`。
+- 浏览器关键词命中：阈值判定、性能历史比对、7日趋势 P95、JMeter 参数/模板参数、停止执行、报告建议/风险建议。
+- R27 残余风险：真实 JMeter 执行依赖本机工具和目标环境；阈值/风险建议为当前规则口径，后续可按项目 SLA 调整；趋势依赖已落库样本。
+
+## R28 预备交接
+- 下一步进入 R28：报告中心增强。
+- 建议优先围绕模板管理闭环、报告下钻、风险项转待办、Markdown/HTML 强化继续拆分 worker。
+- PDF/Word 若没有新增依赖批准，先提供 HTML/Markdown 生产级替代；继续保持本地优先、结构化失败、敏感信息脱敏和不静默新增生产依赖的约束。

@@ -1,7 +1,8 @@
 # 后端实现状态
 
 ## 阶段
-- 当前阶段：Round 17 已验收；全局项目选择器、ApiTesting 场景/计划链路、Automation runner/artifacts、Performance JMX/JSON/HTML 导出已完成
+- 当前阶段：截至 2026-05-30，Round 27 已验收；性能停止/中止、阈值判定、历史比对、JMeter 参数编辑、7 日趋势、报告风险建议和递归脱敏已完成。
+- 日期说明：第二轮路线图中的旧时间窗口如与实际完成时间冲突，以各 Round 报告、验收记录和提交/测试证据为准。
 - 目标：在不改变前端视觉风格的前提下，实现需求文档与技术实现方案中的后端基础能力。
 - 主线程职责：拆解、派工、验收、进度统一；产品实现代码由子任务完成。
 
@@ -565,4 +566,16 @@
 - API/浏览器冒烟：API smoke passed，候选筛选/过滤、文件保存、artifact preview 均返回合理结果；浏览器最终复验 Automation 页面打开，console.error=0，pageerror=0，`/case-files` 请求数 0，`/case-files` 404 为 0，`/auto-projects/693/files?page=1&pageSize=200` 返回 200，R26 DOM 可见关键词 8/8：候选筛选、在线文件、保存、Playwright、trace、Artifacts、预览、执行日志；进程清理后 8000/3000 已停止并复查无监听。
 - 残余风险：Vite chunk warning；Playwright 真实执行依赖本机环境；trace/zip 预览不展开执行；浏览器深层写操作主要由 API smoke 和后端契约测试覆盖。
 - R26 验收证据见 `docs/orchestration/ROUND26_REPORT.md`。
-- 下一步进入 R27：性能测试增强。
+
+## 第二轮 R27 完成状态
+- R27 名称：性能测试增强。
+- 后端实现：性能停止/中止接口、阈值判定、历史对比、项目 `performance-trend` 聚合；JMeter 参数编辑会体现在生成/下载脚本中；`generate-report` 增加风险建议并递归脱敏。
+- 后端新增服务：`backend/aitest_platform/services/perf_analysis.py`。
+- 后端增强：`backend/aitest_platform/api/router.py`、`backend/aitest_platform/services/perf_runner.py`、`backend/aitest_platform/services/reporting.py`、`backend/aitest_platform/services/exporting.py`。
+- 前端实现：`src/pages/Performance.jsx` 接完整 results、阈值判定、历史比对、7 日趋势、JMeter 参数表单、停止执行、报告风险/建议展示，并去掉关键静态假数据。
+- QA：新增 `backend/tests/test_round27_performance_enhancement.py`，覆盖停止/中止、阈值判定、历史对比、趋势聚合、JMeter 参数、报告建议和递归脱敏。
+- 验证：`python -m compileall backend/aitest_platform` passed；R27 定向 10 passed；合同组合回归 passed；后端全量 `pytest -q` passed；`npm run build` passed；真实 Chrome Playwright 烟测 passed，`console.error=0`，`pageerror=0`。
+- 浏览器关键词命中：阈值判定、性能历史比对、7日趋势 P95、JMeter 参数/模板参数、停止执行、报告建议/风险建议。
+- 残余风险：真实 JMeter 执行依赖本机工具和目标环境；阈值/风险建议为当前规则口径，后续可按项目 SLA 调整；趋势依赖已落库样本。
+- R27 验收证据见 `docs/orchestration/ROUND27_REPORT.md`。
+- 下一步进入 R28：报告中心增强。
