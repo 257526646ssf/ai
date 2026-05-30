@@ -11,7 +11,7 @@
 - 每个工作包完成后更新 `STATUS.md`、`HANDOFF.md`、`ACCEPTANCE.md` 或新增对应报告。
 
 日期口径：
-- 当前真实日期为 2026-05-30；R20-R27 实际完成节奏早于原排期窗口。
+- 当前真实日期为 2026-05-30；R20-R29 实际完成节奏早于原排期窗口。
 - 旧路线图日期如与实际完成时间冲突，以对应 Round 报告、验收记录和提交/测试证据为准。
 
 ## 默认策略
@@ -39,7 +39,7 @@
 | R26 | 2026-06-10 ~ 2026-06-12 | P0 | 自动化中心增强 | 补候选筛选、在线文件编辑、代码保存、Playwright 模板增强、执行日志/截图/trace 展示、Artifacts 预览。 |
 | R27 | 2026-05-30 已验收；原窗口 2026-06-12 ~ 2026-06-14 | P0 | 性能测试增强 | 已完成：中止/停止执行接口、阈值判定、历史对比、JMeter 模板参数编辑、性能趋势聚合、报告风险建议。验收证据见 `ROUND27_REPORT.md`。 |
 | R28 | 2026-05-30 已验收 | P0 | 报告中心增强 | 已完成：report-templates CRUD 校验与默认唯一、综合报告模板/scope 冻结、报告列表过滤排序、下钻、风险转待办、Markdown/HTML 强化、unsupported PDF/Word/docx 结构化返回、轻量结论类型。验收证据见 `ROUND28_REPORT.md`。 |
-| R29 | R28 验收后 | P1 | 数据工厂与数据管理 | 待开始：补接口参数测试数据生成、执行测试数据建议、自动备份提醒、存储空间统计、按模块清理安全门。 |
+| R29 | 2026-05-30 已验收 | P1 | 数据工厂与数据管理 | 已完成：接口参数测试数据生成、执行测试数据建议、备份状态提醒、存储空间统计、清理 dry-run/确认门、模块白名单、路径根目录限制和响应脱敏。验收证据见 `ROUND29_REPORT.md`。 |
 | R30 | R29 验收后 | P1 | 文件与导出格式增强 | 待开始：评估并实现 `.xlsx`、PDF、Word、XMind 的本地安全导出；若依赖未批准，保留 Markdown/CSV/HTML/ZIP 完整替代。 |
 | R31 | R30 验收后 | 决策门 | 生产基础设施 | 待决策：Alembic、PostgreSQL/pgvector、Celery/Redis、MinIO/S3、真实密钥加密存储。默认不静默引入，需在 `DECISIONS.md` 明确选择后实施。 |
 | R32 | R31 决策后 | P0 | 第二轮总验收 | 待开始：全量测试、前端构建、核心浏览器流程、导出下载、secrets 扫描、远程分支校验、最终交付报告。 |
@@ -84,8 +84,8 @@
 
 ## 当前下一步
 
-立即进入 R29：数据工厂与数据管理。
-- 补接口参数测试数据生成、执行测试数据建议、自动备份提醒、存储空间统计、按模块清理安全门。
+立即进入 R30：文件与导出格式增强。
+- 评估并实现 `.xlsx`、PDF、Word、XMind 的本地安全导出；若依赖未批准，保留 Markdown/CSV/HTML/ZIP 完整替代。
 - R30-R32 仍保持未完成排期，分别等待文件与导出格式增强、生产基础设施决策和第二轮总验收。
 - 继续保持脱敏、本地优先和结构化失败约束。
 
@@ -159,4 +159,13 @@
 - R28 验收证据见 `docs/orchestration/ROUND28_REPORT.md`：`python -m compileall backend/aitest_platform` passed；R28 定向 13 passed；合同组合回归 passed；后端全量 `pytest -q` passed；`npm run build` passed；真实 Chrome Playwright 报告中心烟测 passed，`console.error=0`，`pageerror=0`。
 - R28 浏览器入口命中：风险转待办、Markdown、HTML、日报、提测反馈、上线建议、风险清单、管理报告模板/新建模板、查看下钻/下钻明细。
 - R28 残余风险：PDF/Word/docx 仍为 unsupported 结构化返回，未引入新导出依赖；轻量结论仍按当前报告聚合口径输出。
-- 下一步进入 R29：数据工厂与数据管理。R29-R32 保持未完成排期。
+- 下一步已进入并完成 R29：数据工厂与数据管理。
+
+## 当前进展补充：R29
+- R29 已完成文档收口：数据工厂与数据管理已落地并验收。
+- 后端完成 `POST /data-factory/api-parameters/generate`、`GET /test-cases/{caseId}/test-data-suggestions`、`GET /system/backup-status`、`GET /system/storage-summary`、`POST /system/cleanup`；清理接口支持 dry-run、安全确认文本 `CLEANUP`、模块白名单、路径根目录限制和响应脱敏。
+- 前端 Settings 已接存储统计、备份提醒、清理 dry-run 与确认执行；ApiTesting 已有生成测试数据入口；Execution 已有准备测试数据入口和空态。
+- R29 验收证据见 `docs/orchestration/ROUND29_REPORT.md`：R29 定向测试复验 5 passed，合同回归组合 passed，后端全量 passed，`npm run build` passed，浏览器复验 passed，Settings cleanup dry-run 200，`console.error=0`，`pageerror=0`。
+- 真实清理未执行：dry-run 显示会影响 849 个 artifact 文件，出于安全边界仅验证 dry-run 和确认门能力。
+- 端口说明：本机 8000 被既有 `python -m http.server 8000` PID 4588 占用，验收使用 8001，未触碰非本次启动进程。
+- 下一步进入 R30：文件与导出格式增强。R30-R32 保持未完成排期。

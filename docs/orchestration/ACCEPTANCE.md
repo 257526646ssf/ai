@@ -572,3 +572,30 @@
 - Browser smoke hit entries for 风险转待办、Markdown、HTML、日报、提测反馈、上线建议、风险清单、管理报告模板/新建模板、查看下钻/下钻明细.
 - Cleanup: ports were cleaned.
 - Residual risks: PDF/Word/docx remain unsupported structured responses until an export dependency decision is made; lightweight conclusions follow the current report aggregation rules.
+
+## 第二十九轮验收
+- [x] R29 名称为数据工厂与数据管理。
+- [x] 后端支持 `POST /data-factory/api-parameters/generate`。
+- [x] 后端支持 `GET /test-cases/{caseId}/test-data-suggestions`。
+- [x] 后端支持 `GET /system/backup-status`。
+- [x] 后端支持 `GET /system/storage-summary`。
+- [x] 后端支持 `POST /system/cleanup`。
+- [x] 清理接口支持 dry-run、安全确认文本 `CLEANUP`、模块白名单、路径根目录限制和响应脱敏。
+- [x] Settings 已接入存储统计、备份提醒、清理 dry-run 与确认执行。
+- [x] ApiTesting 已增加生成测试数据入口。
+- [x] Execution 已增加准备测试数据入口和空态。
+- [x] R29 定向测试、合同回归组合、后端全量、前端构建和浏览器复验均已验证通过。
+- [x] 真实清理未执行，原因是 dry-run 显示会影响 849 个 artifact 文件，出于安全边界仅验证 dry-run 和确认门能力。
+
+## Round 29 Evidence
+- Added `backend/tests/test_round29_data_factory_management.py`.
+- Enhanced `backend/aitest_platform/api/router.py`, `backend/aitest_platform/services/data_factory.py`, `backend/aitest_platform/services/data_management.py`, `src/pages/SettingsPage.jsx`, `src/pages/ApiTesting.jsx`, and `src/pages/Execution.jsx`.
+- R29 targeted retest: `python -m pytest backend/tests/test_round29_data_factory_management.py -q`: 5 passed.
+- Backend implementation phase previously recorded 8 passed; current acceptance uses the actual test file retest result, 5 passed.
+- Contract combination regression: passed.
+- Full backend regression: passed.
+- Root `npm run build`: passed.
+- Browser retest: passed; Settings cleanup dry-run returned 200, payload included `execution_history`, `api_execution_history`, and `artifacts`; console.error=0; pageerror=0.
+- Real cleanup was not executed because dry-run would affect 849 artifact files; this was kept inside the safety boundary.
+- Port note: local 8000 was already occupied by `python -m http.server 8000` PID 4588, so acceptance used 8001 and did not touch non-current processes.
+- Residual risks: data generation and suggestions are based on current local rules/data; storage statistics and backup reminders use the current local SQLite/artifacts layout.

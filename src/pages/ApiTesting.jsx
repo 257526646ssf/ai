@@ -14,7 +14,9 @@ import {
   Play,
   RotateCw,
   Cpu,
-  Terminal
+  Terminal,
+  Clipboard,
+  FileInput
 } from 'lucide-react';
 import TiltCard from '../components/TiltCard';
 import AnimatedNumber from '../components/AnimatedNumber';
@@ -59,6 +61,16 @@ const IMPORT_SOURCES = [
 
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 const EMPTY_ROW = { key: '', value: '', enabled: true };
+const DATA_FACTORY_SCENARIOS = [
+  { id: 'normal', label: '正常', keys: ['normal', 'valid', 'happy_path', 'success'] },
+  { id: 'boundary', label: '边界', keys: ['boundary', 'edge', 'edge_case', 'limit'] },
+  { id: 'invalid', label: '异常', keys: ['invalid', 'exception', 'error', 'negative'] },
+  { id: 'empty', label: '空值', keys: ['empty', 'null', 'null_value', 'blank', 'missing'] },
+  { id: 'special', label: '特殊字符', keys: ['special', 'special_char', 'special_chars', 'unicode'] }
+];
+const FACTORY_RESULT_KEYS = ['items', 'samples', 'records', 'results', 'test_data', 'cases', 'parameters', 'data', 'suggestions', 'generated'];
+
+const firstDefined = (...values) => values.find((value) => value !== undefined && value !== null && value !== '');
 
 const isRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
 
@@ -88,6 +100,92 @@ const safeStringify = (value) => {
   } catch {
     return String(value);
   }
+};
+
+const normalizeFactorySource = (payload) => {
+  if (Array.isArray(payload)) return { items: payload };
+  const source = toRecord(payload);
+  const nested = FACTORY_RESULT_KEYS.map((key) => source[key]).find((value) => value !== undefined && value !== null);
+  if (Array.isArray(nested)) return { items: nested };
+  if (isRecord(nested)) return nested;
+  return source;
+};
+
+const normalizeFactoryItemsForScenario = (payload, scenario) => {
+  const source = normalizeFactorySource(payload);
+  const directValue = scenario.keys.map((key) => source[key]).find((value) => value !== undefined && value !== null);
+  let items = [];
+
+  if (Array.isArray(directValue)) {
+    items = directValue;
+  } else if (directValue !== undefined && directValue !== null) {
+    items = [directValue];
+  } else {
+    const candidates = [
+      ...FACTORY_RESULT_KEYS.flatMap((key) => toList(source[key])),
+      ...toList(source.scenarios)
+    ];
+    items = candidates.filter((item) => {
+      const record = toRecord(item);
+      const kind = String(firstDefined(record.category, record.type, record.kind, record.scenario, record.group, '')).toLowerCase();
+      return scenario.keys.includes(kind);
+    });
+  }
+
+  return items.map((item, index) => {
+    const record = toRecord(item);
+    return {
+      id: `${scenario.id}-${index}`,
+      title: firstDefined(record.name, record.title, record.label, record.description, `${scenario.label} #${index + 1}`),
+      value: isRecord(item) ? item : { value: item }
+    };
+  });
+};
+
+const getTargetPayload = (record, target) => {
+  const keyMap = {
+    body: ['body', 'request_body', 'requestBody', 'body_data', 'bodyData', 'payload_body'],
+    variables: ['variables', 'vars', 'env_vars', 'envVars', 'runtime_variables', 'runtimeVariables'],
+    query: ['query', 'params', 'parameters', 'request_query', 'requestQuery', 'query_params', 'queryParams']
+  };
+  const directKeys = keyMap[target] || [target];
+  const containerKeys = ['request', 'request_payload', 'requestPayload', 'payload', 'mapping', 'mappings', 'mapped', 'targets'];
+
+  for (const key of directKeys) {
+    if (record[key] !== undefined && record[key] !== null) return record[key];
+  }
+
+  for (const containerKey of containerKeys) {
+    const container = toRecord(record[containerKey]);
+    for (const key of directKeys) {
+      if (container[key] !== undefined && container[key] !== null) return container[key];
+    }
+  }
+
+  return undefined;
+};
+
+const getFactoryApplyValue = (item, target) => {
+  const record = toRecord(item?.value);
+  const mappedValue = getTargetPayload(record, target);
+  if (mappedValue !== undefined) {
+    return target === 'body' ? mappedValue : toRecord(mappedValue);
+  }
+
+  if (target === 'body') {
+    return firstDefined(record.body, record.request_body, record.requestBody, record.payload, record.data, record.value, item?.value);
+  }
+  return toRecord(firstDefined(
+    record.variables,
+    record.vars,
+    record.params,
+    record.query,
+    record.headers,
+    record.body,
+    record.payload,
+    record.data,
+    item?.value
+  ));
 };
 
 const objectToRows = (value, fallback = [EMPTY_ROW]) => {
@@ -270,6 +368,7 @@ export default function ApiTesting() {
   const [mockStatus, setMockStatus] = useState({ type: 'info', message: 'Mock 规则尚未加载。' });
   const [isSavingMock, setIsSavingMock] = useState(false);
   const [isDispatchingMock, setIsDispatchingMock] = useState(false);
+  const [dataFactoryState, setDataFactoryState] = useState({ loading: false, result: null, error: '' });
 
   React.useEffect(() => {
     const handleApiResponseSuccess = (e) => {
@@ -735,6 +834,169 @@ export default function ApiTesting() {
     } finally {
       setIsSending(false);
     }
+  };
+
+  const buildDataFactoryPayload = () => {
+    const activeApi = activeBackendLib?.rawApis?.[0];
+    const activeApiCase = activeBackendLib?.rawCases?.[0];
+    const modes = DATA_FACTORY_SCENARIOS.map((item) => item.id);
+    return {
+      project_id: projectContext?.id || selectedProject?.id || undefined,
+      lib_id: getActiveLibId() || undefined,
+      api_id: activeApi?.id || undefined,
+      api_case_id: activeApiCase?.id || undefined,
+      modes,
+      targets: ['body', 'query', 'variables'],
+      count: 12,
+      max_count: 12,
+      request: {
+        method: String(debugForm.method || 'GET').toUpperCase(),
+        url: debugForm.url.trim() || joinUrl(debugForm.baseUrl, debugForm.path),
+        base_url: debugForm.baseUrl,
+        path: debugForm.path,
+        headers: rowsToObject(debugHeaders),
+        query: rowsToObject(debugQuery),
+        body: parseBodyInput(debugForm.body)
+      },
+      schema: {
+        headers: activeApi?.headers_schema || {},
+        query: activeApi?.query_schema || {},
+        body: activeApi?.body_schema || {}
+      },
+      variables: rowsToObject(runVarRows),
+      environment_variables: rowsToObject(envVarRows)
+    };
+  };
+
+  const handleGenerateTestData = async () => {
+    setDataFactoryState({ loading: true, result: null, error: '' });
+    try {
+      const result = await apiPost('/data-factory/api-parameters/generate', buildDataFactoryPayload(), { timeoutMs: 20000 });
+      setDataFactoryState({ loading: false, result, error: '' });
+      showToast('测试数据已由后端数据工厂生成。', 'success');
+    } catch (error) {
+      const message = readErrorMessage(error, '测试数据生成失败。');
+      setDataFactoryState({ loading: false, result: null, error: message });
+      showToast(message, 'error');
+    }
+  };
+
+  const handleCopyFactoryItem = async (item) => {
+    const content = safeStringify(item?.value);
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+      await navigator.clipboard.writeText(content);
+      showToast('测试数据已复制到剪贴板。', 'success');
+    } catch {
+      setResponseBody(content);
+      setResponseTab('body');
+      showToast('当前浏览器无法写入剪贴板，已放入响应控制台。', 'warning');
+    }
+  };
+
+  const handleApplyFactoryItemToVariables = (item) => {
+    const variables = getFactoryApplyValue(item, 'variables');
+    const entries = Object.entries(variables);
+    if (!entries.length) {
+      showToast('该数据项没有可应用到变量的键值。', 'warning');
+      return;
+    }
+    setRunVarRows(objectToRows(variables));
+    showToast('已应用到本次运行变量。', 'success');
+  };
+
+  const handleApplyFactoryItemToBody = (item) => {
+    const bodyValue = getFactoryApplyValue(item, 'body');
+    setDebugForm((prev) => ({ ...prev, body: typeof bodyValue === 'string' ? bodyValue : safeStringify(bodyValue) }));
+    setRequestTab('body');
+    showToast('已应用到请求体。', 'success');
+  };
+
+  const renderDataFactoryPanel = () => {
+    if (!dataFactoryState.loading && !dataFactoryState.error && !dataFactoryState.result) return null;
+
+    return (
+      <div className="theme-card rounded-xl p-4 shadow-soft space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-color)] pb-2">
+          <h3 className="text-xs font-bold text-[var(--text-primary)] flex items-center gap-1.5">
+            <Sparkles className="size-3.5 text-[var(--accent-color)]" />
+            <span>数据工厂结果</span>
+          </h3>
+          <button
+            onClick={handleGenerateTestData}
+            disabled={dataFactoryState.loading}
+            className="px-2.5 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)] text-[10px] font-bold text-[var(--text-primary)] disabled:opacity-60"
+          >
+            {dataFactoryState.loading ? '生成中...' : '重新生成'}
+          </button>
+        </div>
+
+        {dataFactoryState.loading && (
+          <div className="min-h-20 flex items-center justify-center text-[10px] text-[var(--text-secondary)]">
+            正在调用 /data-factory/api-parameters/generate...
+          </div>
+        )}
+
+        {dataFactoryState.error && (
+          <div className="rounded-lg border border-red-500/25 bg-red-500/10 text-red-500 text-[10px] p-3 break-words">
+            {dataFactoryState.error}
+          </div>
+        )}
+
+        {dataFactoryState.result && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {DATA_FACTORY_SCENARIOS.map((scenario) => {
+              const items = normalizeFactoryItemsForScenario(dataFactoryState.result, scenario);
+              return (
+                <div key={scenario.id} className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 p-3 min-w-0">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="text-[10px] font-bold text-[var(--text-primary)]">{scenario.label}</div>
+                    <div className="text-[8px] text-[var(--text-secondary)]">{items.length} 组</div>
+                  </div>
+                  {items.length ? (
+                    <div className="space-y-2">
+                      {items.map((item) => (
+                        <div key={item.id} className="rounded-md border border-[var(--border-color)] bg-[var(--bg-card)]/70 p-2 space-y-2">
+                          <div className="text-[9px] font-bold text-[var(--text-primary)] truncate" title={item.title}>{item.title}</div>
+                          <pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all text-[8.5px] font-mono text-[var(--text-secondary)]">{safeStringify(item.value)}</pre>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button
+                              onClick={() => handleCopyFactoryItem(item)}
+                              className="flex items-center gap-1 px-2 py-1 rounded border border-[var(--border-color)] text-[8.5px] font-bold text-[var(--text-primary)] hover:bg-[var(--border-color)]"
+                            >
+                              <Clipboard className="size-3" />
+                              <span>复制</span>
+                            </button>
+                            <button
+                              onClick={() => handleApplyFactoryItemToVariables(item)}
+                              className="flex items-center gap-1 px-2 py-1 rounded border border-[var(--border-color)] text-[8.5px] font-bold text-[var(--text-primary)] hover:bg-[var(--border-color)]"
+                            >
+                              <FileInput className="size-3" />
+                              <span>应用变量</span>
+                            </button>
+                            <button
+                              onClick={() => handleApplyFactoryItemToBody(item)}
+                              className="flex items-center gap-1 px-2 py-1 rounded bg-[var(--accent-color)] text-white text-[8.5px] font-bold hover:opacity-90"
+                            >
+                              <Save className="size-3" />
+                              <span>应用请求体</span>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-dashed border-[var(--border-color)] p-3 text-[9px] text-[var(--text-secondary)] text-center">
+                      后端未返回该类型数据。
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
   };
 
   const handleRunAssertions = async () => {
@@ -1588,7 +1850,17 @@ export default function ApiTesting() {
           <div className="col-span-12 lg:col-span-8 space-y-4">
             <div className="theme-card rounded-xl p-4 shadow-soft">
               <div className="flex flex-wrap justify-between items-center gap-2 border-b border-[var(--border-color)] pb-2 mb-3">
-                <span className="text-xs font-bold text-[var(--text-primary)]">请求报文定义 (Request)</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-bold text-[var(--text-primary)]">请求报文定义 (Request)</span>
+                  <button
+                    onClick={handleGenerateTestData}
+                    disabled={dataFactoryState.loading}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--accent-color)]/30 bg-[var(--accent-glow)] text-[var(--accent-color)] text-[9px] font-bold hover:bg-[var(--accent-color)] hover:text-white transition-colors disabled:opacity-60"
+                  >
+                    <Sparkles className={`size-3 ${dataFactoryState.loading ? 'animate-spin' : ''}`} />
+                    <span>{dataFactoryState.loading ? '生成中...' : '生成测试数据'}</span>
+                  </button>
+                </div>
                 <div className="p-0.5 border border-[var(--border-color)] rounded-lg flex gap-0.5 bg-[var(--bg-app)] text-[9px] font-bold">
                   {['Headers', 'Params', 'Body', 'Auth'].map((tab) => {
                     const tabId = tab.toLowerCase();
@@ -1646,6 +1918,8 @@ export default function ApiTesting() {
                 </div>
               )}
             </div>
+
+            {renderDataFactoryPanel()}
 
             <div className="theme-card rounded-xl p-4 shadow-soft">
               <div className="flex flex-wrap justify-between items-center gap-2 border-b border-[var(--border-color)] pb-2 mb-3">

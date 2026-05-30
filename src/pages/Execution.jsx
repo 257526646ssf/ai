@@ -45,6 +45,8 @@ const normalizeObject = (payload) => {
   return payload;
 };
 
+const isPlainRecord = (value) => value && typeof value === 'object' && !Array.isArray(value);
+
 const firstValue = (...values) => values.find((value) => value !== undefined && value !== null && value !== '');
 
 const textValue = (value, fallback = '—') => {
@@ -52,6 +54,87 @@ const textValue = (value, fallback = '—') => {
   if (Array.isArray(value)) return value.filter(Boolean).join('\n') || fallback;
   if (typeof value === 'object') return JSON.stringify(value, null, 2);
   return String(value);
+};
+
+const safeStringify = (value) => {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value ?? null, null, 2);
+  } catch {
+    return String(value);
+  }
+};
+
+const normalizeSuggestionItems = (value) => {
+  if (Array.isArray(value)) return value;
+  if (value === undefined || value === null || value === '') return [];
+  if (isPlainRecord(value)) {
+    const listed = normalizeList(value);
+    if (listed.length) return listed;
+    return Object.entries(value).map(([key, itemValue]) => ({ key, value: itemValue }));
+  }
+  return [value];
+};
+
+const classifyTestDataSuggestionItem = (item) => {
+  const record = isPlainRecord(item) ? item : {};
+  const marker = String(firstValue(
+    record.section,
+    record.category,
+    record.type,
+    record.kind,
+    record.target,
+    record.location,
+    record.group,
+    ''
+  )).toLowerCase();
+
+  if (/(account|user|credential|login)/.test(marker)) return 'accounts';
+  if (/(pre|setup|before|step|condition)/.test(marker)) return 'preSteps';
+  if (/(missing|depend|blocker|required)/.test(marker)) return 'missing';
+  return 'variables';
+};
+
+const mergeSuggestionGroup = (target, key, value) => {
+  const items = normalizeSuggestionItems(value);
+  if (items.length) target[key].push(...items);
+};
+
+const normalizeTestDataSuggestion = (payload) => {
+  const rawSource = firstValue(payload?.suggestions, payload?.data, payload?.result, payload);
+  const source = normalizeObject(rawSource);
+  const grouped = { accounts: [], variables: [], preSteps: [], missing: [] };
+  const flatItems = Array.isArray(rawSource)
+    ? rawSource
+    : normalizeSuggestionItems(firstValue(source.items, source.samples, source.records, source.results, source.list));
+
+  flatItems.forEach((item) => {
+    grouped[classifyTestDataSuggestionItem(item)].push(item);
+  });
+
+  mergeSuggestionGroup(grouped, 'accounts', firstValue(source.accounts, source.test_accounts, source.account_suggestions, source.users, source.credentials));
+  mergeSuggestionGroup(grouped, 'variables', firstValue(source.variables, source.variable_suggestions, source.env_vars, source.params, source.parameters, source.fields));
+  mergeSuggestionGroup(grouped, 'preSteps', firstValue(source.pre_steps, source.preSteps, source.preconditions, source.setup_steps, source.before_steps));
+  mergeSuggestionGroup(grouped, 'missing', firstValue(source.missing_dependencies, source.missingDependencies, source.missing_deps, source.dependencies_missing, source.blockers));
+
+  if (!flatItems.length && !grouped.accounts.length && !grouped.variables.length && !grouped.preSteps.length && !grouped.missing.length && isPlainRecord(source)) {
+    grouped.variables = Object.entries(source).map(([key, value]) => ({ key, value }));
+  }
+
+  return {
+    ...grouped,
+    raw: payload,
+    error: '',
+    loading: false
+  };
+};
+
+const formatSuggestionItem = (item) => {
+  if (!isPlainRecord(item)) return String(item);
+  const label = firstValue(item.name, item.title, item.key, item.username, item.account, item.id);
+  const value = firstValue(item.value, item.data, item.description, item.detail, item.reason);
+  const suffix = value === undefined ? safeStringify(item) : safeStringify(value);
+  return label ? `${label}: ${suffix}` : suffix;
 };
 
 const normalizeSuggestion = (payload, fallbackCase = {}) => {
@@ -519,6 +602,7 @@ export default function Execution() {
   const [remoteTrendPoints, setRemoteTrendPoints] = useState([]);
   const [defectLoopSummary, setDefectLoopSummary] = useState({});
   const [defectSuggestions, setDefectSuggestions] = useState({});
+  const [testDataSuggestions, setTestDataSuggestions] = useState({});
   const [batchSummary, setBatchSummary] = useState(null);
   const [executionStatus, setExecutionStatus] = useState({
     loading: true,
@@ -529,6 +613,7 @@ export default function Execution() {
   const [isRerunningFailed, setIsRerunningFailed] = useState(false);
   const [isExportingDefects, setIsExportingDefects] = useState(false);
   const [isSuggestingDefect, setIsSuggestingDefect] = useState(false);
+  const [isPreparingTestData, setIsPreparingTestData] = useState(false);
   const [isCreatingDefect, setIsCreatingDefect] = useState(false);
   const [defectActionId, setDefectActionId] = useState(null);
 
@@ -811,6 +896,47 @@ export default function Execution() {
   };
 
   const activeCaseKey = activeCase.backendExecutionId || activeCase.id;
+  const activeCaseBackendId = activeCase.backendId || activeCase.rawCase?.id;
+
+  const handlePrepareTestData = async () => {
+    const caseId = activeCaseBackendId;
+    if (!caseId) {
+      const message = '当前用例缺少后端 caseId，无法获取真实测试数据建议。';
+      setTestDataSuggestions((prev) => ({
+        ...prev,
+        [activeCaseKey]: { accounts: [], variables: [], preSteps: [], missing: [], error: message, loading: false }
+      }));
+      showToast(message, 'warning');
+      return;
+    }
+
+    setIsPreparingTestData(true);
+    setTestDataSuggestions((prev) => ({
+      ...prev,
+      [activeCaseKey]: { accounts: [], variables: [], preSteps: [], missing: [], error: '', loading: true }
+    }));
+
+    try {
+      const payload = await apiGet(`/test-cases/${caseId}/test-data-suggestions`, {
+        params: { projectId: projectContext?.id || undefined },
+        timeoutMs: 15000
+      });
+      setTestDataSuggestions((prev) => ({
+        ...prev,
+        [activeCaseKey]: normalizeTestDataSuggestion(payload)
+      }));
+      showToast('已获取真实测试数据建议。', 'success');
+    } catch (error) {
+      const message = error?.message || '测试数据建议接口请求失败。';
+      setTestDataSuggestions((prev) => ({
+        ...prev,
+        [activeCaseKey]: { accounts: [], variables: [], preSteps: [], missing: [], error: message, loading: false }
+      }));
+      showToast(message, 'error');
+    } finally {
+      setIsPreparingTestData(false);
+    }
+  };
 
   const handleGenerateDefectSuggestion = async () => {
     if (!isFailedOrBlocked(activeCase.status)) {
@@ -988,11 +1114,29 @@ export default function Execution() {
     await handleLinkCaseToDefect(candidate, activeCase.backendId);
   };
 
+  const renderTestDataSection = (title, items) => (
+    <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 p-2">
+      <div className="text-[8px] font-bold text-[var(--text-primary)] mb-1">{title}</div>
+      {items?.length ? (
+        <div className="space-y-1">
+          {items.map((item, index) => (
+            <div key={index} className="text-[7.5px] text-[var(--text-secondary)] leading-relaxed break-words">
+              {formatSuggestionItem(item)}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-[7.5px] text-[var(--text-secondary)] opacity-70">后端未返回</div>
+      )}
+    </div>
+  );
+
   const displayCases = remoteExecCases.length ? remoteExecCases : execCases;
   const displayBuildRuns = remoteBuildRuns.length ? remoteBuildRuns : buildRuns;
   const displayHistoryBugs = remoteDefects.length ? remoteDefects : historyBugs;
   const trendChart = buildTrendChart(remoteTrendPoints.length ? remoteTrendPoints : displayBuildRuns);
   const activeSuggestion = defectSuggestions[activeCaseKey];
+  const activeTestDataSuggestion = testDataSuggestions[activeCaseKey];
   const openDefectCount = displayHistoryBugs.filter((item) => item.statusValue ? item.statusValue !== 'closed' : item.status !== '已关闭').length;
   const closedDefectCount = Math.max(displayHistoryBugs.length - openDefectCount, 0);
   const reminderCount = toFiniteNumber(firstValue(defectLoopSummary.retest_reminders, defectLoopSummary.reminders), displayHistoryBugs.filter((item) => item.retestReminderAt).length);
@@ -1539,6 +1683,46 @@ export default function Execution() {
               <div>
                 <div className="text-[var(--text-primary)] font-bold">用例标题</div>
                 <p className="text-[var(--text-secondary)] mt-0.5">{activeCase.title}</p>
+              </div>
+
+              <div className="p-3 border border-[var(--border-color)] bg-[var(--bg-app)]/30 rounded-xl space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1 text-[var(--text-primary)] font-bold text-[9.5px]">
+                    <Sparkles className="size-3.5 text-[var(--accent-color)]" />
+                    <span>准备测试数据</span>
+                  </div>
+                  <button
+                    onClick={handlePrepareTestData}
+                    disabled={isPreparingTestData || !activeCaseBackendId}
+                    className="px-2 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] text-[8px] font-bold cursor-pointer disabled:opacity-60 whitespace-nowrap"
+                  >
+                    {!activeCaseBackendId ? '无 caseId' : isPreparingTestData ? '获取中...' : '获取建议'}
+                  </button>
+                </div>
+                {!activeCaseBackendId ? (
+                  <p className="text-[8px] leading-relaxed text-[var(--text-secondary)]">
+                    当前记录没有后端 caseId，无法调用 /test-cases/{'{caseId}'}/test-data-suggestions；请选择已同步到后端的用例。
+                  </p>
+                ) : activeTestDataSuggestion?.loading ? (
+                  <div className="rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[8px] text-[var(--text-secondary)] p-2">
+                    正在读取后端测试数据建议...
+                  </div>
+                ) : activeTestDataSuggestion?.error ? (
+                  <div className="rounded-md border border-red-500/25 bg-red-500/10 text-red-500 text-[8px] p-2 break-words">
+                    {activeTestDataSuggestion.error}
+                  </div>
+                ) : activeTestDataSuggestion ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {renderTestDataSection('账号', activeTestDataSuggestion.accounts)}
+                    {renderTestDataSection('变量', activeTestDataSuggestion.variables)}
+                    {renderTestDataSection('前置步骤', activeTestDataSuggestion.preSteps)}
+                    {renderTestDataSection('缺失依赖', activeTestDataSuggestion.missing)}
+                  </div>
+                ) : (
+                  <p className="text-[8px] leading-relaxed text-[var(--text-secondary)]">
+                    点击后从后端用例接口读取账号、变量、前置步骤和缺失依赖；不会展示静态占位建议。
+                  </p>
+                )}
               </div>
 
               <div className="grid grid-cols-2 gap-2 text-[var(--text-secondary)]">

@@ -458,3 +458,19 @@
 - 下一步进入 R29：数据工厂与数据管理。
 - 建议优先围绕接口参数测试数据生成、执行测试数据建议、自动备份提醒、存储空间统计和按模块清理安全门继续拆分 worker。
 - R29-R32 仍为未完成排期；不得把 R30 文件格式增强、R31 生产基础设施或 R32 总验收写成已完成。
+
+## R29 完成交接
+- R29 名称：数据工厂与数据管理。
+- 后端已完成 `POST /data-factory/api-parameters/generate`、`GET /test-cases/{caseId}/test-data-suggestions`、`GET /system/backup-status`、`GET /system/storage-summary`、`POST /system/cleanup`。
+- 清理能力已具备 dry-run、安全确认文本 `CLEANUP`、模块白名单、路径根目录限制和响应脱敏。
+- 前端 Settings 已接入存储统计、备份提醒、清理 dry-run 与确认执行；ApiTesting 已增加生成测试数据入口；Execution 已增加准备测试数据入口和空态。
+- R29 验收证据见 `docs/orchestration/ROUND29_REPORT.md`；定向测试 `backend/tests/test_round29_data_factory_management.py` 当前复验为 5 passed，后端实现阶段曾记录 8 passed，当前以文件实际测试为准。
+- 验证结果：R29 定向测试 passed；合同回归组合 passed；后端全量 passed；`npm run build` passed；浏览器复验 passed，Settings cleanup dry-run 返回 200，payload 包含 `execution_history`、`api_execution_history`、`artifacts`，`console.error=0`，`pageerror=0`。
+- 真实清理未执行：dry-run 显示会影响 849 个 artifact 文件，出于安全边界仅验证 dry-run 和确认门能力。
+- 端口说明：本机 8000 被既有 `python -m http.server 8000` PID 4588 占用，验收使用 8001，未触碰非本次启动进程。
+- R29 残余风险：数据生成与建议按当前本地规则和现有数据口径输出；存储统计和备份提醒基于当前本地 SQLite/artifacts 文件布局。
+
+## R30 预备交接
+- 下一步进入 R30：文件与导出格式增强。
+- R30 应围绕 `.xlsx`、PDF、Word、XMind 的本地安全导出能力继续评估和拆分；如需要新增生产依赖，应先按项目依赖规则说明原因、替代方案和风险。
+- R30-R32 仍为未完成排期；不得把生产基础设施决策或第二轮总验收写成已完成。

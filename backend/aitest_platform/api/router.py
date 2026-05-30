@@ -90,6 +90,19 @@ from aitest_platform.services.auto_center import (
     update_candidate_selection,
 )
 from aitest_platform.services.auto_runner import AutoCaseFileInput, inspect_auto_runner_dependencies, run_auto_project
+from aitest_platform.services.data_factory import (
+    DataFactoryError,
+    DataFactoryNotFoundError,
+    generate_api_parameters,
+    test_data_suggestions,
+)
+from aitest_platform.services.data_management import (
+    DataManagementError,
+    backup_status as build_backup_status,
+    cleanup_system,
+    public_backup_snapshot,
+    storage_summary as build_storage_summary,
+)
 from aitest_platform.services.exporting import (
     ExportPayloadError,
     build_auto_execution_artifacts_zip,
@@ -322,6 +335,18 @@ def create_db_job(
     session.flush()
     r2_log(session, "generation_job", job_type, job.id, {"project_id": project_id})
     return job
+
+
+@router.post("/data-factory/api-parameters/generate")
+def data_factory_api_parameters_generate(payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        try:
+            return generate_api_parameters(session, data)
+        except DataFactoryNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DataFactoryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def payload_dict(payload: WritePayload | dict[str, Any] | None) -> dict[str, Any]:
@@ -1673,6 +1698,17 @@ def update_test_case(caseId: str, payload: WritePayload):
                 setattr(case, key, data[key])
         session.flush()
         return model_dict(case)
+
+
+@router.get("/test-cases/{caseId}/test-data-suggestions")
+def get_test_case_data_suggestions(caseId: str):
+    with session_scope() as session:
+        try:
+            return test_data_suggestions(session, caseId)
+        except DataFactoryNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except DataFactoryError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _test_case_quality_review(
@@ -4807,9 +4843,35 @@ def system_backup(payload: WritePayload | None = None):
             project_id=to_int(project_id, "project_id") if project_id is not None else None,
             name=data.get("name"),
         )
-        result = model_dict(snapshot)
-        result["backup_id"] = snapshot.id
-        return result
+        return public_backup_snapshot(snapshot)
+
+
+@router.get("/system/backup-status")
+def system_backup_status(projectId: str | None = None, project_id: str | None = None):
+    raw_project_id = project_id if project_id is not None else projectId
+    with session_scope() as session:
+        return build_backup_status(
+            session,
+            project_id=to_int(raw_project_id, "projectId") if raw_project_id is not None else None,
+        )
+
+
+@router.get("/system/storage-summary")
+def system_storage_summary():
+    with session_scope() as session:
+        return build_storage_summary(session)
+
+
+@router.post("/system/cleanup")
+def system_cleanup(payload: WritePayload):
+    data = payload_dict(payload)
+    with session_scope() as session:
+        try:
+            return cleanup_system(session, data)
+        except DataManagementError as exc:
+            detail = str(exc)
+            status_code = 403 if "path" in detail.lower() or "root" in detail.lower() else 400
+            raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.post("/system/restore")

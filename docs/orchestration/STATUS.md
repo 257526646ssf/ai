@@ -1,7 +1,7 @@
 # 后端实现状态
 
 ## 阶段
-- 当前阶段：截至 2026-05-30，Round 28 已验收；报告模板管理、报告列表过滤排序、报告下钻、风险转待办、Markdown/HTML 强化、unsupported PDF/Word/docx 结构化返回和轻量结论类型已完成。
+- 当前阶段：截至 2026-05-30，Round 29 已验收；数据工厂、测试数据建议、备份状态提醒、存储空间统计和模块化清理安全门已完成。
 - 日期说明：第二轮路线图中的旧时间窗口如与实际完成时间冲突，以各 Round 报告、验收记录和提交/测试证据为准。
 - 目标：在不改变前端视觉风格的前提下，实现需求文档与技术实现方案中的后端基础能力。
 - 主线程职责：拆解、派工、验收、进度统一；产品实现代码由子任务完成。
@@ -590,4 +590,16 @@
 - 端口已清理。
 - 残余风险：PDF/Word/docx 仍为 unsupported 结构化返回，未引入新导出依赖；轻量结论仍按当前报告聚合口径输出。
 - R28 验收证据见 `docs/orchestration/ROUND28_REPORT.md`。
-- 下一步进入 R29：数据工厂与数据管理。
+- 下一步已进入并完成 R29：数据工厂与数据管理。
+
+## 第二轮 R29 完成状态
+- R29 名称：数据工厂与数据管理。
+- 后端实现：`POST /data-factory/api-parameters/generate`、`GET /test-cases/{caseId}/test-data-suggestions`、`GET /system/backup-status`、`GET /system/storage-summary`、`POST /system/cleanup`。
+- 清理接口已具备 dry-run、安全确认文本 `CLEANUP`、模块白名单、路径根目录限制和响应脱敏。
+- 前端实现：Settings 接存储统计、备份提醒、清理 dry-run 与确认执行；ApiTesting 增加生成测试数据入口；Execution 增加准备测试数据入口和空态。
+- QA：新增 `backend/tests/test_round29_data_factory_management.py`，当前复验 5 passed；后端实现阶段曾记录 8 passed，当前以文件实际测试为准。
+- 验证：R29 定向测试复验 5 passed；合同回归组合 passed；后端全量 passed；`npm run build` passed；浏览器复验 passed，Settings cleanup dry-run 200，payload 包含 `execution_history`、`api_execution_history`、`artifacts`，`console.error=0`，`pageerror=0`。
+- 真实清理未执行：dry-run 显示会影响 849 个 artifact 文件，出于安全边界仅验证 dry-run 和确认门能力。
+- 端口说明：本机 8000 被既有 `python -m http.server 8000` PID 4588 占用，验收使用 8001，未触碰非本次启动进程。
+- R29 验收证据见 `docs/orchestration/ROUND29_REPORT.md`。
+- 下一步进入 R30：文件与导出格式增强。R30-R32 保持未完成排期。
