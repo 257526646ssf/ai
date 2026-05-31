@@ -415,7 +415,7 @@ export default function Dashboard({ theme }) {
   const coverageCoveredDash = requirementCoverage.hasData ? clampNumber(requirementCoverage.coveredPercent, 0, 100) : 0;
   const coveragePartialDash = requirementCoverage.hasData ? clampNumber(requirementCoverage.partialPercent, 0, 100 - coverageCoveredDash) : 0;
   const coverageRows = [
-    { label: '已覆盖', count: requirementCoverage.covered, percent: requirementCoverage.coveredPercent, colorClass: 'bg-[var(--accent-color)] animate-pulse' },
+    { label: '已覆盖', count: requirementCoverage.covered, percent: requirementCoverage.coveredPercent, colorClass: 'bg-[var(--accent-color)]' },
     { label: '部分覆盖', count: requirementCoverage.partial, percent: requirementCoverage.partialPercent, colorClass: 'bg-[#f59e0b]' },
     { label: '未覆盖', count: requirementCoverage.uncovered, percent: requirementCoverage.uncoveredPercent, colorClass: 'bg-[var(--border-color)]' }
   ];
@@ -424,6 +424,10 @@ export default function Dashboard({ theme }) {
   const heatmapDimensions = moduleHeatmap.dimensions;
   const heatmapMax = Math.max(0, ...heatmapRows.flatMap((row) => row.cells));
   const heatmapGridStyle = { gridTemplateColumns: `minmax(0, 1.2fr) repeat(${heatmapDimensions.length}, minmax(0, 1fr))` };
+  const heatmapScrollableStyle = {
+    ...heatmapGridStyle,
+    minWidth: `${Math.max(360, 188 + heatmapDimensions.length * 70)}px`
+  };
   const executionSummary = dashboardData?.execution_summary || {};
   const apiExecutionSummary = dashboardData?.api_execution_summary || {};
   const autoExecutionSummary = dashboardData?.auto_execution_summary || {};
@@ -530,10 +534,10 @@ export default function Dashboard({ theme }) {
   const todoCount = visibleTodos.length;
 
   return (
-    <div className="space-y-5 text-left relative pb-10 w-full animate-[fadeIn_0.2s_ease-out]">
+    <div className="relative w-full space-y-6 pb-10 text-left animate-[fadeIn_0.2s_ease-out]">
       
       {/* 顶部指示 */}
-      <div className="flex justify-between items-center text-[10px] opacity-60 text-[var(--text-secondary)]">
+      <div className="flex flex-col gap-2 text-[10px] text-[var(--text-secondary)] opacity-70 sm:flex-row sm:items-center sm:justify-between">
         <div>{backendStatusText}</div>
         <div 
           onClick={() => {
@@ -549,64 +553,64 @@ export default function Dashboard({ theme }) {
 
       {/* AI 智能网关大盘诊断摘要 (3D 倾斜眩光卡) */}
       <TiltCard 
-        className="p-5 flex items-center justify-between gap-4 border border-[var(--accent-color)]/40 bg-[var(--accent-glow)]/20 backdrop-blur-lg relative overflow-hidden animate-[slideUpFade_0.4s_ease-out] laser-chase-border cyber-meteor-dust"
+        className="theme-card relative overflow-hidden rounded-2xl border border-[var(--border-color)] p-5 shadow-sm animate-[slideUpFade_0.4s_ease-out] sm:p-6"
       >
-        <div className="flex items-center gap-3 relative z-20" style={{ transformStyle: 'preserve-3d' }}>
-          <div className="p-3 rounded-xl bg-purple-500/20 text-purple-600 dark:text-purple-300 shrink-0 transition-transform duration-200 shadow-md" style={{ transform: 'translateZ(30px)' }}>
-            <Sparkles className="size-6 animate-pulse" />
-          </div>
-          <div className="text-left" style={{ transform: 'translateZ(20px)' }}>
-            <div className="font-black text-xs text-[var(--text-primary)] flex items-center gap-2">
-              <span className="cyber-glitch-text cursor-pointer transition-all text-sm font-black glorious-highlight-text" data-text="AI 测试效能管家">AI 测试效能管家</span>
-              <span className="px-2 py-0.5 bg-purple-500/20 text-purple-600 dark:text-purple-300 rounded font-black text-[9px] tracking-wider uppercase border border-purple-500/30 animate-pulse">v2.5 Live</span>
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex min-w-0 items-start gap-3.5">
+            <div className="flex size-12 shrink-0 items-center justify-center rounded-xl bg-purple-500/12 text-purple-600 shadow-sm dark:text-purple-300">
+              <Sparkles className="size-5" />
             </div>
-            <p className="text-[12px] text-[var(--text-primary)] mt-2 leading-relaxed font-bold">
-              当前项目共记录了 <span className="crucial-glow-text font-black">{numberText(dashboardData?.test_rounds, '3')}</span> 个测试轮次，主链执行通过率为 <span className="glorious-highlight-text text-[13px] font-black">{passRate}</span>。后端发现 <span className="text-red-500 font-black text-[13px] underline decoration-wavy underline-offset-4">{numberText(dashboardData?.defects, '12')} 个缺陷</span>，其中严重/高风险 <span className="text-red-500 font-black">{dashboardData ? severeDefects + highDefects : 12}</span> 个；建议优先复盘失败执行与接口自动化结果，避免影响后续 <span className="text-[var(--accent-color)] font-extrabold underline">准出判断</span>。
-            </p>
+            <div className="min-w-0 text-left">
+              <div className="flex flex-wrap items-center gap-2 text-sm font-black text-[var(--text-primary)]">
+                <span className="leading-none">AI 测试效能管家</span>
+                <span className="rounded-full border border-purple-500/20 bg-purple-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-purple-600 dark:text-purple-300">v2.5 Live</span>
+              </div>
+              <p className="mt-3 max-w-4xl text-[13px] font-semibold leading-6 text-[var(--text-primary)]/90 sm:text-sm">
+                当前项目共记录了 <span className="font-black text-[var(--text-primary)]">{numberText(dashboardData?.test_rounds, '3')}</span> 个测试轮次，主链执行通过率为 <span className="font-black text-[var(--accent-color)]">{passRate}</span>。后端发现 <span className="font-black text-red-500">{numberText(dashboardData?.defects, '12')} 个缺陷</span>，其中严重/高风险 <span className="font-black text-red-500">{dashboardData ? severeDefects + highDefects : 12}</span> 个；建议优先复盘失败执行与接口自动化结果，避免影响后续 <span className="font-black text-[var(--accent-color)]">准出判断</span>。
+              </p>
+            </div>
           </div>
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('open-ai-chat'))}
+            className="inline-flex shrink-0 items-center justify-center self-start rounded-xl border border-[var(--accent-color)]/20 bg-[var(--accent-glow)]/40 px-4 py-2 text-[11px] font-bold text-[var(--text-primary)] transition-colors hover:bg-[var(--accent-glow)]/60 lg:self-center"
+          >
+            查看 AI 调优大纲
+          </button>
         </div>
-        <button 
-          onClick={() => window.dispatchEvent(new CustomEvent('open-ai-chat'))}
-          style={{ transform: 'translateZ(25px)' }}
-          className="px-4 py-2 rounded-xl glow-button-neon font-black text-[11px] whitespace-nowrap cursor-pointer transition-all shrink-0 relative z-20 shadow-lg tracking-wider"
-        >
-          查看 AI 调优大纲
-        </button>
       </TiltCard>
 
       {/* ======================== 第一排：指标卡片 (改为 4 列以扩展宽度) ======================== */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {stats.map((item, idx) => {
           const Icon = item.icon;
           return (
             <TiltCard 
               key={idx} 
-              className="chroma-glass rounded-xl p-4 shadow-sm flex items-center justify-between shimmer-sweep"
+              className="chroma-glass min-w-0 rounded-xl p-4 shadow-sm"
               style={{
                 animation: 'slideUpFade 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
                 animationDelay: `${idx * 40 + 100}ms`,
                 opacity: 0
               }}
             >
-              <div className="text-left" style={{ transform: 'translateZ(20px)' }}>
-                <span className="text-[10.5px] font-bold text-[var(--text-secondary)] tracking-tight block">{item.label}</span>
-                <div className="mt-2.5">
-                  <span className="text-2.5xl font-black tracking-tight digital-matrix-number">
-                    <AnimatedNumber value={item.value} delay={idx * 50 + 150} />
-                  </span>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 text-left">
+                  <span className="block text-[11px] font-bold leading-5 text-[var(--text-secondary)]">{item.label}</span>
+                  <div className="mt-3">
+                    <span className="digital-matrix-number text-[1.75rem] font-black leading-none tracking-tight sm:text-3xl">
+                      <AnimatedNumber value={item.value} delay={idx * 50 + 150} />
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-center text-[10px] font-bold text-emerald-500">
+                    <span>{item.change}</span>
+                  </div>
                 </div>
-                <div className="mt-1 flex items-center text-[9px] font-bold">
-                  <span className="text-emerald-500">
-                    {item.change}
-                  </span>
+
+                <div
+                  className={`flex size-11 shrink-0 items-center justify-center rounded-xl ${item.color.split(' ')[1]} ${item.color.split(' ')[0]}`}
+                >
+                  <Icon className="size-[18px]" />
                 </div>
-              </div>
-              
-              <div 
-                className={`p-3 rounded-xl ${item.color.split(' ')[1]} ${item.color.split(' ')[0]} shrink-0`}
-                style={{ transform: 'translateZ(25px)' }}
-              >
-                <Icon className="size-[18px]" />
               </div>
             </TiltCard>
           );
@@ -614,12 +618,12 @@ export default function Dashboard({ theme }) {
       </div>
 
       {/* ======================== 第二排：高级分析图表 ======================== */}
-      <div className="grid grid-cols-12 gap-5">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 xl:grid-cols-12">
         
         {/* 用例执行趋势（近14天） */}
-        <div className="col-span-5 theme-card rounded-xl p-4 shadow-sm flex flex-col justify-between min-h-[260px]">
+        <div className="theme-card flex min-w-0 flex-col justify-between rounded-xl p-4 shadow-sm lg:col-span-2 xl:col-span-6 xl:min-h-[300px]">
           <div>
-            <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2.5 mb-3">
+            <div className="mb-3 flex flex-col gap-2 border-b border-[var(--border-color)] pb-2.5 sm:flex-row sm:items-center sm:justify-between">
               <span className="text-xs font-bold text-[var(--text-primary)]">用例执行趋势（近14天）</span>
               <div className="flex items-center gap-1 text-[9.5px] opacity-70 border border-[var(--border-color)] rounded px-1.5 py-0.5 hover:opacity-100 cursor-pointer text-[var(--text-primary)] font-bold">
                 <span>近 14 天</span>
@@ -628,7 +632,7 @@ export default function Dashboard({ theme }) {
             </div>
             
             {/* 图例 */}
-            <div className="flex gap-4 text-xs font-black mb-3">
+            <div className="mb-3 flex flex-wrap gap-3 text-xs font-black">
               <div className="flex items-center gap-2 text-[var(--text-primary)]">
                 <span className="size-2.5 rounded-full border border-white/10 shadow-sm shrink-0" style={{ backgroundColor: 'var(--accent-color)' }}></span>
                 <span>通过</span>
@@ -649,7 +653,7 @@ export default function Dashboard({ theme }) {
           </div>
 
           {/* SVG 折线图 */}
-          <div className="relative h-[160px] w-full mt-2">
+          <div className="relative mt-2 h-[180px] w-full">
             <svg className="w-full h-full" viewBox="0 0 520 160" preserveAspectRatio="none">
               {/* 背景格线 */}
               <line x1="40" y1="20" x2="500" y2="20" stroke="var(--border-color)" strokeWidth="0.8" strokeDasharray="3,3" />
@@ -715,16 +719,6 @@ export default function Dashboard({ theme }) {
                     strokeLinejoin="round"
                     className="path-drawn"
                   />
-                  <path
-                    d={trendLinePath(series.key)}
-                    fill="none"
-                    stroke={series.color}
-                    strokeWidth={series.width}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="svg-pulse-path"
-                    opacity="0.7"
-                  />
                   {trendCoordinates(series.key).map(([cx, cy], index) => (
                     <circle
                       key={index}
@@ -742,12 +736,6 @@ export default function Dashboard({ theme }) {
                       }}
                     />
                   ))}
-                  {trendCoordinates(series.key).slice(-1).map(([cx, cy]) => (
-                    <React.Fragment key="last">
-                      <circle cx={cx} cy={cy} r="5" fill={series.color} opacity="0.28" className="animate-ping" pointerEvents="none" />
-                      <circle cx={cx} cy={cy} r="3" fill={series.color} opacity="0.15" className="telemetry-indicator-pulse" pointerEvents="none" />
-                    </React.Fragment>
-                  ))}
                 </React.Fragment>
               ))}
             </svg>
@@ -760,17 +748,15 @@ export default function Dashboard({ theme }) {
         </div>
 
         {/* 需求覆盖率 (圆环) */}
-        <div className="col-span-3 theme-card rounded-xl p-4 shadow-sm flex flex-col justify-between min-h-[260px]">
+        <div className="theme-card flex min-w-0 flex-col justify-between rounded-xl p-4 shadow-sm xl:col-span-3">
           <div className="border-b border-[var(--border-color)] pb-2.5">
             <span className="text-xs font-bold text-[var(--text-primary)]">需求覆盖率</span>
           </div>
 
-          <div className="flex items-center justify-between py-2.5">
+          <div className="flex flex-col gap-4 py-3 sm:flex-row sm:items-center">
             {/* SVG 圆环 - 动态绘制 */}
-            <div className="relative size-[95px] shrink-0 sonar-ripple-container">
-              <div className="sonar-ripple-circle"></div>
-              <div className="sonar-ripple-circle sonar-ripple-circle-delay"></div>
-              <svg className="w-full h-full transform -rotate-90 relative z-10" viewBox="0 0 36 36">
+            <div className="relative flex size-[112px] shrink-0 items-center justify-center">
+              <svg className="size-full -rotate-90" viewBox="0 0 36 36">
                 <circle cx="18" cy="18" r="15.915" fill="none" stroke="var(--border-color)" strokeWidth="3" />
                 <circle cx="18" cy="18" r="15.915" fill="none" stroke="#f59e0b" strokeWidth="3.2"
                   strokeDasharray={`${coveragePartialDash} ${100 - coveragePartialDash}`}
@@ -782,23 +768,22 @@ export default function Dashboard({ theme }) {
                   strokeDashoffset="0"
                   className="transition-all duration-100 ease-out"
                 />
-                <path d="M18,18 L18,2 A16,16 0 0,1 30,10 Z" fill="var(--accent-glow)" className="radar-sweeper-beam" />
               </svg>
-              <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <span className="text-[13.5px] font-black leading-none text-[var(--text-primary)]">{requirementCoverage.hasData ? percentText(requirementCoverage.coveredPercent) : '--'}</span>
                 <span className="text-[8px] text-[var(--text-secondary)] opacity-60 mt-1 leading-none">{requirementCoverage.hasData ? '已覆盖' : '暂无数据'}</span>
               </div>
             </div>
 
             {/* 右侧指标说明 - 联动滚动 */}
-            <div className="flex-1 pl-3.5 space-y-2 text-[9px] font-bold text-[var(--text-primary)]">
+            <div className="min-w-0 flex-1 space-y-2.5 text-[10px] font-bold text-[var(--text-primary)] sm:pl-1">
               {coverageRows.map((item) => (
                 <div key={item.label} className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
                     <span className={`size-2 rounded-full shrink-0 ${item.colorClass}`}></span>
                     <span className="opacity-80">{item.label}</span>
                   </div>
-                  <span>
+                  <span className="shrink-0 text-right">
                     {requirementCoverage.hasData ? numberText(item.count, '0') : '--'}{' '}
                     <span className="opacity-45 font-normal">({requirementCoverage.hasData ? percentText(item.percent) : '--'})</span>
                   </span>
@@ -807,20 +792,20 @@ export default function Dashboard({ theme }) {
             </div>
           </div>
 
-          <div className="border-t border-[var(--border-color)] pt-2 text-right">
+          <div className="border-t border-[var(--border-color)] pt-2 text-[10px] text-[var(--text-secondary)]">
             <span className="text-[9px] text-[var(--text-secondary)] opacity-50">需求总数：{numberText(coverageTotal, '0')}</span>
           </div>
         </div>
 
         {/* 模块使用热力图 */}
-        <div className="col-span-4 theme-card rounded-xl p-4 shadow-sm flex flex-col justify-between min-h-[260px]">
+        <div className="theme-card flex min-w-0 flex-col justify-between rounded-xl p-4 shadow-sm xl:col-span-3">
           <div className="border-b border-[var(--border-color)] pb-2.5 mb-2">
             <span className="text-xs font-black text-[var(--text-primary)]">模块使用热力图</span>
           </div>
 
           <div>
             {/* 十字列标题高亮 */}
-            <div className="grid text-xs font-black text-center mb-2.5 py-1.5 rounded bg-[var(--border-color)]/40 text-[var(--text-primary)]" style={heatmapGridStyle}>
+            <div className="mb-2.5 grid rounded bg-[var(--border-color)]/40 py-1.5 text-center text-xs font-black text-[var(--text-primary)]" style={heatmapScrollableStyle}>
               <div></div>
               {heatmapDimensions.map((dim, idx) => {
                 const isColHovered = hoveredCol === idx;
@@ -836,15 +821,13 @@ export default function Dashboard({ theme }) {
             </div>
 
             {/* 热力网格容器，加装绝对定位纵向激光雷达扫描线 */}
-            <div className="relative overflow-hidden rounded-lg p-0.5">
-              <div className="absolute left-0 w-full h-[2.5px] bg-gradient-to-r from-transparent via-[var(--accent-color)] to-transparent pointer-events-none animate-scan-y z-10" />
-              
+            <div className="overflow-x-auto rounded-lg">
               {heatmapRows.length ? (
-                <div className="space-y-2 relative z-0">
+                <div className="space-y-2" style={heatmapScrollableStyle}>
                 {heatmapRows.map((row, rowIdx) => {
                   const isRowHovered = hoveredRow === rowIdx;
                   return (
-                    <div key={row.label} className="grid items-center gap-1 text-center" style={heatmapGridStyle}>
+                    <div key={row.label} className="grid items-center gap-2 text-center" style={heatmapGridStyle}>
                       {/* 十字行标题高亮 */}
                       <span 
                         className={`text-[11px] font-black text-left truncate pr-1 transition-all duration-200 ${
@@ -864,14 +847,6 @@ export default function Dashboard({ theme }) {
                         const fillStyle = { backgroundColor: `rgba(${rgb}, ${val > 0 ? 0.10 + val * 0.18 : 0.06})` };
                         
                         // 部署多频波段闪烁
-                        const pulseClass = val === 4 
-                          ? 'heat-pulse-high' 
-                          : val === 3 
-                            ? 'heat-pulse-med' 
-                            : val === 2 
-                              ? 'heat-pulse-low' 
-                              : '';
-
                         const isCurrentHovered = hoveredRow === rowIdx && hoveredCol === colIdx;
 
                         return (
@@ -885,16 +860,11 @@ export default function Dashboard({ theme }) {
                               setHoveredRow(null);
                               setHoveredCol(null);
                             }}
-                            style={{
-                              ...fillStyle,
-                              animation: 'scaleIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
-                              animationDelay: `${(rowIdx * 4 + colIdx) * 16 + 120}ms`,
-                              opacity: 0
-                            }}
-                            className={`h-4 rounded transition-all duration-200 transform cursor-pointer border border-[var(--border-color)]/60 ${pulseClass} ${
+                            style={fillStyle}
+                            className={`h-4 rounded-md border border-[var(--border-color)]/60 cursor-pointer transition-all duration-200 ${
                               isCurrentHovered 
-                                ? 'scale-125 border-[var(--accent-color)] shadow-[0_0_10px_var(--accent-glow)] z-20' 
-                                : 'hover:scale-115'
+                                ? 'border-[var(--accent-color)] shadow-[0_0_0_1px_var(--accent-glow)]'
+                                : 'hover:border-[var(--accent-color)]/50'
                             }`}
                             title={`${row.label} - ${heatmapDimensions[colIdx]}: ${numberText(rawValue, '0')}`}
                           />
@@ -916,7 +886,7 @@ export default function Dashboard({ theme }) {
           <div className="border-t border-[var(--border-color)] pt-2.5 flex items-center justify-between text-[10px] text-[var(--text-primary)] font-black">
             <div className="flex items-center gap-2">
               <span>低</span>
-              <span className="w-20 h-2 rounded-full border border-[var(--border-color)] thermal-legend-flow" />
+              <span className="h-2 w-20 rounded-full border border-[var(--border-color)] bg-gradient-to-r from-[var(--border-color)] via-[var(--accent-glow)] to-[var(--accent-color)]" />
               <span>高</span>
             </div>
             <span className="text-[var(--text-secondary)] font-extrabold">需求总数：{numberText(dashboardData?.requirement_items, '0')}</span>
@@ -926,10 +896,10 @@ export default function Dashboard({ theme }) {
       </div>
 
       {/* ======================== 第三排：细节与操作流 ======================== */}
-      <div className="grid grid-cols-12 gap-5">
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 xl:grid-cols-12">
         
         {/* 最近活动 */}
-        <div className="col-span-4 theme-card rounded-xl p-4 shadow-sm flex flex-col justify-between min-h-[300px]">
+        <div className="theme-card flex min-w-0 flex-col justify-between rounded-xl p-4 shadow-sm lg:col-span-2 xl:col-span-4">
           <div className="border-b border-[var(--border-color)] pb-2.5 mb-3">
             <span className="text-xs font-bold text-[var(--text-primary)]">最近活动</span>
           </div>
@@ -946,7 +916,7 @@ export default function Dashboard({ theme }) {
               return (
                 <div 
                   key={act.id} 
-                  className="flex gap-2.5 text-left items-start"
+                  className="flex items-start gap-2.5 text-left"
                   style={{
                     animation: 'slideUpFade 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards',
                     animationDelay: `${idx * 80 + 250}ms`,
@@ -958,10 +928,10 @@ export default function Dashboard({ theme }) {
                   </div>
                   
                   <div className="flex-1 min-w-0 text-[var(--text-primary)]">
-                    <div className="text-xs font-black truncate leading-snug">
+                    <div className="text-xs font-black leading-snug break-words">
                       {act.title}
                     </div>
-                    <div className="text-[11px] text-[var(--text-secondary)] mt-1 truncate font-bold">
+                    <div className="mt-1 text-[11px] font-bold leading-snug text-[var(--text-secondary)] break-words">
                       {act.desc}
                     </div>
                     <div className="flex items-center gap-2.5 mt-1 text-[10px] text-[var(--text-secondary)] font-extrabold">
@@ -990,7 +960,7 @@ export default function Dashboard({ theme }) {
         </div>
 
         {/* 快速操作与项目健康度 */}
-        <div className="col-span-4 flex flex-col gap-4">
+        <div className="flex min-w-0 flex-col gap-4 xl:col-span-4">
           
           {/* 快速操作 */}
           <div className="theme-card rounded-xl p-4 shadow-sm">
@@ -998,7 +968,7 @@ export default function Dashboard({ theme }) {
               <span className="text-xs font-bold text-[var(--text-primary)]">快速操作</span>
             </div>
             
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               {quickActions.map((act, idx) => {
                 const Icon = act.icon;
                 return (
@@ -1010,11 +980,11 @@ export default function Dashboard({ theme }) {
                       animationDelay: `${idx * 50 + 200}ms`,
                       opacity: 0
                     }}
-                    className="quick-action-item flex flex-col items-center justify-center p-2.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/30 text-[var(--text-primary)] text-center transition-all cursor-pointer hover:scale-[1.03] hover:border-[var(--accent-color)]/50 shadow-sm"
+                    className="quick-action-item flex min-h-[96px] flex-col items-center justify-center rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] p-3 text-center text-[var(--text-primary)] shadow-sm transition-all hover:border-[var(--accent-color)]/50 hover:bg-[var(--border-color)]/30"
                   >
                     <Icon className="size-[15px] shrink-0 mb-1 transition-transform duration-200" style={{ color: 'var(--accent-color)' }} />
-                    <span className="text-[9px] font-bold tracking-tight block truncate w-full">{act.title}</span>
-                    <span className="text-[7.5px] font-normal opacity-50 mt-0.5 block truncate w-full scale-95 origin-center">{act.desc}</span>
+                    <span className="block w-full text-[9px] font-bold leading-snug">{act.title}</span>
+                    <span className="mt-1 block w-full text-[8px] leading-snug opacity-55">{act.desc}</span>
                   </button>
                 );
               })}
@@ -1027,7 +997,7 @@ export default function Dashboard({ theme }) {
               <span className="text-xs font-bold text-[var(--text-primary)]">项目健康度</span>
             </div>
 
-            <div className="grid grid-cols-4 gap-2 text-center text-[var(--text-primary)]">
+            <div className="grid grid-cols-2 gap-3 text-center text-[var(--text-primary)]">
               {healthMetrics.map((met, idx) => (
                 <div 
                   key={met.label} 
@@ -1067,7 +1037,7 @@ export default function Dashboard({ theme }) {
         </div>
 
         {/* 测试执行与待办 */}
-        <div className="col-span-4 flex flex-col gap-4">
+        <div className="flex min-w-0 flex-col gap-4 xl:col-span-4">
           
           {/* 测试执行概览（今日） */}
           <div className="theme-card rounded-xl p-4 shadow-sm flex-1 flex flex-col justify-between min-h-[140px]">
@@ -1076,7 +1046,8 @@ export default function Dashboard({ theme }) {
                 <span className="text-xs font-black text-[var(--text-primary)]">测试执行概览（今日）</span>
               </div>
 
-              <table className="w-full text-xs text-left border-collapse">
+              <div className="overflow-x-auto">
+              <table className="min-w-[420px] w-full text-xs text-left border-collapse">
                 <thead>
                   <tr className="border-b border-[var(--border-color)] text-[var(--text-primary)] font-black">
                     <th className="py-2 font-black text-[11.5px]">类型</th>
@@ -1098,6 +1069,7 @@ export default function Dashboard({ theme }) {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
 
@@ -1117,7 +1089,7 @@ export default function Dashboard({ theme }) {
                       className="rounded border-[var(--border-color)] text-blue-600 focus:ring-blue-500 size-3 shrink-0 cursor-pointer bg-transparent"
                       style={{ accentColor: 'var(--accent-color)' }}
                     />
-                    <span className="font-bold truncate">{todo.text}</span>
+                    <span className="font-bold leading-snug break-words">{todo.text}</span>
                   </div>
                   <span className={`px-2 py-0.5 border text-[10px] font-black rounded shrink-0 shadow-sm ${todo.priorityColor}`}>
                     {todo.priority}

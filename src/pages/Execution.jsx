@@ -1210,7 +1210,7 @@ export default function Execution() {
         </div>
 
         {/* 顶部指标卡 */}
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div className="theme-card rounded-xl p-4 shadow-soft">
             <span className="text-[10px] text-[var(--text-secondary)] font-semibold">累计执行轮次</span>
             <div className="text-xl font-bold text-[var(--text-primary)] mt-1">{historySummary.rounds} <span className="text-[10px] text-[var(--text-secondary)] font-normal">轮</span></div>
@@ -1285,9 +1285,9 @@ export default function Execution() {
         </div>
 
         {/* 下方分栏：历史构建 & 缺陷网格 */}
-        <div className="grid grid-cols-12 gap-4">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
           {/* 左侧：构建记录 */}
-          <div className="col-span-4 theme-card rounded-xl p-4 shadow-soft">
+          <div className="theme-card rounded-xl p-4 shadow-soft xl:col-span-4">
             <h3 className="text-xs font-bold text-[var(--text-primary)] mb-3 border-b border-[var(--border-color)] pb-2 flex justify-between items-center">
               <span>近期执行历史</span>
               <span className="text-[8px] text-[var(--text-secondary)] font-normal">最近5次</span>
@@ -1314,7 +1314,7 @@ export default function Execution() {
           </div>
 
           {/* 右侧：缺陷溯源记录网格 */}
-          <div className="col-span-8 theme-card rounded-xl p-4 shadow-soft">
+          <div className="theme-card rounded-xl p-4 shadow-soft xl:col-span-8">
             <h3 className="text-xs font-bold text-[var(--text-primary)] mb-3 border-b border-[var(--border-color)] pb-2 flex justify-between items-center">
               <span>缺陷溯源记录网格</span>
               <button 
@@ -1535,10 +1535,10 @@ export default function Execution() {
       </div>
 
       {/* 主分栏：8:4 选中联动布局 */}
-      <div className="grid grid-cols-12 gap-5 w-full">
+      <div className="grid w-full grid-cols-1 gap-5 xl:grid-cols-12">
         
         {/* 左侧 8 份：用例执行列表 */}
-        <div className="col-span-8 min-w-0 theme-card rounded-xl p-4 shadow-soft text-left">
+        <div className="min-w-0 theme-card rounded-xl p-4 shadow-soft text-left xl:col-span-8">
           
           {/* 筛选条 */}
           <div className="flex items-center gap-2 mb-3.5 border-b border-[var(--border-color)] pb-3">
@@ -1653,7 +1653,7 @@ export default function Execution() {
         </div>
 
         {/* 右侧 4 份：用例详情与 AI 分析（支持状态联动切换，3D 倾斜眩光卡） */}
-        <TiltCard className={`col-span-4 min-w-0 shadow-soft text-left flex flex-col justify-between h-full min-h-[480px] max-h-[750px] overflow-hidden ${
+        <TiltCard className={`min-w-0 shadow-soft text-left flex flex-col justify-between h-full min-h-[480px] max-h-[750px] overflow-hidden xl:col-span-4 ${
           isFailedOrBlocked(activeCase.status) ? 'danger-laser-beacon' : 'laser-chase-border'
         }`}>
           <div style={{ transformStyle: 'preserve-3d', display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }} className="w-full">

@@ -1516,6 +1516,142 @@ p.opacity-75, span.opacity-75, div.opacity-75, text.opacity-75, td.opacity-75, t
   box-shadow: inset 0 1px 2px rgba(0,0,0,0.1), 0 0 8px var(--accent-glow);
 }
 
+/* ==========================================================================
+   App Shell Layout
+   ========================================================================== */
+
+html,
+body,
+#root {
+  min-height: 100%;
+  min-width: 0;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-app, #f8fafc);
+}
+
+#root {
+  height: 100%;
+}
+
+.app-shell {
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.app-shell__background {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.app-shell__background canvas {
+  opacity: 0.42;
+}
+
+[data-theme="dark"] .app-shell__background canvas,
+[data-theme="linear"] .app-shell__background canvas,
+[data-theme="cyber-glass"] .app-shell__background canvas,
+[data-theme="clickhouse"] .app-shell__background canvas {
+  opacity: 0.56;
+}
+
+.app-shell__layout {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 100%;
+  height: 100%;
+}
+
+.app-shell__body {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.app-shell__content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.app-shell__content-inner {
+  width: min(100%, 100rem);
+  min-width: 0;
+  margin: 0 auto;
+  padding: 1rem 1rem 1.5rem;
+}
+
+.app-shell__content-inner,
+.app-shell__content-inner > * {
+  min-width: 0;
+}
+
+@media (min-width: 640px) {
+  .app-shell__content-inner {
+    padding: 1.25rem 1.25rem 1.75rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .app-shell__content-inner {
+    padding: 1.5rem 1.75rem 2rem;
+  }
+}
+
+.grid-bg {
+  background-image: radial-gradient(var(--border-color) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: center top;
+}
+
+.aurora-blob {
+  opacity: 0.08;
+  filter: blur(160px);
+}
+
+[data-theme="basic"] .aurora-blob,
+[data-theme="airtable"] .aurora-blob,
+[data-theme="notion"] .aurora-blob,
+[data-theme="ibm"] .aurora-blob,
+[data-theme="editorial"] .aurora-blob {
+  opacity: 0.04;
+  filter: blur(175px);
+}
+
+.flowing-laser-wire::after {
+  display: none;
+}
+
+.sidebar-active-glow {
+  position: relative;
+  overflow: hidden;
+  border-left: none !important;
+  background: linear-gradient(90deg, var(--accent-glow) 0%, transparent 100%) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-color) 18%, transparent);
+  font-weight: 700 !important;
+  color: var(--text-primary) !important;
+}
+
+.sidebar-active-glow::after {
+  display: none;
+}
 
 
 
