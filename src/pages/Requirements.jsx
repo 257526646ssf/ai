@@ -974,16 +974,16 @@ export default function Requirements() {
         // ==========================================================================
         <div className="space-y-4">
           {/* 标题栏 */}
-          <div className="flex justify-between items-start">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="text-left">
               <h1 className="text-base font-bold text-[var(--text-primary)]">需求库</h1>
               <p className="text-[11px] text-[var(--text-secondary)] mt-1">集中管理各项目的需求文档与需求项，支持解析、确认与追踪。</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="relative flex w-full flex-wrap items-stretch gap-2 sm:w-auto sm:items-center sm:justify-end">
               <button
                 onClick={handleCreateRequirementDocument}
                 disabled={isCreatingDocument || !selectedBackendLibId}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] shadow-sm cursor-pointer"
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-1.5 text-[11px] font-bold text-[var(--text-primary)] shadow-sm cursor-pointer hover:bg-[var(--border-color)]/50 sm:flex-none"
               >
                 <RotateCw className="size-3.5" />
                 <span>{isCreatingDocument ? '导入中...' : '导入需求文档'}</span>
@@ -991,7 +991,7 @@ export default function Requirements() {
               <button 
                 onClick={handleCreateRequirementLib}
                 disabled={isCreatingLib}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg accent-btn text-[11px] font-bold text-white shadow-sm cursor-pointer"
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-lg accent-btn px-3 py-1.5 text-[11px] font-bold text-white shadow-sm cursor-pointer sm:flex-none"
               >
                 <Plus className="size-3.5" />
                 <span>{isCreatingLib ? '创建中...' : '新建需求库'}</span>
@@ -1000,11 +1000,11 @@ export default function Requirements() {
           </div>
 
           {/* 指标卡片 */}
-          <div className="grid grid-cols-4 gap-3.5">
+          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
             {listStats.map((item, idx) => (
               <div 
                 key={idx} 
-                className="theme-card rounded-xl p-3.5 shadow-soft flex items-center justify-between"
+                className="theme-card flex flex-col items-start gap-3 rounded-xl p-3.5 shadow-soft sm:flex-row sm:items-center sm:justify-between"
                 style={{
                   animation: 'slideUpFade 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
                   animationDelay: `${idx * 40 + 100}ms`,
@@ -1038,19 +1038,19 @@ export default function Requirements() {
           </div>
 
           {/* 7:5 选中联动分栏布局 */}
-          <div className="grid grid-cols-12 gap-5 w-full">
+          <div className="grid grid-cols-1 gap-5 w-full lg:grid-cols-12">
             
             {/* 左侧 7 份：需求库表格区 */}
-            <div className="col-span-7 min-w-0 theme-card rounded-xl p-4 shadow-soft">
+            <div className="col-span-1 min-w-0 theme-card rounded-xl p-4 shadow-soft lg:col-span-7">
               
               {/* 表单过滤器 */}
-              <div className="flex items-center gap-2 mb-3.5">
-                <div className="flex items-center gap-1 text-[10px] text-[var(--text-secondary)] border border-[var(--border-color)] rounded px-2 py-1.5 bg-[var(--border-color)]/30 hover:bg-[var(--border-color)]/60 cursor-pointer">
+              <div className="mb-3.5 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                <div className="flex w-full items-center justify-between gap-1 rounded border border-[var(--border-color)] bg-[var(--border-color)]/30 px-2 py-1.5 text-[10px] text-[var(--text-secondary)] hover:bg-[var(--border-color)]/60 cursor-pointer sm:w-auto sm:justify-start">
                   <span>{requirementsStatus.message || '全部项目'}</span>
                   <ChevronDown className="size-3 text-slate-400" />
                 </div>
 
-                <div className="flex-1 flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--border-color)]/30">
+                <div className="flex w-full items-center gap-2 rounded-lg border border-[var(--border-color)] bg-[var(--border-color)]/30 px-2.5 py-1.5 sm:flex-1">
                   <Search className="size-3.5 text-[var(--text-secondary)] shrink-0" />
                   <input 
                     type="text" 
@@ -1060,7 +1060,7 @@ export default function Requirements() {
                 </div>
 
                 {['领域', '状态'].map((f, i) => (
-                  <div key={i} className="flex items-center gap-1 text-[10px] text-[var(--text-secondary)] border border-[var(--border-color)] rounded px-2 py-1.5 bg-[var(--border-color)]/30 hover:bg-[var(--border-color)]/60 cursor-pointer font-bold">
+                  <div key={i} className="flex w-full items-center justify-between gap-1 rounded border border-[var(--border-color)] bg-[var(--border-color)]/30 px-2 py-1.5 text-[10px] font-bold text-[var(--text-secondary)] hover:bg-[var(--border-color)]/60 cursor-pointer sm:w-auto sm:justify-start">
                     <span>{f}</span>
                     <ChevronDown className="size-3 text-slate-400" />
                   </div>
@@ -1130,9 +1130,9 @@ export default function Requirements() {
                 </table>
               </div>
 
-              <div className="flex justify-between items-center mt-4 border-t border-[var(--border-color)] pt-3">
+              <div className="mt-4 flex flex-col gap-2 border-t border-[var(--border-color)] pt-3 sm:flex-row sm:items-center sm:justify-between">
                 <span className="text-[10px] text-[var(--text-secondary)] font-semibold">共 24 条</span>
-                <div className="flex items-center gap-2 text-[10px] text-[var(--text-secondary)]">
+                <div className="flex flex-wrap items-center gap-2 text-[10px] text-[var(--text-secondary)]">
                   <button className="px-2 py-0.5 border border-[var(--border-color)] rounded bg-[var(--bg-card)]">‹</button>
                   <button className="px-2.5 py-0.5 bg-[var(--accent-color)] text-white rounded">1</button>
                   <button className="px-2.5 py-0.5 border border-[var(--border-color)] rounded bg-[var(--bg-card)]">2</button>
@@ -1144,7 +1144,7 @@ export default function Requirements() {
             </div>
 
             {/* 右侧 5 份：需求解析遥测大卡片 */}
-            <div className="col-span-5 min-w-0 space-y-4">
+            <div className="col-span-1 min-w-0 space-y-4 lg:col-span-5">
               
               {/* 遥测总面板 */}
               <div className="theme-card rounded-xl p-4 shadow-soft text-left flex flex-col justify-between h-full min-h-[440px]">
@@ -1233,54 +1233,54 @@ export default function Requirements() {
         // ==========================================================================
         <div className="space-y-4 animate-[fadeIn_0.2s_ease-out]">
           {/* 返回与面包屑 */}
-          <div className="flex justify-between items-center bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl p-3.5 shadow-sm">
-            <div className="flex items-center gap-3">
+          <div className="flex flex-col gap-3 bg-[var(--bg-card)] border border-[var(--border-color)] rounded-xl p-3.5 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
               <button 
                 onClick={() => setViewMode('list')}
-                className="flex items-center gap-1 px-2.5 py-1 rounded bg-[var(--bg-card)] border border-[var(--border-color)] text-[10px] text-[var(--text-primary)] hover:bg-[var(--border-color)]/50 transition-colors shadow-sm cursor-pointer"
+                className="flex items-center justify-center gap-1 px-2.5 py-1 rounded bg-[var(--bg-card)] border border-[var(--border-color)] text-[10px] text-[var(--text-primary)] hover:bg-[var(--border-color)]/50 transition-colors shadow-sm cursor-pointer sm:justify-start"
               >
                 <ArrowLeft className="size-3" />
                 <span>返回需求库</span>
               </button>
-              <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)] font-semibold">
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--text-secondary)] font-semibold">
                 <span>需求库</span>
                 <span>/</span>
                 <span className="text-[var(--text-primary)]">需求库工作台</span>
               </div>
             </div>
             
-            <div className="flex items-center gap-2">
+            <div className="relative flex w-full flex-wrap items-stretch gap-2 sm:w-auto sm:items-center sm:justify-end">
               <button 
                 onClick={() => setViewMode('version-diff')}
-                className="px-3 py-1.5 rounded-lg border border-[var(--accent-color)]/30 bg-[var(--accent-glow)] text-[var(--accent-color)] hover:opacity-90 text-[11px] font-bold cursor-pointer transition-all"
+                className="flex-1 rounded-lg border border-[var(--accent-color)]/30 bg-[var(--accent-glow)] px-3 py-1.5 text-[11px] font-bold text-[var(--accent-color)] hover:opacity-90 cursor-pointer transition-all sm:flex-none"
               >
                 版本对比
               </button>
               <button 
                 onClick={handleCreateRequirementDocument}
                 disabled={isCreatingDocument || !selectedBackendLibId}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-transparent cursor-pointer disabled:opacity-60"
+                className="flex flex-1 items-center justify-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-transparent cursor-pointer disabled:opacity-60 sm:flex-none"
               >
                 {isCreatingDocument ? '解析中...' : '导入并解析'}
               </button>
               <button 
                 onClick={handleBrainAnalyze}
                 disabled={actionLoading === 'brain' || !selectedBackendLibId}
-                className="px-3 py-1.5 rounded-lg border border-purple-500/25 bg-purple-500/10 hover:bg-purple-500/15 text-[11px] font-bold text-purple-600 dark:text-purple-300 cursor-pointer"
+                className="flex-1 rounded-lg border border-purple-500/25 bg-purple-500/10 px-3 py-1.5 text-[11px] font-bold text-purple-600 hover:bg-purple-500/15 dark:text-purple-300 cursor-pointer sm:flex-none"
               >
                 {actionLoading === 'brain' ? '分析中...' : '需求大脑'}
               </button>
               <button
                 onClick={toggleRequirementExportMenu}
                 disabled={isExportingRequirement}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-transparent cursor-pointer disabled:opacity-60"
+                className="flex w-full items-center justify-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-transparent cursor-pointer disabled:opacity-60 sm:w-auto"
               >
                 <span className="text-[var(--text-primary)]">{isExportingRequirement ? '导出中..' : '导出需求'}</span>
                 <ChevronDown className="size-3 text-[var(--text-primary)]" />
                 导出报告
               </button>
               {isRequirementExportOpen && (
-                <div className="absolute right-[156px] top-full z-20 mt-2 min-w-[132px] rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] p-1 shadow-lg">
+                <div className="absolute left-0 right-0 top-full z-20 mt-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] p-1 shadow-lg sm:left-auto sm:right-0 sm:min-w-[156px]">
                   {REQUIREMENT_EXPORT_FORMATS.map(format => (
                     <button
                       key={format.id}
@@ -1296,7 +1296,7 @@ export default function Requirements() {
               <button 
                 onClick={handleGenerateTestPoints}
                 disabled={isGeneratingPoints}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg accent-btn text-[11px] font-bold text-white cursor-pointer"
+                className="flex flex-1 items-center justify-center gap-1 px-3 py-1.5 rounded-lg accent-btn text-[11px] font-bold text-white cursor-pointer sm:flex-none"
               >
                 <span>{isGeneratingPoints ? '生成中...' : '智能生成测试点'}</span>
               </button>
@@ -1304,13 +1304,13 @@ export default function Requirements() {
           </div>
 
           {/* 顶栏项目信息 */}
-          <div className="theme-card rounded-xl p-4 shadow-soft text-left flex justify-between items-center">
+          <div className="theme-card rounded-xl p-4 shadow-soft text-left flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <div className="flex items-center gap-2.5">
+              <div className="flex flex-wrap items-center gap-2.5">
                 <h2 className="text-sm font-bold text-[var(--text-primary)]">{requirementsLibs[selectedLibIndex]?.name || '智能客服系统 V2.1'}</h2>
                 <span className="px-2 py-0.5 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded text-[9px] font-bold">● 已解析</span>
               </div>
-              <div className="flex items-center gap-4 text-[9.5px] text-[var(--text-secondary)] font-semibold mt-2">
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[9.5px] text-[var(--text-secondary)] font-semibold">
                 <span>文档总数: {requirementsLibs[selectedLibIndex]?.docs || 8}</span>
                 <span>分析项数: {requirementsLibs[selectedLibIndex]?.items || 186}</span>
                 <span>更新时间: {requirementsLibs[selectedLibIndex]?.time}</span>
@@ -1320,10 +1320,10 @@ export default function Requirements() {
           </div>
 
           {/* 四个版块 Grid */}
-          <div className="grid grid-cols-12 gap-4">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
             
             {/* 左侧：文档上传 + 需求项列表 */}
-            <div className="col-span-4 min-w-0 space-y-4">
+            <div className="col-span-1 min-w-0 space-y-4 lg:col-span-4">
               
               {/* 1. 文档上传与解析 */}
               <div className="theme-card rounded-xl p-4 shadow-soft text-left">
@@ -1345,7 +1345,7 @@ export default function Requirements() {
                 </div>
 
                 <div className="mt-3.5 space-y-2">
-                  <div className="flex justify-between items-center text-[9px] font-bold text-[var(--text-secondary)]">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[9px] font-bold text-[var(--text-secondary)]">
                     <span>已解析文档 list ({docsList.length})</span>
                     <span className="text-emerald-500">解析正常</span>
                   </div>
@@ -1354,13 +1354,13 @@ export default function Requirements() {
                       <div
                         key={doc.backendId || idx}
                         onClick={() => doc.backendId && setSelectedDocId(doc.backendId)}
-                        className={`flex justify-between items-center text-[9.5px] border-b border-[var(--border-color)] pb-1.5 last:border-b-0 ${doc.backendId ? 'cursor-pointer' : ''} ${selectedDoc?.backendId === doc.backendId ? 'text-[var(--accent-color)]' : ''}`}
+                          className={`flex flex-col gap-1.5 text-[9.5px] border-b border-[var(--border-color)] pb-1.5 last:border-b-0 sm:flex-row sm:items-center sm:justify-between ${doc.backendId ? 'cursor-pointer' : ''} ${selectedDoc?.backendId === doc.backendId ? 'text-[var(--accent-color)]' : ''}`}
                       >
                         <div className="flex items-center gap-1.5 min-w-0">
                           <FileText className={`size-3.5 shrink-0 ${idx % 2 === 0 ? 'text-blue-500' : 'text-red-500'}`} />
                           <span className="font-bold text-[var(--text-primary)] truncate">{doc.name}</span>
                         </div>
-                        <div className="flex items-center gap-2 shrink-0 text-[var(--text-secondary)] font-mono">
+                          <div className="flex flex-wrap items-center gap-2 text-[var(--text-secondary)] font-mono">
                           <span>{doc.size}</span>
                           <span className="text-emerald-500 font-bold">{doc.status}</span>
                         </div>
@@ -1370,7 +1370,7 @@ export default function Requirements() {
                 </div>
 
                 <div className="mt-3 pt-3 border-t border-[var(--border-color)]">
-                  <div className="flex justify-between items-center text-[9px] font-bold text-[var(--text-secondary)] mb-2">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[9px] font-bold text-[var(--text-secondary)]">
                     <span>Source anchors / 解析块 ({parseBlocks.length})</span>
                     <span className="font-mono">{selectedDoc?.id || 'DOC'}</span>
                   </div>
@@ -1396,12 +1396,12 @@ export default function Requirements() {
 
               {/* 2. 需求项列表 */}
               <div className="theme-card rounded-xl p-4 shadow-soft text-left">
-                <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-2 mb-3 gap-2">
+                <div className="mb-3 flex flex-col gap-2 border-b border-[var(--border-color)] pb-2 sm:flex-row sm:items-center sm:justify-between">
                   <h3 className="text-xs font-bold text-[var(--text-primary)]">2. 需求项列表 ({workbenchItems.length})</h3>
                   <button
                     onClick={handleMergeSelectedItems}
                     disabled={actionLoading === 'merge' || selectedItemKeys.length < 2}
-                    className="px-2 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] text-[8.5px] font-bold text-[var(--text-primary)] disabled:opacity-50 whitespace-nowrap"
+                    className="w-full rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1 text-[8.5px] font-bold text-[var(--text-primary)] disabled:opacity-50 whitespace-nowrap sm:w-auto"
                   >
                     {actionLoading === 'merge' ? '合并中' : `合并(${selectedItemKeys.length})`}
                   </button>
@@ -1419,7 +1419,7 @@ export default function Requirements() {
                     <div 
                       key={item.id}
                       onClick={() => setActiveItem(item)}
-                      className={`flex justify-between items-center p-2 rounded-lg border text-[9px] cursor-pointer transition-all ${
+                      className={`flex flex-col gap-2 p-2 rounded-lg border text-[9px] cursor-pointer transition-all sm:flex-row sm:items-center sm:justify-between ${
                         activeItem?.id === item.id 
                           ? 'border-[var(--accent-color)] bg-[var(--accent-glow)]' 
                           : 'border-[var(--border-color)] bg-[var(--bg-card)] hover:border-[var(--accent-color)]/50'
@@ -1436,7 +1436,7 @@ export default function Requirements() {
                         <span className="font-bold text-[var(--text-secondary)] shrink-0 font-mono">{item.id}</span>
                         <span className="font-bold text-[var(--text-primary)] truncate">{item.title}</span>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="px-1.5 py-0.5 bg-[var(--border-color)] text-[var(--text-secondary)] rounded text-[8px]">{item.module}</span>
                         <span className="text-red-500 font-bold font-mono">{item.priority}</span>
                         {item.granularityFlag && (
@@ -1451,7 +1451,7 @@ export default function Requirements() {
             </div>
 
             {/* 中间：3. 需求大脑 (关系图谱 + 摘要) */}
-            <div className="col-span-5 min-w-0 space-y-4">
+            <div className="col-span-1 min-w-0 space-y-4 lg:col-span-5">
               
               {/* 需求关系图谱 */}
               <div className="theme-card rounded-xl p-4 shadow-soft text-left flex flex-col justify-between h-[360px]">
@@ -1529,7 +1529,7 @@ export default function Requirements() {
                 </div>
 
                 {/* 拓扑图例 */}
-                <div className="flex gap-3 text-[7.5px] font-bold opacity-60 border-t border-[var(--border-color)] pt-2.5 justify-center text-[var(--text-secondary)]">
+                <div className="flex flex-wrap justify-center gap-3 border-t border-[var(--border-color)] pt-2.5 text-[7.5px] font-bold text-[var(--text-secondary)] opacity-60">
                   <div className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-blue-500"></span>前置</div>
                   <div className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-purple-500"></span>同级</div>
                   <div className="flex items-center gap-1"><span className="size-1.5 rounded-full bg-amber-500"></span>后置</div>
@@ -1565,10 +1565,10 @@ export default function Requirements() {
             </div>
 
             {/* 右侧：4. 需求项详情 */}
-            <div className="col-span-3 min-w-0 theme-card rounded-xl p-4 shadow-soft text-left flex flex-col justify-between h-full min-h-[460px]">
+            <div className="col-span-1 min-w-0 theme-card rounded-xl p-4 shadow-soft text-left flex flex-col justify-between h-full min-h-[460px] lg:col-span-3">
               
               <div>
-                <div className="flex justify-between items-start">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
                   <span className="text-[10px] font-bold text-[var(--text-secondary)]">4. 需求项详情</span>
                   <span className="text-[8.5px] font-mono text-[var(--text-secondary)]">{activeItem.id}</span>
                 </div>
@@ -1586,7 +1586,7 @@ export default function Requirements() {
                     placeholder="需求摘要"
                     className="w-full resize-none rounded border border-[var(--border-color)] bg-[var(--bg-app)]/40 px-2 py-1.5 text-[9px] text-[var(--text-primary)] focus:outline-none"
                   />
-                  <div className="grid grid-cols-2 gap-1.5 text-[9px] text-[var(--text-secondary)] font-semibold">
+                  <div className="grid grid-cols-1 gap-1.5 text-[9px] text-[var(--text-secondary)] font-semibold sm:grid-cols-2">
                     <input value={editDraft?.module || ''} onChange={(event) => setEditDraft(prev => ({ ...(prev || {}), module: event.target.value }))} placeholder="模块" className="rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1 text-[var(--text-primary)] focus:outline-none" />
                     <input value={editDraft?.priority || ''} onChange={(event) => setEditDraft(prev => ({ ...(prev || {}), priority: event.target.value }))} placeholder="优先级" className="rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1 text-red-500 font-mono focus:outline-none" />
                     <input value={editDraft?.actor || ''} onChange={(event) => setEditDraft(prev => ({ ...(prev || {}), actor: event.target.value }))} placeholder="参与者" className="rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1 text-[var(--text-primary)] focus:outline-none" />
@@ -1597,7 +1597,7 @@ export default function Requirements() {
                 </div>
 
                 {/* 标签页切换 */}
-                <div className="flex border-b border-[var(--border-color)] mt-4 text-[8.5px] font-bold text-[var(--text-secondary)]">
+                <div className="mt-4 grid grid-cols-2 gap-1 border-b border-[var(--border-color)] pb-1 text-[8.5px] font-bold text-[var(--text-secondary)] sm:grid-cols-4">
                   {[
                     { id: 'testpoints', label: '测试点' },
                     { id: 'questions', label: '待 clarified 问题 (2)' },
@@ -1607,7 +1607,7 @@ export default function Requirements() {
                     <button
                       key={tab.id}
                       onClick={() => setWorkbenchTab(tab.id)}
-                      className={`flex-1 pb-1.5 border-b-2 text-center transition-all ${
+                      className={`rounded-md border-b-2 px-2 py-1.5 text-center transition-all ${
                         workbenchTab === tab.id 
                           ? 'border-[var(--accent-color)] text-[var(--accent-color)]' 
                           : 'border-transparent hover:text-[var(--text-primary)]'
@@ -1641,7 +1641,7 @@ export default function Requirements() {
                         ))}
                       </div>
                       <div className="space-y-1">
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="text-[var(--text-primary)] font-bold">来源锚点</div>
                           <button onClick={handleRefreshTraceability} disabled={actionLoading === 'trace'} className="text-[8px] px-1.5 py-0.5 rounded bg-[var(--border-color)] text-[var(--text-primary)]">
                             {actionLoading === 'trace' ? '刷新中' : '刷新追溯'}
@@ -1753,7 +1753,7 @@ export default function Requirements() {
                 >
                   {actionLoading === 'confirm' ? '确认中...' : '确认解析此需求项'}
                 </button>
-                <div className="flex gap-2">
+                <div className="flex flex-col gap-2 sm:flex-row">
                   <button 
                     onClick={handleShelveActiveItem}
                     disabled={actionLoading === 'shelve'}
@@ -1764,7 +1764,7 @@ export default function Requirements() {
                   <button 
                     onClick={handleSplitActiveItem}
                     disabled={actionLoading === 'split'}
-                    className="px-3 border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-primary)] hover:bg-[var(--border-color)]/50 rounded-lg cursor-pointer text-center text-[9px] font-bold whitespace-nowrap"
+                    className="border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-1.5 text-[var(--text-primary)] hover:bg-[var(--border-color)]/50 rounded-lg cursor-pointer text-center text-[9px] font-bold whitespace-nowrap"
                   >
                     {actionLoading === 'split' ? '拆分中' : '拆分'}
                   </button>

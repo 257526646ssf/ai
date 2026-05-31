@@ -931,7 +931,7 @@ export default function Automation() {
         </div>
         <span className="text-[8px] text-[var(--text-secondary)]">创建、生成、执行共用</span>
       </div>
-      <div className={`grid ${compact ? 'grid-cols-2' : 'grid-cols-4'} gap-2 text-[10px]`}>
+      <div className={`grid ${compact ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1 sm:grid-cols-2 xl:grid-cols-4'} gap-2 text-[10px]`}>
         <label className="space-y-1">
           <span className="text-[var(--text-secondary)] font-semibold">baseURL</span>
           <input
@@ -1113,7 +1113,7 @@ export default function Automation() {
 
     return (
       <div className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)]/75 px-3 py-2 shadow-soft">
-        <div role="toolbar" aria-label="R26 自动化能力入口" className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
+        <div role="toolbar" aria-label="R26 automation capability shortcuts" className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
           {R26_VISIBLE_KEYWORDS.map((keyword) => {
             const item = capabilityState[keyword];
             const Icon = item.icon;
@@ -1123,7 +1123,7 @@ export default function Automation() {
                 type="button"
                 onClick={item.action}
                 disabled={!activeProj}
-                className="h-8 min-w-0 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/50 px-2 text-[9px] font-bold text-[var(--text-primary)] flex items-center justify-between gap-1.5 hover:border-[var(--accent-color)] hover:bg-[var(--accent-glow)]/25 disabled:opacity-70 disabled:hover:border-[var(--border-color)] disabled:cursor-default transition-colors"
+                className="min-h-[3rem] min-w-0 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/50 px-2 py-2 text-[9px] font-bold text-[var(--text-primary)] flex items-center justify-between gap-1.5 hover:border-[var(--accent-color)] hover:bg-[var(--accent-glow)]/25 disabled:opacity-70 disabled:hover:border-[var(--border-color)] disabled:cursor-default transition-colors sm:h-8 sm:min-h-0 sm:py-0"
               >
                 <span className="min-w-0 flex items-center gap-1.5">
                   <Icon className="size-3 shrink-0 text-[var(--accent-color)]" />
@@ -1142,8 +1142,8 @@ export default function Automation() {
     return (
       <div className="space-y-4 text-left animate-[fadeIn_0.2s_ease-out] w-full">
         {/* 面包屑 */}
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
             <button
               onClick={() => setViewMode('list')}
               className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[10px] text-[var(--text-primary)] hover:bg-[var(--border-color)]/50 hover:scale-[1.03] transition-all shadow-sm cursor-pointer"
@@ -1157,7 +1157,7 @@ export default function Automation() {
               <span className="text-[var(--text-primary)]">{activeProj.name}</span>
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
             <button
               onClick={handleDownloadAutoProject}
               className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer"
@@ -1178,7 +1178,7 @@ export default function Automation() {
         {renderR26KeywordStrip()}
 
         {/* 顶部指标 */}
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div className="theme-card rounded-xl p-4 shadow-soft">
             <span className="text-[10px] text-slate-400 font-semibold">测试脚本总数</span>
             <div className="text-xl font-bold text-slate-800 mt-1">{activeProj.cases || 1} <span className="text-[10px] text-slate-400 font-normal">个</span></div>
@@ -1219,36 +1219,36 @@ export default function Automation() {
               </span>
             </div>
 
-            <div className="grid grid-cols-12 gap-2 text-[10px]">
+            <div className="grid grid-cols-1 gap-2 text-[10px] sm:grid-cols-2 xl:grid-cols-12">
               <input
                 value={candidateFilters.keyword}
                 onChange={(event) => setCandidateFilters(prev => ({ ...prev, keyword: event.target.value }))}
                 placeholder="条件输入：需求关键词、页面、接口、标签"
-                className="col-span-12 lg:col-span-6 premium-input px-3 py-2"
+                className="premium-input px-3 py-2 sm:col-span-2 xl:col-span-6"
               />
               <input
                 value={candidateFilters.module}
                 onChange={(event) => setCandidateFilters(prev => ({ ...prev, module: event.target.value }))}
                 placeholder="模块"
-                className="col-span-6 lg:col-span-2 premium-input px-3 py-2"
+                className="premium-input px-3 py-2 xl:col-span-2"
               />
               <input
                 value={candidateFilters.priority}
                 onChange={(event) => setCandidateFilters(prev => ({ ...prev, priority: event.target.value }))}
                 placeholder="优先级"
-                className="col-span-6 lg:col-span-2 premium-input px-3 py-2"
+                className="premium-input px-3 py-2 xl:col-span-2"
               />
               <button
                 onClick={handleScreenCandidates}
                 disabled={candidateLoading || !activeProj?.backendId}
-                className="col-span-12 lg:col-span-2 accent-btn rounded-lg text-[10px] disabled:opacity-60 flex items-center justify-center gap-1"
+                className="accent-btn rounded-lg text-[10px] disabled:opacity-60 flex items-center justify-center gap-1 sm:col-span-2 xl:col-span-2"
               >
                 {candidateLoading && <Activity className="size-3 animate-spin" />}
                 <span>执行筛选</span>
               </button>
             </div>
 
-            <div className="flex items-center justify-between text-[10px]">
+            <div className="flex flex-col gap-2 text-[10px] sm:flex-row sm:items-center sm:justify-between">
               <label className="inline-flex items-center gap-2 font-bold text-[var(--text-primary)] cursor-pointer">
                 <input
                   type="checkbox"
@@ -1258,7 +1258,7 @@ export default function Automation() {
                 />
                 <span>只看推荐候选</span>
               </label>
-              <div className="flex gap-2">
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
                 <button
                   onClick={() => loadProjectCandidates(activeProj?.backendId)}
                   disabled={candidateLoading || !activeProj?.backendId}
@@ -1299,7 +1299,7 @@ export default function Automation() {
                           : 'border-[var(--border-color)] bg-[var(--bg-app)]/30'
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <label className="flex items-start gap-2 min-w-0 cursor-pointer">
                         <input
                           type="checkbox"
@@ -1315,14 +1315,14 @@ export default function Automation() {
                             {candidate.recommended && <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 text-[8px] font-bold">推荐</span>}
                           </div>
                           <div className="text-[9px] text-[var(--text-secondary)] mt-1 line-clamp-2">{candidate.reason}</div>
-                          <div className="flex gap-2 text-[8px] text-slate-400 mt-1 font-mono">
+                          <div className="mt-1 flex flex-wrap gap-2 text-[8px] font-mono text-slate-400">
                             <span>{candidate.module}</span>
                             <span>{candidate.priority}</span>
                             <span>{candidate.source}</span>
                           </div>
                         </div>
                       </label>
-                      <div className="shrink-0 text-right space-y-2">
+                      <div className="shrink-0 space-y-2 text-left sm:text-right">
                         <div className="text-[9px] font-mono text-[var(--accent-color)]">{Math.round(candidate.score * 100)}%</div>
                         <button
                           onClick={() => toggleCandidateExcluded(candidate.id)}
@@ -1350,12 +1350,12 @@ export default function Automation() {
             {renderPlaywrightOptionsPanel({ compact: true })}
             {renderGenerationSummaryPanel()}
             <div className="theme-card rounded-xl p-4 shadow-soft space-y-2">
-              <div className="flex items-center justify-between text-[10px]">
+              <div className="flex flex-col gap-2 text-[10px] sm:flex-row sm:items-center sm:justify-between">
                 <span className="font-bold text-[var(--text-primary)]">Runner 模式</span>
                 <select
                   value={autoRunnerMode}
                   onChange={(event) => setAutoRunnerMode(event.target.value)}
-                  className="px-2 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] text-[10px] font-bold text-[var(--text-primary)]"
+                  className="w-full rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1 text-[10px] font-bold text-[var(--text-primary)] sm:w-auto"
                 >
                   <option value="auto">真实本地 runner</option>
                   <option value="playwright">Playwright runner</option>
@@ -1425,7 +1425,7 @@ export default function Automation() {
                       <FileText className="size-3.5 text-slate-400 shrink-0" />
                       <span className="truncate">{file.path}</span>
                     </div>
-                    <div className="pl-8 mt-1 text-[8px] text-[var(--text-secondary)] flex justify-between">
+                    <div className="pl-8 mt-1 flex flex-col gap-1 text-[8px] text-[var(--text-secondary)] sm:flex-row sm:justify-between">
                       <span>{file.status}</span>
                       <span>{file.updatedAt}</span>
                     </div>
@@ -1478,11 +1478,11 @@ export default function Automation() {
               </div>
             )}
 
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-[9px] text-[var(--text-secondary)] font-mono truncate">
                 当前脚本: {selectedFile || '--'}
               </div>
-              <div className="flex gap-2">
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
                 <button
                   onClick={handleResetFileDraft}
                   disabled={!isFileDirty || isSavingFile}
@@ -1536,8 +1536,8 @@ export default function Automation() {
     return (
       <div className="space-y-4 text-left animate-[fadeIn_0.2s_ease-out] w-full">
         {/* 面包屑 */}
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
             <button 
               onClick={() => setViewMode('project-detail')}
               className="flex items-center gap-1 px-2.5 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] text-[10px] text-[var(--text-primary)] hover:bg-[var(--border-color)]/50 transition-colors shadow-sm cursor-pointer"
@@ -1553,7 +1553,7 @@ export default function Automation() {
               <span className="text-[var(--text-primary)]">构建执行结果 {execution.id ? `(Execution #${execution.id})` : '(暂无后端执行)'}</span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
             <button
               onClick={() => loadExecutionDetail(execution.id)}
               disabled={!execution.id}
@@ -1580,7 +1580,7 @@ export default function Automation() {
         </div>
 
         {/* 顶部运行状态看板 */}
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <div className="theme-card rounded-xl p-4 shadow-soft">
             <span className="text-[10px] text-slate-400 font-semibold">执行范围</span>
             <div className="text-base font-bold text-slate-800 mt-1">{summary.total || activeProj.cases || 1} 条用例</div>
@@ -1602,7 +1602,7 @@ export default function Automation() {
           </div>
         </div>
 
-        <div className="theme-card rounded-xl p-4 shadow-soft flex items-start justify-between gap-6">
+        <div className="theme-card rounded-xl p-4 shadow-soft flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between xl:gap-6">
           <div className="shrink-0">
             <div className="text-[10px] text-slate-400 font-semibold">Runner 模式</div>
             <div className="text-sm font-bold text-slate-800 mt-1">{runnerMode}</div>
@@ -1628,8 +1628,8 @@ export default function Automation() {
         </div>
 
         {/* 核心区：后端执行日志 & Artifact 预览 */}
-        <div className="grid grid-cols-12 gap-4">
-          <div className="col-span-7 mac-terminal p-4 flex flex-col font-mono text-[9px] text-left relative overflow-hidden cyber-matrix-console bg-[#0d0208]">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+          <div className="mac-terminal relative flex flex-col overflow-hidden bg-[#0d0208] p-4 text-left font-mono text-[9px] cyber-matrix-console xl:col-span-7">
             <div className="flex justify-between items-center border-b border-white/10 pb-2 mb-3 shrink-0 relative z-10">
               <div className="flex items-center gap-2">
                 <Terminal className="size-4 text-[#8be9fd]" />
@@ -1653,7 +1653,7 @@ export default function Automation() {
             </div>
           </div>
 
-          <div className="col-span-5 space-y-4">
+          <div className="space-y-4 xl:col-span-5">
             <div className="theme-card rounded-xl p-4 shadow-soft text-left space-y-3">
               <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-2">
                 <h3 className="text-xs font-bold text-[var(--text-primary)]">Artifact 预览</h3>
@@ -1728,16 +1728,16 @@ export default function Automation() {
         // 渲染：17-自动化中心总览页
         // ==========================================================================
         <div className="space-y-4">
-          <div className="flex justify-between items-start">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
             <div className="text-left">
               <h1 className="text-base font-bold text-slate-800">自动化中心</h1>
               <p className="text-[11px] text-slate-400 mt-1">{autoStatus.loading ? '正在同步后端自动化项目...' : autoStatus.message}</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
               <button 
                 onClick={handleSyncRepo}
                 disabled={isSyncingRepo}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)]/50 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer disabled:opacity-60"
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-1.5 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer hover:bg-[var(--border-color)]/50 disabled:opacity-60 sm:w-auto"
               >
                 {isSyncingRepo && <Activity className="size-3 animate-spin" />}
                 <span>{isSyncingRepo ? '同步中...' : '同步代码库'}</span>
@@ -1745,13 +1745,13 @@ export default function Automation() {
               <select
                 value={autoRunnerMode}
                 onChange={(event) => setAutoRunnerMode(event.target.value)}
-                className="px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[11px] font-bold text-[var(--text-primary)] cursor-pointer"
+                className="w-full rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-1.5 text-[11px] font-bold text-[var(--text-primary)] cursor-pointer sm:w-auto"
               >
                 <option value="auto">真实本地 runner</option>
                 <option value="playwright">Playwright runner</option>
                 <option value="placeholder">占位 runner</option>
               </select>
-              <div className={`px-2.5 py-1.5 rounded-lg border text-[9px] font-bold ${
+              <div className={`rounded-lg border px-2.5 py-1.5 text-center text-[9px] font-bold ${
                 runtimeDeps?.auto_runner?.playwright?.available
                   ? 'border-emerald-500/20 text-emerald-600 bg-emerald-500/10'
                   : 'border-amber-500/20 text-amber-600 bg-amber-500/10'
@@ -1760,7 +1760,7 @@ export default function Automation() {
               </div>
               <button 
                 onClick={() => { setViewMode('wizard'); setWizardStep(1); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg accent-btn text-[11px] font-bold text-white cursor-pointer"
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg accent-btn px-3 py-1.5 text-[11px] font-bold text-white cursor-pointer sm:w-auto"
               >
                 <Plus className="size-3.5" />
                 <span>新建自动化项目</span>
@@ -1771,7 +1771,7 @@ export default function Automation() {
           {renderR26KeywordStrip()}
 
           {/* 指标面板 */}
-          <div className="grid grid-cols-4 gap-3.5">
+          <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
             {displayStats.map((item, idx) => (
               <div 
                 key={idx} 
@@ -1817,12 +1817,12 @@ export default function Automation() {
             <div className="col-span-12 lg:col-span-7 space-y-3">
               <div className="theme-card rounded-xl p-4 shadow-soft">
                 {/* 搜索过滤栏 */}
-                <div className="flex items-center gap-2 mb-3.5 border-b border-[var(--border-color)] pb-3">
+                <div className="mb-3.5 flex flex-col gap-2 border-b border-[var(--border-color)] pb-3 sm:flex-row sm:items-center">
                   <div className="flex-1 flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30">
                     <Search className="size-3.5 text-[var(--text-secondary)] shrink-0" />
                     <input type="text" placeholder="搜索自动化项目名称、技术栈" className="bg-transparent border-none text-[10px] focus:outline-none w-full text-[var(--text-primary)]" />
                   </div>
-                  <div className="flex items-center gap-1 text-[10px] text-[var(--text-secondary)] border border-[var(--border-color)] rounded px-2.5 py-1.5 bg-[var(--bg-card)] hover:bg-[var(--border-color)] cursor-pointer">
+                  <div className="flex w-full items-center justify-between gap-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-2.5 py-1.5 text-[10px] text-[var(--text-secondary)] cursor-pointer hover:bg-[var(--border-color)] sm:w-auto">
                     <span>框架筛选</span>
                     <ChevronDown className="size-3 text-slate-400" />
                   </div>
@@ -1844,7 +1844,7 @@ export default function Automation() {
                         } shimmer-sweep`}
                       >
                         {/* 头部信息 */}
-                        <div className="flex justify-between items-start">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                           <div className="flex items-start gap-2.5">
                             <div className={`p-2 rounded-lg ${isSelected ? 'bg-[var(--accent-color)] text-white' : 'bg-[var(--bg-app)] text-[var(--text-secondary)]'}`}>
                               <Cpu className="size-4 shrink-0" />
@@ -1858,8 +1858,8 @@ export default function Automation() {
                         </div>
 
                         {/* 指标明细行 */}
-                        <div className="flex items-center justify-between text-[9px] text-[var(--text-secondary)] pt-2 border-t border-[var(--border-color)]/30">
-                          <div className="flex items-center gap-4">
+                        <div className="flex flex-col gap-2 border-t border-[var(--border-color)]/30 pt-2 text-[9px] text-[var(--text-secondary)] sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex flex-wrap items-center gap-2 sm:gap-4">
                             <div>用例数: <span className="font-bold text-[var(--text-primary)]">{proj.cases}</span></div>
                             <div>构建数: <span className="font-bold text-[var(--text-primary)]">{proj.build}</span></div>
                             <div>最近构建: <span className="text-[var(--text-secondary)] font-mono">{String(proj.time || '--').split(' ')[0]}</span></div>
@@ -1874,8 +1874,8 @@ export default function Automation() {
                         </div>
 
                         {/* 稳定性进度条与操作 */}
-                        <div className="flex items-center justify-between pt-2 border-t border-dashed border-[var(--border-color)]/30">
-                          <div className="flex items-center gap-2 w-1/2">
+                        <div className="flex flex-col gap-2 border-t border-dashed border-[var(--border-color)]/30 pt-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex w-full items-center gap-2 sm:w-1/2">
                             <span className="text-[8.5px] text-[var(--text-secondary)] font-semibold shrink-0">稳定性:</span>
                             <div className="flex-1 h-1.5 bg-[var(--border-color)] rounded-full overflow-hidden">
                               <div className="h-full bg-emerald-500" style={{ width: proj.rate }}></div>
@@ -2011,7 +2011,7 @@ export default function Automation() {
         // ==========================================================================
         <div className="space-y-4 text-left w-full animate-[fadeIn_0.2s_ease-out]">
           {/* 返回 */}
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3">
             <button 
               onClick={() => setViewMode('list')}
               className="flex items-center gap-1 px-2.5 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] text-[10px] text-[var(--text-primary)] hover:bg-[var(--border-color)]/50 transition-colors shadow-sm cursor-pointer"
@@ -2038,8 +2038,8 @@ export default function Automation() {
                   </h2>
 
                   {/* 步骤条 */}
-                  <div className="flex justify-between items-center relative py-2.5 border-b border-[var(--border-color)] mt-1">
-                    <div className="absolute top-[21px] left-8 right-8 h-0.5 bg-[var(--border-color)] z-0">
+                  <div className="relative mt-1 border-b border-[var(--border-color)] py-3">
+                    <div className="absolute left-8 right-8 top-5 hidden h-0.5 bg-[var(--border-color)] z-0 md:block">
                       <div 
                         className="h-full transition-all duration-300"
                         style={{ 
@@ -2049,15 +2049,16 @@ export default function Automation() {
                       ></div>
                     </div>
 
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:flex md:items-center md:justify-between">
                     {[
                       { step: 1, label: '基础配置' },
                       { step: 2, label: '框架集成' },
                       { step: 3, label: '代码接入' },
                       { step: 4, label: '生成配置' }
                     ].map((s) => (
-                      <div key={s.step} className="flex flex-col items-center z-10">
+                      <div key={s.step} className="z-10 flex items-center gap-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-app)]/30 p-2 md:flex-col md:items-center md:gap-1.5 md:border-0 md:bg-transparent md:p-0">
                         <div 
-                          className={`size-6 rounded-full flex items-center justify-center text-[10px] font-bold border transition-all`}
+                          className={`flex size-6 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold transition-all`}
                           style={{
                             backgroundColor: wizardStep >= s.step ? 'var(--accent-color)' : 'var(--bg-card)',
                             color: wizardStep >= s.step ? 'var(--accent-text)' : 'var(--text-secondary)',
@@ -2067,7 +2068,7 @@ export default function Automation() {
                           {s.step}
                         </div>
                         <span 
-                          className="text-[9px] font-bold mt-1.5"
+                          className="text-[9px] font-bold md:mt-1.5"
                           style={{
                             color: wizardStep === s.step ? 'var(--accent-color)' : 'var(--text-secondary)'
                           }}
@@ -2076,6 +2077,7 @@ export default function Automation() {
                         </span>
                       </div>
                     ))}
+                    </div>
                   </div>
 
                   {/* 表单内容 */}
@@ -2109,7 +2111,7 @@ export default function Automation() {
                       <div className="space-y-4">
                         <div className="space-y-1.5">
                           <label className="block text-[var(--text-primary)]">选择自动化测试框架 (Stack)</label>
-                          <div className="grid grid-cols-2 gap-3 text-[10px]">
+                          <div className="grid grid-cols-1 gap-3 text-[10px] sm:grid-cols-2">
                             {[
                               { id: 'playwright', label: 'Playwright (推荐)', desc: '支持 Chromium、Firefox、WebKit' },
                               { id: 'selenium', label: 'Selenium WebDriver', desc: '传统的多语言测试框架' },
@@ -2136,7 +2138,7 @@ export default function Automation() {
                       <div className="space-y-4">
                         <div className="space-y-1.5">
                           <label className="block text-[var(--text-primary)]">开发脚本语言</label>
-                          <div className="flex gap-4 py-1.5">
+                          <div className="flex flex-col gap-2 py-1.5 sm:flex-row sm:flex-wrap sm:gap-4">
                             {['JavaScript', 'TypeScript', 'Python', 'Java'].map((lang, i) => (
                               <label key={i} className="flex items-center gap-1.5 cursor-pointer text-[var(--text-primary)] text-[10.5px]">
                                 <input 
@@ -2185,7 +2187,7 @@ export default function Automation() {
                 </div>
 
                 {/* 控制按钮 */}
-                <div className="flex justify-between items-center pt-4 border-t border-[var(--border-color)]">
+                <div className="flex flex-col gap-3 border-t border-[var(--border-color)] pt-4 sm:flex-row sm:items-center sm:justify-between">
                   <button 
                     onClick={() => setViewMode('list')}
                     className="px-3.5 py-1.5 border border-[var(--border-color)] text-[var(--text-primary)] hover:bg-[var(--border-color)]/50 bg-[var(--bg-card)] rounded-lg text-[10px] font-bold cursor-pointer transition-all active:scale-95"
@@ -2193,7 +2195,7 @@ export default function Automation() {
                     取消
                   </button>
 
-                  <div className="flex gap-2">
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
                     {wizardStep > 1 && (
                       <button 
                         onClick={() => setWizardStep(wizardStep - 1)}

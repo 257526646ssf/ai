@@ -1091,8 +1091,8 @@ export default function Reports() {
 
   const renderFilters = () => (
     <div className="theme-card rounded-xl p-3 shadow-sm border border-[var(--border-color)]">
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-2 items-end">
-        <label className="lg:col-span-3 text-[9px] font-bold text-[var(--text-secondary)]">
+      <div className="grid grid-cols-1 gap-2 items-end sm:grid-cols-2 xl:grid-cols-12">
+        <label className="text-[9px] font-bold text-[var(--text-secondary)] sm:col-span-2 xl:col-span-3">
           关键词
           <div className="mt-1 flex items-center gap-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-2">
             <Search className="size-3.5 text-[var(--text-secondary)]" />
@@ -1105,7 +1105,7 @@ export default function Reports() {
           </div>
         </label>
 
-        <label className="lg:col-span-2 text-[9px] font-bold text-[var(--text-secondary)]">
+        <label className="text-[9px] font-bold text-[var(--text-secondary)] xl:col-span-2">
           报告类型
           <select
             value={filters.type}
@@ -1117,7 +1117,7 @@ export default function Reports() {
           </select>
         </label>
 
-        <label className="lg:col-span-2 text-[9px] font-bold text-[var(--text-secondary)]">
+        <label className="text-[9px] font-bold text-[var(--text-secondary)] sm:col-span-2 xl:col-span-2">
           需求项/来源
           <input
             value={filters.scope}
@@ -1127,7 +1127,7 @@ export default function Reports() {
           />
         </label>
 
-        <label className="lg:col-span-1 text-[9px] font-bold text-[var(--text-secondary)]">
+        <label className="text-[9px] font-bold text-[var(--text-secondary)] xl:col-span-1">
           开始
           <input
             type="date"
@@ -1137,7 +1137,7 @@ export default function Reports() {
           />
         </label>
 
-        <label className="lg:col-span-1 text-[9px] font-bold text-[var(--text-secondary)]">
+        <label className="text-[9px] font-bold text-[var(--text-secondary)] xl:col-span-1">
           结束
           <input
             type="date"
@@ -1147,7 +1147,7 @@ export default function Reports() {
           />
         </label>
 
-        <label className="lg:col-span-2 text-[9px] font-bold text-[var(--text-secondary)]">
+        <label className="text-[9px] font-bold text-[var(--text-secondary)] xl:col-span-2">
           排序
           <select
             value={filters.sort}
@@ -1166,7 +1166,7 @@ export default function Reports() {
 
         <button
           onClick={() => setFilters(EMPTY_FILTERS)}
-          className="lg:col-span-1 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1.5 text-[10px] font-bold text-[var(--text-primary)] hover:bg-[var(--border-color)]/40"
+          className="w-full rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1.5 text-[10px] font-bold text-[var(--text-primary)] hover:bg-[var(--border-color)]/40 sm:col-span-2 xl:col-span-1"
         >
           重置
         </button>
@@ -1191,7 +1191,7 @@ export default function Reports() {
           <select
             value={selectedTemplateId}
             onChange={(event) => setSelectedTemplateId(event.target.value)}
-            className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1.5 text-[10px] text-[var(--text-primary)] outline-none"
+            className="w-full rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1.5 text-[10px] text-[var(--text-primary)] outline-none sm:w-auto sm:min-w-[11rem]"
           >
             <option value="">使用后端默认模板</option>
             {templates.map(template => (
@@ -1204,12 +1204,12 @@ export default function Reports() {
             value={newReportTitle}
             onChange={(event) => setNewReportTitle(event.target.value)}
             placeholder="报告标题（可选）"
-            className="w-40 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1.5 text-[10px] text-[var(--text-primary)] outline-none"
+            className="w-full rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1.5 text-[10px] text-[var(--text-primary)] outline-none sm:w-40"
           />
           <select
             value={newReportType}
             onChange={(event) => setNewReportType(event.target.value)}
-            className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1.5 text-[10px] text-[var(--text-primary)] outline-none"
+            className="w-full rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1.5 text-[10px] text-[var(--text-primary)] outline-none sm:w-auto"
           >
             <option value="comprehensive">综合报告</option>
             <option value="performance">性能专项</option>
@@ -1219,7 +1219,7 @@ export default function Reports() {
           <button
             onClick={handleCreateReport}
             disabled={isGeneratingReport || !selectedProject?.id}
-            className="accent-btn inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-[10px] font-bold disabled:opacity-50"
+            className="accent-btn inline-flex w-full items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-[10px] font-bold disabled:opacity-50 sm:w-auto"
           >
             <PlusSquare className="size-3.5" />
             <span>{isGeneratingReport ? '生成中...' : '生成报告'}</span>
@@ -1314,7 +1314,7 @@ export default function Reports() {
     return (
       <TiltCard className="theme-card rounded-xl p-4 shadow-sm text-left flex-1 flex flex-col min-h-[420px]">
         <div className="flex flex-col flex-1 min-h-0" style={{ transform: 'translateZ(18px)', transformStyle: 'preserve-3d' }}>
-          <div className="flex items-start justify-between gap-2 border-b border-[var(--border-color)] pb-2.5">
+          <div className="flex flex-col gap-3 border-b border-[var(--border-color)] pb-2.5 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--text-primary)]">
                 <Sparkles className="size-4 text-purple-600" />
@@ -1335,7 +1335,7 @@ export default function Reports() {
             <EmptyState title="未选择报告" description="请先从左侧选择一份后端报告。" />
           ) : (
             <div className="mt-3 flex-1 min-h-0 overflow-y-auto pr-1">
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {[
                   { label: '需求项', value: selectedMetrics.requirementCount },
                   { label: '用例', value: selectedMetrics.testCaseCount },
@@ -1380,7 +1380,7 @@ export default function Reports() {
 
               <div className="mt-3 rounded-xl border border-[var(--border-color)] bg-[var(--border-color)]/10 p-3">
                 <div className="mb-2 text-[10px] font-bold text-[var(--text-primary)]">快照来源</div>
-                <div className="grid grid-cols-2 gap-2 text-[8.5px] font-semibold text-[var(--text-secondary)]">
+                <div className="grid grid-cols-1 gap-2 text-[8.5px] font-semibold text-[var(--text-secondary)] sm:grid-cols-2">
                   <div>需求 ID：{compactListText(selectedReport.requirementIds.slice(0, 6)) || '--'}</div>
                   <div>来源文档：{compactListText(selectedReport.sourceDocumentIds.slice(0, 6)) || '--'}</div>
                   <div>接口执行：{formatCompactValue(snapshot.api?.summary?.executions ?? readSourceRefs(selectedReport.raw).counts?.api_execution_ids)}</div>
@@ -1391,7 +1391,7 @@ export default function Reports() {
           )}
 
           <div className="mt-4 border-t border-[var(--border-color)] pt-3">
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               {SUPPORTED_DOWNLOAD_FORMATS.map(format => (
                 <button
                   key={format.id}
@@ -1403,7 +1403,7 @@ export default function Reports() {
                 </button>
               ))}
             </div>
-            <div className="mt-2 grid grid-cols-2 gap-2">
+            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
               {UNSUPPORTED_DOWNLOAD_FORMATS.map(format => (
                 <button
                   key={format.id}
@@ -1670,7 +1670,7 @@ export default function Reports() {
             <span className="text-[var(--text-primary)]">报告模板 API 管理</span>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
           <button
             onClick={handleNewTemplate}
             className="inline-flex items-center gap-1 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-1.5 text-[10px] font-bold text-[var(--text-primary)] hover:bg-[var(--border-color)]/40"
@@ -1690,7 +1690,7 @@ export default function Reports() {
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
         <div className="xl:col-span-5 theme-card rounded-xl p-4 shadow-soft">
-          <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-2">
+          <div className="flex flex-col gap-3 border-b border-[var(--border-color)] pb-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--text-primary)]">
               <Layers className="size-4 text-[var(--accent-color)]" />
               <span>模板列表</span>
@@ -1863,26 +1863,26 @@ export default function Reports() {
 
             <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
               {templateDraft.sections.map((section, index) => (
-                <div key={`${section.key}-${index}`} className="grid grid-cols-12 gap-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] p-2">
+                <div key={`${section.key}-${index}`} className="grid grid-cols-1 gap-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] p-2 sm:grid-cols-6 xl:grid-cols-12">
                   <input
                     value={section.order}
                     onChange={(event) => updateDraftSection(index, { order: numberOf(event.target.value, index + 1) })}
-                    className="col-span-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)] px-2 py-1.5 text-[9px] text-[var(--text-primary)] outline-none"
+                    className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)] px-2 py-1.5 text-[9px] text-[var(--text-primary)] outline-none sm:col-span-1 xl:col-span-2"
                     aria-label="order"
                   />
                   <input
                     value={section.key}
                     onChange={(event) => updateDraftSection(index, { key: event.target.value })}
-                    className="col-span-3 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)] px-2 py-1.5 text-[9px] text-[var(--text-primary)] outline-none"
+                    className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)] px-2 py-1.5 text-[9px] text-[var(--text-primary)] outline-none sm:col-span-2 xl:col-span-3"
                     aria-label="key"
                   />
                   <input
                     value={section.name}
                     onChange={(event) => updateDraftSection(index, { name: event.target.value })}
-                    className="col-span-4 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)] px-2 py-1.5 text-[9px] text-[var(--text-primary)] outline-none"
+                    className="rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)] px-2 py-1.5 text-[9px] text-[var(--text-primary)] outline-none sm:col-span-3 xl:col-span-4"
                     aria-label="name"
                   />
-                  <label className="col-span-2 flex items-center justify-center gap-1 text-[8px] font-bold text-[var(--text-primary)]">
+                  <label className="flex items-center gap-1 text-[8px] font-bold text-[var(--text-primary)] sm:col-span-3 sm:justify-center xl:col-span-2">
                     <input
                       type="checkbox"
                       checked={section.enabled}
@@ -1893,7 +1893,7 @@ export default function Reports() {
                   </label>
                   <button
                     onClick={() => removeDraftSection(index)}
-                    className="col-span-1 flex items-center justify-center rounded-lg text-[var(--text-secondary)] hover:bg-red-500/10 hover:text-red-500"
+                    className="flex items-center justify-center rounded-lg px-2 py-1.5 text-[var(--text-secondary)] hover:bg-red-500/10 hover:text-red-500 sm:col-span-3 xl:col-span-1"
                   >
                     <Trash2 className="size-3.5" />
                   </button>
@@ -1911,7 +1911,7 @@ export default function Reports() {
     return (
       <div className="space-y-4 text-left animate-[fadeIn_0.2s_ease-out] w-full">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3">
             <button
               onClick={() => setViewMode('list')}
               className="flex items-center gap-1 rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-2.5 py-1 text-[10px] text-[var(--text-primary)] shadow-sm hover:bg-[var(--border-color)]/50"
@@ -1924,17 +1924,17 @@ export default function Reports() {
               <span className="text-[var(--text-primary)]">轻量结论</span>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
             <input
               value={conclusionTitle}
               onChange={(event) => setConclusionTitle(event.target.value)}
               placeholder="归档标题（可选）"
-              className="w-56 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1.5 text-[10px] text-[var(--text-primary)] outline-none"
+              className="w-full rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-2 py-1.5 text-[10px] text-[var(--text-primary)] outline-none sm:w-56"
             />
             <button
               onClick={() => handleGenerateConclusion({ save: false })}
               disabled={conclusionState.loading}
-              className="inline-flex items-center gap-1 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-1.5 text-[10px] font-bold text-[var(--text-primary)] hover:bg-[var(--border-color)]/40 disabled:opacity-60"
+              className="inline-flex w-full items-center justify-center gap-1 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-1.5 text-[10px] font-bold text-[var(--text-primary)] hover:bg-[var(--border-color)]/40 disabled:opacity-60 sm:w-auto"
             >
               <Sparkles className="size-3.5" />
               <span>{conclusionState.loading ? '生成中...' : '生成结论'}</span>
@@ -1942,7 +1942,7 @@ export default function Reports() {
             <button
               onClick={() => handleGenerateConclusion({ save: true })}
               disabled={conclusionState.loading || !conclusionResult?.conclusion}
-              className="accent-btn inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-[10px] font-bold disabled:opacity-60"
+              className="accent-btn inline-flex w-full items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-[10px] font-bold disabled:opacity-60 sm:w-auto"
             >
               <Save className="size-3.5" />
               <span>归档为报告</span>
@@ -2006,7 +2006,7 @@ export default function Reports() {
             </div>
 
             {conclusionResult?.metrics && (
-              <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-2">
+              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-4">
                 {[
                   ['requirements', '需求'],
                   ['test_cases', '用例'],

@@ -601,7 +601,7 @@ export default function ApiTesting() {
     return (
       <div className="space-y-2">
         {safeRows.map((row, index) => (
-          <div key={index} className="grid grid-cols-[18px_minmax(0,0.9fr)_minmax(0,1.2fr)_24px] gap-1.5 items-center">
+          <div key={index} className="grid grid-cols-[18px_minmax(0,1fr)_24px] gap-1.5 items-center sm:grid-cols-[18px_minmax(0,0.9fr)_minmax(0,1.2fr)_24px]">
             <input
               type="checkbox"
               checked={row.enabled !== false}
@@ -618,12 +618,12 @@ export default function ApiTesting() {
               value={row.value || ''}
               onChange={(event) => updateKeyValueRow(setter, index, { value: event.target.value })}
               placeholder={valuePlaceholder}
-              className="min-w-0 px-2 py-1.5 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[10px] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)]"
+              className="col-span-3 row-start-2 min-w-0 px-2 py-1.5 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[10px] text-[var(--text-primary)] focus:outline-none focus:border-[var(--accent-color)] sm:col-auto sm:row-auto"
             />
             <button
               type="button"
               onClick={() => removeKeyValueRow(setter, index)}
-              className="size-6 rounded-md border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-red-500 hover:border-red-500/40 flex items-center justify-center"
+              className="col-start-3 row-start-1 size-6 justify-self-end rounded-md border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-red-500 hover:border-red-500/40 flex items-center justify-center sm:col-auto sm:row-auto"
               title="删除"
             >
               <XCircle className="size-3" />
@@ -1246,8 +1246,8 @@ export default function ApiTesting() {
         `}} />
 
         {/* 面包屑 */}
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
             <button 
               onClick={() => setViewMode('list')}
               className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[10.5px] text-[var(--text-secondary)] hover:bg-[var(--border-color)] hover:scale-[1.02] transition-all shadow-sm cursor-pointer"
@@ -1255,7 +1255,7 @@ export default function ApiTesting() {
               <ArrowLeft className="size-3" />
               <span>返回接口列表</span>
             </button>
-            <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)]/70 font-semibold">
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--text-secondary)]/70 font-semibold">
               <span>接口测试</span>
               <span>/</span>
               <span className="text-[var(--text-primary)]">接口环境配置与场景链路</span>
@@ -1264,24 +1264,24 @@ export default function ApiTesting() {
           <button 
             onClick={handlePublishAndRunScenario}
             disabled={isRunningScenarioChain}
-            className="px-4 py-2 text-[11.5px] accent-btn"
+            className="w-full px-4 py-2 text-[11.5px] accent-btn sm:w-auto"
           >
             {isRunningScenarioChain ? '后端链路执行中...' : '发布配置并执行链路'}
           </button>
         </div>
 
         {/* 顶部简述 */}
-        <div className="theme-card rounded-xl p-4 shadow-soft flex items-center justify-between">
+        <div className="theme-card rounded-xl p-4 shadow-soft flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="text-left">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="px-2 py-0.5 bg-[rgba(59,130,246,0.12)] text-blue-500 rounded text-[9.5px] font-bold">场景: 登录支付下单链路</span>
               <h2 className="font-bold text-xs text-[var(--text-primary)]">核心业务流程自动化链路测试</h2>
             </div>
-            <p className="text-[10px] text-[var(--text-secondary)] mt-1.5 leading-none">
+            <p className="mt-1.5 text-[10px] leading-relaxed text-[var(--text-secondary)]">
               后端环境: {remoteEnvConfigs[0]?.base_url || '待创建'} | 场景节点: {displayScenarioSteps.length} | 计划任务: {latestSchedule?.id ? `#${latestSchedule.id}` : '待创建'}
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex w-full flex-wrap gap-2 sm:w-auto">
             <div className="px-3 py-1.5 border border-[var(--border-color)] bg-[var(--bg-app)] rounded-lg text-[10px] text-[var(--text-primary)] font-bold">场景状态: {scenarioSummary?.status || '未执行'}</div>
             <div className="px-3 py-1.5 border border-[var(--border-color)] bg-[var(--bg-app)] rounded-lg text-[10px] text-[var(--text-primary)] font-bold">最近执行: {latestSchedule?.last_run_at ? formatDateTime(latestSchedule.last_run_at) : '--'}</div>
           </div>
@@ -1290,9 +1290,9 @@ export default function ApiTesting() {
         <div className="grid grid-cols-12 gap-4 items-start w-full">
           {/* 左侧：多套测试环境配置 */}
           <div className="col-span-12 lg:col-span-5 theme-card rounded-xl p-4 shadow-soft space-y-4">
-            <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2">
+            <div className="flex flex-col gap-2 border-b border-[var(--border-color)] pb-2 sm:flex-row sm:items-center sm:justify-between">
               <h3 className="text-xs font-bold text-[var(--text-primary)]">全局多套环境参数配置</h3>
-              <div className="p-0.5 border border-[var(--border-color)] rounded-lg flex gap-0.5 bg-[var(--bg-app)] text-[9px] font-bold">
+              <div className="flex flex-wrap gap-0.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)] p-0.5 text-[9px] font-bold">
                 <button className="bg-[var(--accent-color)] text-[var(--accent-text)] px-2.5 py-1 rounded-md transition-all shadow-sm">TEST</button>
                 <button className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--border-color)]/30 px-2.5 py-1 rounded-md transition-all">DEV</button>
                 <button className="text-[var(--text-secondary)] hover:text(--text-primary) hover:bg-[var(--border-color)]/30 px-2.5 py-1 rounded-md transition-all">PRE</button>
@@ -1302,7 +1302,7 @@ export default function ApiTesting() {
             <div className="space-y-3">
               <div className="p-3 bg-[var(--bg-app)] border border-[var(--border-color)] rounded-lg text-[9.5px] space-y-1.5">
                 <div className="font-bold text-[var(--text-primary)]">网关基本特征</div>
-                <div className="grid grid-cols-2 gap-2 text-[var(--text-secondary)]">
+                <div className="grid grid-cols-1 gap-2 text-[var(--text-secondary)] sm:grid-cols-2">
                   <div>网关地址: <span className="text-[var(--text-primary)] font-mono font-bold">gateway-test.api</span></div>
                   <div>运行状态: <span className="text-emerald-500 font-bold">● Healthy</span></div>
                 </div>
@@ -1341,7 +1341,7 @@ export default function ApiTesting() {
 
           {/* 右侧：流式场景链路编排（SVG 呼吸跑马灯流光线条） */}
           <div className="col-span-12 lg:col-span-7 theme-card rounded-xl p-4 shadow-soft">
-            <div className="flex justify-between items-center border-b border-[var(--border-color)] pb-2 mb-4">
+            <div className="mb-4 flex flex-col gap-2 border-b border-[var(--border-color)] pb-2 sm:flex-row sm:items-center sm:justify-between">
               <h3 className="text-xs font-bold text-[var(--text-primary)]">流式 API 场景链路编排可视化控制台</h3>
               <button 
                 onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '拓扑依赖拓扑图智能对齐完成。', type: 'success' } }))}
@@ -1351,9 +1351,9 @@ export default function ApiTesting() {
               </button>
             </div>
 
-            <div className="grid grid-cols-12 gap-4">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
               {/* 步骤列表 */}
-              <div className="col-span-7 space-y-4 max-h-[460px] overflow-y-auto pr-1">
+              <div className="col-span-1 space-y-4 max-h-[460px] overflow-y-auto pr-1 lg:col-span-7">
                 {displayScenarioSteps.map((step, idx) => {
                   const isSelected = selectedStepIdx === idx;
                   return (
@@ -1396,7 +1396,7 @@ export default function ApiTesting() {
                             : 'border-[var(--border-color)] bg-[var(--bg-card)] hover:border-[var(--accent-color)]/50'
                         }`}
                       >
-                        <div className="flex justify-between items-center">
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex items-center gap-1.5 min-w-0">
                             <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-[rgba(59,130,246,0.12)] text-blue-500">{step.method}</span>
                             <span className="font-bold text-[var(--text-primary)] truncate" title={step.name}>{step.name}</span>
@@ -1406,7 +1406,7 @@ export default function ApiTesting() {
                         <p className="text-[var(--text-secondary)] mt-1 text-[9px]">{step.desc}</p>
                         
                         {step.extracts !== '—' && (
-                          <div className="mt-2 pt-2 border-t border-[var(--border-color)]/40 flex items-center gap-2">
+                          <div className="mt-2 flex flex-col gap-2 border-t border-[var(--border-color)]/40 pt-2 sm:flex-row sm:items-center">
                             <span className="text-[8px] bg-[rgba(139,92,246,0.12)] text-purple-500 px-1 py-0.5 rounded font-bold">参数提取</span>
                             <code className="text-purple-500 font-mono text-[8.5px] font-bold">{step.extracts}</code>
                           </div>
@@ -1418,8 +1418,7 @@ export default function ApiTesting() {
 
                 <button 
                   onClick={() => window.dispatchEvent(new CustomEvent('show-toast', { detail: { message: '新步骤已追加至链路末尾，请配置URL及参数。', type: 'success' } }))}
-                  className="py-2 border border-dashed border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent-color)] text-[10px] rounded-lg cursor-pointer text-center flex items-center justify-center gap-1 ml-11 transition-all"
-                  style={{ width: 'calc(100% - 44px)' }}
+                  className="flex w-full items-center justify-center gap-1 rounded-lg border border-dashed border-[var(--border-color)] py-2 text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--accent-color)] cursor-pointer text-center transition-all sm:ml-11 sm:w-[calc(100%_-_44px)]"
                 >
                   <Plus className="size-3.5" />
                   <span>向场景链路插入新请求步骤</span>
@@ -1427,7 +1426,7 @@ export default function ApiTesting() {
               </div>
 
               {/* 联动步骤参数详情与 AI 智能断言 */}
-              <div className="col-span-5 theme-card rounded-xl p-4 bg-[var(--bg-app)]/30 text-left space-y-4">
+              <div className="col-span-1 theme-card rounded-xl p-4 bg-[var(--bg-app)]/30 text-left space-y-4 lg:col-span-5">
                 <div>
                   <h4 className="text-xs font-bold text-[var(--text-primary)] flex items-center gap-1">
                     <Sparkles className="size-3.5 text-[var(--accent-color)]" />
@@ -1439,11 +1438,11 @@ export default function ApiTesting() {
                 <div className="space-y-3">
                   <div className="p-2.5 border border-[var(--border-color)] bg-[var(--bg-card)] rounded-lg text-[9.5px] space-y-1.5">
                     <div className="font-bold text-[var(--text-primary)]">性能预期遥测</div>
-                    <div className="flex justify-between text-[9px] text-[var(--text-secondary)]">
+                    <div className="flex flex-col gap-1 text-[9px] text-[var(--text-secondary)] sm:flex-row sm:items-center sm:justify-between">
                       <span>预估延迟:</span>
                       <span className="font-mono text-[var(--text-primary)] font-bold">{displayScenarioSteps[selectedStepIdx]?.delay}</span>
                     </div>
-                    <div className="flex justify-between text-[9px] text-[var(--text-secondary)]">
+                    <div className="flex flex-col gap-1 text-[9px] text-[var(--text-secondary)] sm:flex-row sm:items-center sm:justify-between">
                       <span>网络开销:</span>
                       <span className="font-mono text-[var(--text-primary)]">~ 1.2 KB</span>
                     </div>
@@ -1509,29 +1508,29 @@ export default function ApiTesting() {
     const activeLib = displayLibs[selectedLibIdx] || displayLibs[0];
     return (
       <div className="space-y-4 w-full">
-        <div className="flex justify-between items-start">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="text-left">
             <h1 className="text-base font-bold text-[var(--text-primary)]">接口测试中心</h1>
             <p className="text-[11px] text-[var(--text-secondary)] mt-1">管理应用多端核心接口定义，智能匹配用例与全链路覆盖率评估。</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-3 lg:flex lg:flex-wrap lg:justify-end">
             <button 
               onClick={() => setViewMode('env-scenario')}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)] text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors"
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-1.5 text-[11px] font-bold text-[var(--text-primary)] hover:bg-[var(--border-color)] cursor-pointer transition-colors"
             >
               <span>环境与链路编排</span>
             </button>
             <button 
               onClick={handleSyncSwagger}
               disabled={isSyncingSwagger || apiStatus.loading}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)] text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors"
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-1.5 text-[11px] font-bold text-[var(--text-primary)] hover:bg-[var(--border-color)] cursor-pointer transition-colors"
             >
               <RotateCw className="size-3.5 text-[var(--text-secondary)]" />
               <span>{isSyncingSwagger ? '同步中...' : '同步 Swagger'}</span>
             </button>
             <button 
               onClick={() => window.dispatchEvent(new CustomEvent('open-modal', { detail: { type: 'new-api-lib' } }))}
-              className="px-3.5 py-1.5 text-[11px] accent-btn"
+              className="w-full px-3.5 py-1.5 text-[11px] accent-btn"
             >
               <Plus className="size-3.5 text-white inline mr-1" />
               新建接口库
@@ -1540,11 +1539,11 @@ export default function ApiTesting() {
         </div>
 
         {/* 指标面板 */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
+        <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
           {displayStats.map((item, idx) => (
             <div 
               key={idx} 
-              className="theme-card rounded-xl p-3.5 shadow-soft flex items-center justify-between"
+                className="theme-card flex flex-col items-start gap-3 rounded-xl p-3.5 shadow-soft sm:flex-row sm:items-center sm:justify-between"
               style={{
                 animation: 'slideUpFade 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
                 animationDelay: `${idx * 40 + 100}ms`,
@@ -1593,7 +1592,7 @@ export default function ApiTesting() {
               <h3 className="text-xs font-bold text-[var(--text-primary)]">接口文档导入面板</h3>
               <p className="text-[9.5px] text-[var(--text-secondary)] mt-1">可继续粘贴 OpenAPI / HAR 文本，也可上传 DOCX / PDF / XLSX / XMind 并把文件信息发送给后端解析。</p>
             </div>
-            <div className="p-0.5 border border-[var(--border-color)] rounded-lg flex gap-0.5 bg-[var(--bg-app)] text-[9px] font-bold">
+            <div className="flex flex-wrap gap-0.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)] p-0.5 text-[9px] font-bold">
               {IMPORT_SOURCES.map((source) => {
                 const active = importSourceId === source.id;
                 return (
@@ -1601,7 +1600,7 @@ export default function ApiTesting() {
                     key={source.id}
                     type="button"
                     onClick={() => handleImportSourceChange(source.id)}
-                    className={`px-2.5 py-1 rounded-md transition-all ${active ? 'bg-[var(--bg-card)] text-[var(--accent-color)] border border-[var(--border-color)]/50 shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)]/30'}`}
+                      className={`flex-1 px-2.5 py-1 rounded-md transition-all sm:flex-none ${active ? 'bg-[var(--bg-card)] text-[var(--accent-color)] border border-[var(--border-color)]/50 shadow-sm' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)]/30'}`}
                   >
                     {source.label}
                   </button>
@@ -1676,11 +1675,11 @@ export default function ApiTesting() {
           <div className="col-span-12 lg:col-span-7 theme-card rounded-xl p-4 shadow-soft">
             {/* 过滤器 */}
             <div className="flex flex-wrap items-center gap-2 mb-3.5">
-              <div className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30">
+              <div className="flex w-full items-center gap-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)]/30 px-3 py-1.5 sm:flex-1">
                 <Search className="size-3.5 text-[var(--text-secondary)] shrink-0" />
                 <input type="text" placeholder="搜索接口库名称、描述" className="bg-transparent border-none text-[10px] focus:outline-none w-full text-[var(--text-primary)]" />
               </div>
-              <div className="flex items-center gap-1.5 text-[10.5px] text-[var(--text-secondary)] border border-[var(--border-color)] rounded px-3 py-1.5 bg-[var(--bg-card)] hover:bg-[var(--border-color)] cursor-pointer transition-colors">
+              <div className="flex w-full items-center justify-between gap-1.5 rounded border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-1.5 text-[10.5px] text-[var(--text-secondary)] hover:bg-[var(--border-color)] cursor-pointer transition-colors sm:w-auto sm:justify-start">
                 <span>协议类型</span>
                 <ChevronDown className="size-3 text-[var(--text-secondary)]" />
               </div>
@@ -1822,7 +1821,7 @@ export default function ApiTesting() {
                   </div>
 
                   {/* 激活与高危缺陷指标 */}
-                  <div className="grid grid-cols-2 gap-3.5">
+                  <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
                     <div className="p-3 border border-[var(--border-color)] bg-[var(--bg-app)]/50 rounded-lg text-left" style={{ transform: 'translateZ(10px)' }}>
                       <span className="text-[9px] text-[var(--text-secondary)] block">测试用例数</span>
                       <span className="text-base font-bold font-mono text-[var(--text-primary)] neon-pulse-number">{activeLib.cases}</span>
@@ -1841,7 +1840,7 @@ export default function ApiTesting() {
                         { method: 'POST', url: '/api/v1/auth/login/verify', fail: '15.4% 失败率', color: 'text-red-500' },
                         { method: 'GET', url: '/api/v1/checkout/gateway', fail: '8.2% 失败率', color: 'text-amber-500' }
                       ].map((item, idx) => (
-                        <div key={idx} className="flex justify-between items-center p-2 border border-[var(--border-color)] bg-[var(--bg-card)] rounded-lg">
+                        <div key={idx} className="flex flex-col gap-2 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] p-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex items-center gap-1.5 min-w-0">
                             <span className="px-1 py-0.5 rounded text-[7.5px] font-bold bg-[rgba(59,130,246,0.12)] text-blue-500">{item.method}</span>
                             <span className="text-[var(--text-primary)] font-mono truncate max-w-[140px]">{item.url}</span>
@@ -1890,7 +1889,7 @@ export default function ApiTesting() {
 
     return (
       <div className="space-y-4 text-left w-full animate-[fadeIn_0.2s_ease-out]">
-        <div className="flex flex-wrap justify-between items-center gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <button
             onClick={() => setViewMode('list')}
             className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] text-[10.5px] text-[var(--text-secondary)] hover:bg-[var(--border-color)] hover:scale-[1.02] transition-all shadow-sm cursor-pointer"
@@ -1899,7 +1898,7 @@ export default function ApiTesting() {
             <span>返回接口列表</span>
           </button>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex w-full flex-wrap items-stretch gap-2 sm:w-auto sm:items-center">
             <button
               onClick={() => activeApi && setDebugForm((prev) => ({
                 ...prev,
@@ -1907,7 +1906,7 @@ export default function ApiTesting() {
                 path: activeApi.path || prev.path,
                 url: ''
               }))}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)] text-[11px] font-bold text-[var(--text-primary)] cursor-pointer transition-colors"
+              className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-1.5 text-[11px] font-bold text-[var(--text-primary)] hover:bg-[var(--border-color)] cursor-pointer transition-colors sm:flex-none"
             >
               <Save className="size-3.5 text-[var(--text-secondary)]" />
               <span>填充选中接口</span>
@@ -1915,7 +1914,7 @@ export default function ApiTesting() {
             <button
               onClick={handleRunAssertions}
               disabled={isRunningAssertions}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 text-[11px] glow-button-neon rounded-lg disabled:opacity-70"
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[11px] glow-button-neon disabled:opacity-70 sm:flex-none"
             >
               <Play className="size-3.5" />
               <span>{isRunningAssertions ? '断言执行中...' : '批量执行断言'}</span>
@@ -1961,7 +1960,7 @@ export default function ApiTesting() {
               />
             </label>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex flex-wrap items-center gap-2 text-[10px] text-[var(--text-secondary)]">
               <span className="px-2 py-1 rounded border border-[var(--border-color)] bg-[var(--bg-app)] font-mono break-all">
                 {debugForm.url.trim() || joinUrl(debugForm.baseUrl, debugForm.path)}
@@ -1979,7 +1978,7 @@ export default function ApiTesting() {
             <button
               onClick={() => handleSend()}
               disabled={isSending}
-              className="flex items-center gap-1.5 px-4 py-2 glow-button-neon rounded-lg text-xs font-bold cursor-pointer disabled:opacity-75 transition-all"
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg px-4 py-2 text-xs font-bold glow-button-neon cursor-pointer disabled:opacity-75 transition-all sm:w-auto"
             >
               <Send className="size-3.5" />
               <span>{isSending ? '正在运行...' : '运行 /apis/debug'}</span>
@@ -2002,7 +2001,7 @@ export default function ApiTesting() {
                     <span>{dataFactoryState.loading ? '生成中...' : '生成测试数据'}</span>
                   </button>
                 </div>
-                <div className="p-0.5 border border-[var(--border-color)] rounded-lg flex gap-0.5 bg-[var(--bg-app)] text-[9px] font-bold">
+                <div className="flex flex-wrap gap-0.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)] p-0.5 text-[9px] font-bold">
                   {['Headers', 'Params', 'Body', 'Auth'].map((tab) => {
                     const tabId = tab.toLowerCase();
                     const isTabActive = requestTab === tabId;
@@ -2010,7 +2009,7 @@ export default function ApiTesting() {
                       <button
                         key={tab}
                         onClick={() => setRequestTab(tabId)}
-                        className={`px-3 py-1 rounded-md transition-all duration-200 cursor-pointer ${isTabActive ? 'bg-[var(--bg-card)] text-[var(--accent-color)] border border-[var(--border-color)]/50 shadow-sm font-extrabold' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)]/30'}`}
+                        className={`min-w-[72px] flex-1 px-3 py-1 rounded-md transition-all duration-200 cursor-pointer sm:flex-none ${isTabActive ? 'bg-[var(--bg-card)] text-[var(--accent-color)] border border-[var(--border-color)]/50 shadow-sm font-extrabold' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)]/30'}`}
                       >
                         {tab}
                       </button>
@@ -2073,7 +2072,7 @@ export default function ApiTesting() {
                     </div>
                   )}
                 </div>
-                <div className="p-0.5 border border-[var(--border-color)] rounded-lg flex gap-0.5 bg-[var(--bg-app)] text-[9px] font-bold">
+                <div className="flex flex-wrap gap-0.5 rounded-lg border border-[var(--border-color)] bg-[var(--bg-app)] p-0.5 text-[9px] font-bold">
                   {['Body', 'Headers', 'Console'].map((tab) => {
                     const tabId = tab.toLowerCase();
                     const isTabActive = responseTab === tabId;
@@ -2081,7 +2080,7 @@ export default function ApiTesting() {
                       <button
                         key={tab}
                         onClick={() => setResponseTab(tabId)}
-                        className={`px-3 py-1 rounded-md transition-all duration-200 cursor-pointer ${isTabActive ? 'bg-[var(--bg-card)] text-[var(--accent-color)] border border-[var(--border-color)]/50 shadow-sm font-extrabold' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)]/30'}`}
+                        className={`min-w-[72px] flex-1 px-3 py-1 rounded-md transition-all duration-200 cursor-pointer sm:flex-none ${isTabActive ? 'bg-[var(--bg-card)] text-[var(--accent-color)] border border-[var(--border-color)]/50 shadow-sm font-extrabold' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-card)]/30'}`}
                       >
                         {tab}
                       </button>
@@ -2091,7 +2090,7 @@ export default function ApiTesting() {
               </div>
 
               <div className="mac-terminal w-full relative overflow-hidden cyber-matrix-console">
-                <div className="flex items-center justify-between px-3 py-2 border-b border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.02)] relative z-10">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.02)] relative z-10">
                   <div className="flex items-center gap-1.5">
                     <span className="size-2.5 rounded-full bg-[#ff5f56]" />
                     <span className="size-2.5 rounded-full bg-[#ffbd2e]" />
@@ -2221,7 +2220,7 @@ export default function ApiTesting() {
                   <div className="text-[9px] text-[var(--text-secondary)] border border-dashed border-[var(--border-color)] rounded-lg p-3 text-center">暂无规则</div>
                 )}
               </div>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                 <select
                   value={mockForm.method}
                   onChange={(event) => setMockForm((prev) => ({ ...prev, method: event.target.value }))}
@@ -2232,10 +2231,10 @@ export default function ApiTesting() {
                 <input
                   value={mockForm.path}
                   onChange={(event) => setMockForm((prev) => ({ ...prev, path: event.target.value }))}
-                  className="col-span-2 min-w-0 px-2 py-1.5 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[10px] text-[var(--text-primary)] font-mono"
+                  className="min-w-0 px-2 py-1.5 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[10px] text-[var(--text-primary)] font-mono sm:col-span-2"
                 />
               </div>
-              <div className="grid grid-cols-[70px_minmax(0,1fr)] gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[70px_minmax(0,1fr)]">
                 <input
                   value={mockForm.statusCode}
                   onChange={(event) => setMockForm((prev) => ({ ...prev, statusCode: event.target.value }))}
@@ -2247,7 +2246,7 @@ export default function ApiTesting() {
                   className="h-16 font-mono text-[9.5px] p-2 rounded-md border border-[var(--border-color)] bg-[var(--bg-app)]/30 text-[var(--text-primary)]"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <button onClick={handleSaveMockRule} disabled={isSavingMock} className="py-2 text-[10px] font-bold rounded-lg border border-[var(--border-color)] bg-[var(--bg-card)] hover:bg-[var(--border-color)] text-[var(--text-primary)] disabled:opacity-60">{isSavingMock ? '提交中...' : '新增规则'}</button>
                 <button onClick={handleDispatchMockSmoke} disabled={isDispatchingMock} className="py-2 text-[10px] font-bold rounded-lg bg-zinc-950 hover:bg-zinc-800 text-white disabled:opacity-60">{isDispatchingMock ? 'Dispatch...' : 'Dispatch smoke'}</button>
               </div>
