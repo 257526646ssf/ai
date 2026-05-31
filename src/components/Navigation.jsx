@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Home,
   Folder,
@@ -30,8 +30,19 @@ const menuItems = [
 const baseItemClass =
   'group relative flex w-full min-w-0 items-center rounded-xl text-left text-sm transition-colors duration-200';
 
-export default function Navigation({ activeTab, setActiveTab }) {
+export default function Navigation({ activeTab, setActiveTab, isMobileOpen = false, onCloseMobile }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
+
+  useEffect(() => {
+    const closeOnDesktop = () => {
+      if (window.innerWidth >= 1024) {
+        onCloseMobile?.();
+      }
+    };
+    closeOnDesktop();
+    window.addEventListener('resize', closeOnDesktop);
+    return () => window.removeEventListener('resize', closeOnDesktop);
+  }, [onCloseMobile]);
 
   const renderItem = (item) => {
     const Icon = item.icon;
@@ -41,7 +52,10 @@ export default function Navigation({ activeTab, setActiveTab }) {
       <button
         key={item.id}
         type="button"
-        onClick={() => setActiveTab(item.id)}
+        onClick={() => {
+          setActiveTab(item.id);
+          onCloseMobile?.();
+        }}
         title={isCollapsed ? item.label : undefined}
         className={[
           baseItemClass,
@@ -66,8 +80,9 @@ export default function Navigation({ activeTab, setActiveTab }) {
   return (
     <aside
       className={[
-        'sticky top-0 z-30 flex h-[100dvh] shrink-0 flex-col justify-between border-r border-[var(--border-color)] bg-[var(--bg-card)] backdrop-blur transition-[width] duration-200',
-        isCollapsed ? 'w-[72px]' : 'w-[232px]'
+        'fixed inset-y-0 left-0 z-30 flex h-[100dvh] max-w-[86vw] flex-col justify-between border-r border-[var(--border-color)] bg-[var(--bg-card)] backdrop-blur transition-transform duration-200 lg:sticky lg:max-w-none lg:translate-x-0 lg:transition-[width] lg:duration-200',
+        isMobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
+        isCollapsed ? 'lg:w-[72px]' : 'w-[232px]'
       ].join(' ')}
       style={{ boxShadow: 'var(--shadow-style)' }}
     >

@@ -1574,6 +1574,14 @@ body {
   height: 100%;
 }
 
+.app-shell__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  background: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(2px);
+}
+
 .app-shell__body {
   display: flex;
   flex: 1 1 auto;
@@ -1615,6 +1623,16 @@ body {
   }
 }
 
+@media (max-width: 1023px) {
+  .app-shell__layout {
+    min-height: 100dvh;
+  }
+
+  .app-shell__body {
+    width: 100%;
+  }
+}
+
 .grid-bg {
   background-image: radial-gradient(var(--border-color) 1px, transparent 1px);
   background-size: 32px 32px;
@@ -1652,6 +1670,5 @@ body {
 .sidebar-active-glow::after {
   display: none;
 }
-
 
 

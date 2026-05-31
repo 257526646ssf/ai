@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bell, HelpCircle, ChevronDown } from 'lucide-react';
+import { Bell, HelpCircle, ChevronDown, Menu } from 'lucide-react';
 import { useProjectContext } from '../lib/projectContext';
 import { apiGet } from '../lib/api';
 
@@ -123,7 +123,7 @@ const tabTitles = {
 const toolbarGroupClass =
   'flex min-w-0 items-center gap-2 rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] px-3 py-2 shadow-sm';
 
-export default function Topbar({ activeTab, theme, setTheme, setActiveTab }) {
+export default function Topbar({ activeTab, theme, setTheme, setActiveTab, onOpenNavigation }) {
   const {
     projects,
     selectedProjectId,
@@ -164,13 +164,24 @@ export default function Topbar({ activeTab, theme, setTheme, setActiveTab }) {
   return (
     <header className="sticky top-0 z-20 border-b border-[var(--border-color)] bg-[var(--bg-card)] px-4 py-3 backdrop-blur">
       <div className="flex min-w-0 flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="min-w-0">
+        <div className="flex min-w-0 items-start gap-3">
+          <button
+            type="button"
+            onClick={onOpenNavigation}
+            className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-color)] bg-[var(--bg-card)] text-[var(--text-secondary)] shadow-sm transition-colors hover:bg-[var(--bg-app)] hover:text-[var(--text-primary)] lg:hidden"
+            aria-label="打开导航"
+          >
+            <Menu className="size-4" />
+          </button>
+
+          <div className="min-w-0">
           <div className="mb-1 flex min-w-0 items-center gap-2 text-xs font-medium text-[var(--text-secondary)]">
             <span className="truncate">{activeTab === 'dashboard' ? '平台首页' : currentTitle}</span>
             <span className="text-[var(--border-color)]">/</span>
             <span className="truncate">{selectedProject?.name || selectedProject?.code || '当前项目'}</span>
           </div>
           <div className="truncate text-lg font-semibold text-[var(--text-primary)]">{currentTitle}</div>
+          </div>
         </div>
 
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">

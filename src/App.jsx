@@ -108,6 +108,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [dashboardTheme, setDashboardTheme] = useState('basic');
   const [isAiOpen, setIsAiOpen] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
   useEffect(() => {
     const handleOpenAiChat = () => {
@@ -120,6 +121,10 @@ export default function App() {
       window.removeEventListener('open-ai-chat', handleOpenAiChat);
     };
   }, []);
+
+  useEffect(() => {
+    setIsMobileNavOpen(false);
+  }, [activeTab]);
 
   return (
     <ErrorBoundary>
@@ -149,7 +154,21 @@ export default function App() {
           </div>
 
           <div className="app-shell__layout">
-            <Navigation activeTab={activeTab} setActiveTab={setActiveTab} />
+            <Navigation
+              activeTab={activeTab}
+              setActiveTab={setActiveTab}
+              isMobileOpen={isMobileNavOpen}
+              onCloseMobile={() => setIsMobileNavOpen(false)}
+            />
+
+            {isMobileNavOpen && (
+              <button
+                type="button"
+                className="app-shell__backdrop lg:hidden"
+                onClick={() => setIsMobileNavOpen(false)}
+                aria-label="关闭导航"
+              />
+            )}
 
             <div className="app-shell__body">
               <Topbar
@@ -157,6 +176,7 @@ export default function App() {
                 theme={dashboardTheme}
                 setTheme={setDashboardTheme}
                 setActiveTab={setActiveTab}
+                onOpenNavigation={() => setIsMobileNavOpen(true)}
               />
 
               <main className="app-shell__content">
